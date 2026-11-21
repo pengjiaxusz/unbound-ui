@@ -1,16 +1,15 @@
 //! 虚拟化树形视图：仅实例化视口内的行。
 //!
 //! 扁平化与槽位复用逻辑位于 [`unbound_world::virtualize::VirtualTree`]；
-//! 本模块补充控件语义——选区、焦点、内联重命名与行绘制。
-//! 因此十万节点的文档也仅维持恒定数量的存活行，且折叠的子树零开销，
-//! 因为 `children_of` 仅对展开的节点调用。
-//!
+//! 本模块补充控件语义——选区、焦点、懒加载展开事件、行图标槽、紧凑密度、内联重命名与行绘制。
+//! 因此十万节点的文档也仅维持恒定数量的存活行，且折叠或未加载的子树零遍历开销，
+//! 因为 `children_of` 仅对已展开且已加载的节点调用。
 //!
 
 use accesskit::Role;
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{PrimType, SubElement};
+use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
 use unbound_gpu::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
@@ -20,6 +19,7 @@ use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
+use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
@@ -27,11 +27,81 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 /// 默认行高。对齐 WinUI `TreeViewItemMinHeight = 36`。
 pub const TREE_ROW: f32 = 36.0;
 
+/// 紧凑导航窗格行高（`28px`）。
+pub const TREE_ROW_COMPACT: f32 = 28.0;
+
 /// 每层缩进深度的水平缩进量。对齐 `TreeViewItem::UpdateIndentation`（depth × 16）。
 pub const TREE_INDENT: f32 = 16.0;
 
 /// 视口周围保持存活的额外行数。
 pub const TREE_OVERSCAN: f32 = 1.0;
+
+/// 行前置图标槽尺寸（`16×16px`）。
+pub const TREE_ICON_SIZE: f32 = 16.0;
+
+/// 行图标槽与文本标签之间的水平间距（`6px`）。
+pub const TREE_ICON_GAP: f32 = 6.0;
+
+/// 树形行前置图标槽变体。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TreeRowIcon {
+    /// 不渲染行图标。
+    #[default]
+    None,
+    /// 框架内置 Fluent 矢量图标。
+    Vector(ShellIcon),
+    /// 外部纹理句柄 ID（由应用层资产系统映射至 RGBA8 外部纹理槽）。
+    ExternalTexture(u64),
+}
+
+/// 树形视图行高密度档位。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TreeViewDensity {
+    /// WinUI 3 标准密度（`36px` 行高，默认）。
+    #[default]
+    Standard,
+    /// 紧凑导航窗格密度（`28px` 行高）。
+    Compact,
+}
+
+impl TreeViewDensity {
+    /// 返回该密度档位对应的逻辑像素行高。
+    #[must_use]
+    pub const fn row_height(self) -> f32 {
+        match self {
+            Self::Standard => TREE_ROW,
+            Self::Compact => TREE_ROW_COMPACT,
+        }
+    }
+}
+
+/// 树形视图离散交互事件。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TreeViewEvent {
+    /// 行被激活（双击或按 `Enter`）。
+    Activated {
+        occurrence_key: u64,
+        logical_id: u64,
+    },
+    /// 选区发生变化（包含当前全部已选中的 `occurrence_key`）。
+    SelectionChanged { selected: Vec<u64> },
+    /// 首次展开未加载节点时发出的一次性异步加载请求。
+    ExpandRequested {
+        occurrence_key: u64,
+        logical_id: u64,
+    },
+    /// 节点被折叠。
+    Collapsed {
+        occurrence_key: u64,
+        logical_id: u64,
+    },
+    /// 请求在指定屏幕坐标弹出上下文菜单。
+    ContextMenuRequested {
+        occurrence_key: u64,
+        logical_id: u64,
+        screen_pos: [i32; 2],
+    },
+}
 
 /// 单个已实例化的行。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,6 +121,8 @@ pub struct TreeViewDesc {
     pub rect: Rect,
     /// 行高。
     pub row_height: f32,
+    /// 行高密度档位（默认 `Standard` `36px`）。
+    pub density: TreeViewDensity,
     /// 每层深度的缩进量。
     pub indent: f32,
     /// 绘制顺序键。
@@ -64,9 +136,18 @@ impl TreeViewDesc {
         Self {
             rect,
             row_height: TREE_ROW,
+            density: TreeViewDensity::Standard,
             indent: TREE_INDENT,
             z: 450,
         }
+    }
+
+    /// 设置行高密度档位并同步更新 `row_height`。
+    #[must_use]
+    pub fn with_density(mut self, density: TreeViewDensity) -> Self {
+        self.density = density;
+        self.row_height = density.row_height();
+        self
     }
 
     /// 对应扁平化总行数的滚动描述符。
@@ -92,15 +173,21 @@ pub struct TreeViewState {
     pub tree: VirtualTree,
     /// 滚动弹簧。
     pub scroll: ScrollState,
-    /// 已选中的行集合。
+    /// 已选中的行集合（按 `occurrence_key` 索引）。
     pub selected: FxHashSet<u64>,
-    /// 拥有键盘焦点的行。
+    /// 拥有键盘焦点的行（`occurrence_key`）。
     pub focused: Option<u64>,
     /// 当前正在重命名的行及其编辑器。
     pub renaming: Option<(u64, TextEditState)>,
+    /// 待宿主消费的离散交互事件队列。
+    pub pending_events: Vec<TreeViewEvent>,
+    /// 按 `occurrence_key` 索引的行前置图标表。
+    pub row_icons: FxHashMap<u64, TreeRowIcon>,
+    /// 已发射过 `ExpandRequested` 且尚未完成加载的出现键集合（用于防重入）。
+    requested_loads: FxHashSet<u64>,
     /// 所有扁平化行（用于键盘导航）。
     order: Vec<TreeRow>,
-    /// 每个扁平化行的父节点映射。
+    /// 每个扁平化行的父节点映射（按 `occurrence_key` 索引）。
     parent: FxHashMap<u64, u64>,
     /// 上一次窗口更新统计，供调用方更新脏标记。
     pub last_window: WindowUpdate,
@@ -118,6 +205,9 @@ impl TreeViewState {
             selected: FxHashSet::default(),
             focused: None,
             renaming: None,
+            pending_events: Vec::new(),
+            row_icons: FxHashMap::default(),
+            requested_loads: FxHashSet::default(),
             order: Vec::new(),
             parent: FxHashMap::default(),
             last_window: WindowUpdate::default(),
@@ -125,9 +215,39 @@ impl TreeViewState {
         }
     }
 
+    /// 按密度档位创建空树状态。
+    #[must_use]
+    pub fn new_with_density(density: TreeViewDensity) -> Self {
+        Self::new(density.row_height())
+    }
+
+    /// 取出并清空待处理的树形交互事件。
+    pub fn drain_events(&mut self) -> Vec<TreeViewEvent> {
+        std::mem::take(&mut self.pending_events)
+    }
+
+    /// 为指定出现键配置行前置图标。
+    pub fn set_row_icon(&mut self, occurrence_key: u64, icon: TreeRowIcon) {
+        if icon == TreeRowIcon::None {
+            self.row_icons.remove(&occurrence_key);
+        } else {
+            self.row_icons.insert(occurrence_key, icon);
+        }
+    }
+
+    /// 查询指定出现键的行前置图标。
+    #[must_use]
+    pub fn row_icon(&self, occurrence_key: u64) -> TreeRowIcon {
+        self.row_icons
+            .get(&occurrence_key)
+            .copied()
+            .unwrap_or(TreeRowIcon::None)
+    }
+
     /// 替换数据模型。
     ///
-    /// `children_of` 仅对展开的节点调用，因此开销与树中展开部分成正比，而非整份文档。
+    /// `children_of` 仅对已展开且已完成加载（`is_loaded == true`）的节点调用，
+    /// 因此开销与树中可见部分成正比，而非整份文档。
     pub fn rebuild<F>(&mut self, roots: &[TreeRow], children_of: F)
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -135,16 +255,18 @@ impl TreeViewState {
         self.order.clear();
         self.parent.clear();
         // 扁平化一次以记录 ArrowLeft 所需的父节点链接；虚拟树使用相同展开集合执行相同遍历。
-        //
         let mut stack: Vec<(TreeRow, Option<u64>)> =
             roots.iter().rev().map(|row| (*row, None)).collect();
         while let Some((mut row, parent)) = stack.pop() {
             row.expanded = self.tree.is_expanded(row.id);
+            if row.is_loaded {
+                self.requested_loads.remove(&row.id);
+            }
             self.order.push(row);
             if let Some(parent) = parent {
                 self.parent.insert(row.id, parent);
             }
-            if row.expanded {
+            if row.expanded && row.is_loaded {
                 for child in children_of(row.id).into_iter().rev() {
                     stack.push((child, Some(row.id)));
                 }
@@ -159,13 +281,13 @@ impl TreeViewState {
         self.order.len()
     }
 
-    /// 按节点标识查找扁平化行。
+    /// 按出现键查找扁平化行。
     #[must_use]
     pub fn row(&self, id: u64) -> Option<TreeRow> {
         self.order.iter().copied().find(|row| row.id == id)
     }
 
-    /// 获取当前可见行的父节点。
+    /// 获取当前可见行的父节点出现键。
     #[must_use]
     pub fn parent_of(&self, id: u64) -> Option<u64> {
         self.parent.get(&id).copied()
@@ -175,6 +297,36 @@ impl TreeViewState {
     #[must_use]
     pub fn scroll_offset(&self) -> f32 {
         self.scroll.offset().y
+    }
+
+    /// 请求展开指定出现键对应的节点。
+    ///
+    /// 当节点 `has_children == true` 且 `is_loaded == false && !is_loading` 时，
+    /// 乐观记录展开态并**精确发射一次** [`TreeViewEvent::ExpandRequested`]；
+    /// 加载中或重复请求期间不会重入发射。
+    pub fn request_expand(&mut self, occurrence_key: u64) -> bool {
+        let Some(row) = self.row(occurrence_key) else {
+            return false;
+        };
+        if !row.has_children {
+            return false;
+        }
+        if !row.is_loaded {
+            self.tree.set_expanded(occurrence_key, true);
+            if !row.is_loading && self.requested_loads.insert(occurrence_key) {
+                self.pending_events.push(TreeViewEvent::ExpandRequested {
+                    occurrence_key,
+                    logical_id: row.logical_id,
+                });
+                return true;
+            }
+            return false;
+        }
+        if !self.tree.is_expanded(occurrence_key) {
+            self.tree.set_expanded(occurrence_key, true);
+            return true;
+        }
+        false
     }
 
     /// 展开或折叠指定行，随后重建扁平化列表。
@@ -191,6 +343,30 @@ impl TreeViewState {
         if self.tree.is_expanded(id) == expanded {
             return false;
         }
+        let target_row = self.row(id);
+        if expanded {
+            if let Some(row) = target_row {
+                if row.has_children && !row.is_loaded {
+                    self.tree.set_expanded(id, true);
+                    if !row.is_loading && self.requested_loads.insert(id) {
+                        self.pending_events.push(TreeViewEvent::ExpandRequested {
+                            occurrence_key: id,
+                            logical_id: row.logical_id,
+                        });
+                    }
+                    self.rebuild(roots, children_of);
+                    return true;
+                }
+            }
+        } else {
+            self.requested_loads.remove(&id);
+            if let Some(row) = target_row {
+                self.pending_events.push(TreeViewEvent::Collapsed {
+                    occurrence_key: id,
+                    logical_id: row.logical_id,
+                });
+            }
+        }
         self.tree.set_expanded(id, expanded);
         self.rebuild(roots, children_of);
         true
@@ -205,7 +381,7 @@ impl TreeViewState {
         self.set_expanded(id, !expanded, roots, children_of)
     }
 
-    /// 选中指定行。若 `additive` 为 false，则替换先前选区。
+    /// 选中指定行（按 `occurrence_key`）。若 `additive` 为 false，则替换先前选区。
     pub fn select(&mut self, id: u64, additive: bool) -> bool {
         let changed = if additive {
             if self.selected.contains(&id) {
@@ -222,12 +398,49 @@ impl TreeViewState {
             changed
         };
         self.focused = Some(id);
+        if changed {
+            let mut selected: Vec<u64> = self.selected.iter().copied().collect();
+            selected.sort_unstable();
+            self.pending_events
+                .push(TreeViewEvent::SelectionChanged { selected });
+        }
         changed
+    }
+
+    /// 激活指定行（双击或按 `Enter`），发射 [`TreeViewEvent::Activated`]。
+    pub fn activate(&mut self, occurrence_key: u64) -> bool {
+        let Some(row) = self.row(occurrence_key) else {
+            return false;
+        };
+        self.pending_events.push(TreeViewEvent::Activated {
+            occurrence_key,
+            logical_id: row.logical_id,
+        });
+        true
+    }
+
+    /// 在指定屏幕坐标为目标行发射上下文菜单请求事件。
+    pub fn request_context_menu(&mut self, occurrence_key: u64, screen_pos: [i32; 2]) -> bool {
+        let Some(row) = self.row(occurrence_key) else {
+            return false;
+        };
+        self.pending_events
+            .push(TreeViewEvent::ContextMenuRequested {
+                occurrence_key,
+                logical_id: row.logical_id,
+                screen_pos,
+            });
+        true
     }
 
     /// 清空选区。
     pub fn clear_selection(&mut self) {
-        self.selected.clear();
+        if !self.selected.is_empty() {
+            self.selected.clear();
+            self.pending_events.push(TreeViewEvent::SelectionChanged {
+                selected: Vec::new(),
+            });
+        }
     }
 
     /// 按指定行数移动键盘焦点。
@@ -241,9 +454,7 @@ impl TreeViewState {
             .unwrap_or(0) as isize;
         let next = (current + delta).clamp(0, self.order.len() as isize - 1) as usize;
         let id = self.order[next].id;
-        self.focused = Some(id);
-        self.selected.clear();
-        self.selected.insert(id);
+        self.select(id, false);
         true
     }
 
@@ -272,7 +483,7 @@ impl TreeViewState {
         true
     }
 
-    /// 展开当前聚焦行；若已展开，则聚焦其第一个子节点。
+    /// 展开当前聚焦行；若已展开且已加载，则聚焦其第一个子节点。
     pub fn expand_or_first_child<F>(&mut self, roots: &[TreeRow], children_of: F) -> bool
     where
         F: Fn(u64) -> Vec<TreeRow>,
@@ -289,10 +500,15 @@ impl TreeViewState {
         if !self.tree.is_expanded(id) {
             return self.set_expanded(id, true, roots, children_of);
         }
+        if !row.is_loaded {
+            return self.request_expand(id);
+        }
         let position = self.order.iter().position(|row| row.id == id).unwrap_or(0);
         if let Some(child) = self.order.get(position + 1).copied() {
-            self.select(child.id, false);
-            return true;
+            if self.parent_of(child.id) == Some(id) {
+                self.select(child.id, false);
+                return true;
+            }
         }
         false
     }
@@ -423,7 +639,7 @@ pub struct TreeViewTokens {
 }
 
 impl TreeViewTokens {
-    /// 标准配色集。
+    /// 标准配色集（对齐 WinUI 3 `TreeView` 基准）。
     #[must_use]
     pub fn standard() -> Self {
         Self {
@@ -438,9 +654,36 @@ impl TreeViewTokens {
             focus_ring: Token::FOCUS_RING,
         }
     }
+
+    /// 导航窗格配色集（使用 `Token::NAV_HOVER` / `Token::NAV_SELECTED`）。
+    #[must_use]
+    pub fn navigation_pane() -> Self {
+        Self {
+            background: Token::NAV_BG,
+            row: Token::NONE,
+            row_hover: Token::NAV_HOVER,
+            row_selected: Token::NAV_SELECTED,
+            text: Token::TEXT_PRIMARY,
+            text_selected: Token::TEXT_PRIMARY,
+            guide: Token::DIVIDER,
+            arrow: Token::TEXT_SECONDARY,
+            focus_ring: Token::FOCUS_RING,
+        }
+    }
 }
 
-/// 输出单行树节点：缩进参考线、展开箭头、标签与选中态。
+/// 计算单行文本标签的建议起始 X 坐标（对齐箭头热区与可选 `16×16` 图标槽）。
+#[must_use]
+pub fn tree_row_label_x(desc: &TreeViewDesc, depth: u16, has_icon: bool) -> f32 {
+    let base = desc.rect.origin.x + f32::from(depth) * desc.indent + 32.0;
+    if has_icon {
+        base + TREE_ICON_SIZE + TREE_ICON_GAP
+    } else {
+        base
+    }
+}
+
+/// 输出单行树节点：缩进参考线、展开箭头、标签与选中态（无行图标，保持既有签名向后兼容）。
 #[must_use]
 pub fn emit_tree_row(
     desc: &TreeViewDesc,
@@ -450,14 +693,30 @@ pub fn emit_tree_row(
     label: &[GlyphQuad],
     tokens: TreeViewTokens,
 ) -> WidgetOutput {
+    emit_tree_row_with_icon(desc, row, TreeRowIcon::None, selected, control, label, tokens)
+}
+
+/// 输出带前置图标槽的单行树节点（支持 `Vector(ShellIcon)` 与 `ExternalTexture(u64)` 双通道，
+/// 并在 24 态交互组合下保持图元数严格恒定）。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn emit_tree_row_with_icon(
+    desc: &TreeViewDesc,
+    row: &TreeViewRow,
+    icon: TreeRowIcon,
+    selected: bool,
+    control: ControlState,
+    label: &[GlyphQuad],
+    tokens: TreeViewTokens,
+) -> WidgetOutput {
     let disabled = control.disabled;
-    let mut primitives = Vec::with_capacity(6 + label.len() + row.row.depth as usize);
-    let mut payloads = Vec::with_capacity(label.len());
+    let mut primitives = Vec::with_capacity(10 + label.len() + row.row.depth as usize);
+    let mut payloads = Vec::with_capacity(label.len() + 4);
     let rect = row.rect;
 
     let fill = if selected {
         tokens.row_selected
-    } else if control.phase == PointerPhase::Hovered {
+    } else if !disabled && control.phase == PointerPhase::Hovered {
         tokens.row_hover
     } else {
         tokens.row
@@ -481,11 +740,12 @@ pub fn emit_tree_row(
 
     // 左侧选中强调指示条（未选中时透明度为 0，保持图元数恒定）
     // 对齐 WinUI 3 关键规范：3×16px 垂直居中、圆角 1.5px 的选中胶囊条，使用 Token::PRIMARY
+    let pill_h = (rect.size.y - 12.0).clamp(12.0, 16.0);
     let indicator = Rect::new(
         rect.origin.x + 4.0,
-        rect.origin.y + (rect.size.y - 16.0) * 0.5,
+        rect.origin.y + (rect.size.y - pill_h) * 0.5,
         3.0,
-        16.0,
+        pill_h,
     );
     let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, desc.z + 1);
     if !selected {
@@ -512,11 +772,16 @@ pub fn emit_tree_row(
         ));
     }
 
-    // ExpandCollapseChevron 左侧 Padding = 14，字形 12 × 12。
+    // ExpandCollapseChevron 左侧 Padding = 14，字形 12 × 12，独立热区 20 × 20。
     let arrow_x = rect.origin.x + row.row.depth as f32 * indent + 14.0;
     let centre = [arrow_x + 6.0, rect.origin.y + rect.size.y * 0.5];
     if row.row.has_children {
-        // 朝右的箭头；展开状态时向下旋转。
+        // 朝右的箭头；展开状态时向下旋转。加载期间调低对比度提示正在拉取。
+        let arrow_color = if disabled || row.row.is_loading {
+            Token::TEXT_DISABLED
+        } else {
+            tokens.arrow
+        };
         let arm = 4.0;
         let (a, b, c) = if row.row.expanded {
             (
@@ -535,7 +800,7 @@ pub fn emit_tree_row(
             a,
             b,
             1.5,
-            tokens.arrow,
+            arrow_color,
             desc.z,
             &mut primitives,
             &mut payloads,
@@ -544,16 +809,77 @@ pub fn emit_tree_row(
             b,
             c,
             1.5,
-            tokens.arrow,
+            arrow_color,
             desc.z,
             &mut primitives,
             &mut payloads,
         );
     }
 
+    // 16×16 前置行图标槽（位于箭头热区之后、标签文本之前）
+    let icon_rect = Rect::new(
+        arrow_x + 16.0,
+        rect.origin.y + (rect.size.y - TREE_ICON_SIZE) * 0.5,
+        TREE_ICON_SIZE,
+        TREE_ICON_SIZE,
+    );
+    match icon {
+        TreeRowIcon::None => {}
+        TreeRowIcon::Vector(shell_icon) => {
+            let icon_color = if disabled {
+                Token::TEXT_DISABLED
+            } else if selected {
+                tokens.text_selected
+            } else {
+                tokens.text
+            };
+            emit_shell_icon_primitives(
+                shell_icon,
+                icon_rect,
+                icon_color,
+                fill,
+                desc.z + 1,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
+        TreeRowIcon::ExternalTexture(tex_handle_id) => {
+            let payload_idx = payloads.len() as u32;
+            let mut img = instance(
+                icon_rect,
+                [0.0; 4],
+                if disabled {
+                    Token::TEXT_DISABLED
+                } else {
+                    Token::ON_SURFACE
+                },
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Image,
+                SubElement::Content,
+                desc.z + 1,
+            );
+            img.border_token_or_tex = tex_handle_id as u32;
+            img.extra_payload_idx = payload_idx;
+            primitives.push(img);
+            payloads.push(GpuPayload {
+                p0: [0.0, 0.0],
+                p1: [1.0, 1.0],
+                p2: [0.0, 0.0],
+                line_width: 0.0,
+                extra: 0,
+                flags: 0,
+                _reserved: [0; 3],
+            });
+        }
+    }
+
     glyphs(
         label,
-        if selected {
+        if disabled {
+            Token::TEXT_DISABLED
+        } else if selected {
             tokens.text_selected
         } else {
             tokens.text
@@ -568,7 +894,7 @@ pub fn emit_tree_row(
         tokens.focus_ring,
         2.0,
         desc.z,
-        control.focused,
+        control.focused && !disabled,
     ));
 
     let hit = (!disabled).then(|| {
@@ -595,7 +921,13 @@ pub fn emit_tree_row(
     };
     if row.row.has_children && !disabled {
         let toggle_key = tree_toggle_node(row.row.id);
-        let toggle_r = Rect::new(arrow_x - 4.0, rect.origin.y, 20.0, rect.size.y);
+        let toggle_h = 20.0f32.min(rect.size.y);
+        let toggle_r = Rect::new(
+            arrow_x - 4.0,
+            rect.origin.y + (rect.size.y - toggle_h) * 0.5,
+            20.0,
+            toggle_h,
+        );
         out.with_sub_control(
             toggle_key,
             HitRegion::new(toggle_key, CONTROL_LAYER, u32::from(desc.z) + 1, toggle_r)
@@ -639,21 +971,11 @@ mod tests {
     use super::*;
 
     fn root(id: u64) -> TreeRow {
-        TreeRow {
-            id,
-            depth: 0,
-            has_children: true,
-            expanded: false,
-        }
+        TreeRow::new(id, 0, true)
     }
 
     fn leaf(id: u64, depth: u16) -> TreeRow {
-        TreeRow {
-            id,
-            depth,
-            has_children: false,
-            expanded: false,
-        }
+        TreeRow::new(id, depth, false)
     }
 
     fn children(id: u64) -> Vec<TreeRow> {
@@ -859,5 +1181,169 @@ mod tests {
             output.primitives[0].fill_token_or_uv,
             tokens.row_selected.raw() as u32
         );
+    }
+
+    #[test]
+    fn occurrence_key_isolates_duplicate_logical_nodes_in_tree_view() {
+        let quick = TreeRow::new(100, 0, true).with_logical_id(500);
+        let drive = TreeRow::new(200, 0, true).with_logical_id(500);
+        let kids = |occurrence_key: u64| match occurrence_key {
+            100 => vec![TreeRow::new(101, 1, false).with_logical_id(501)],
+            200 => vec![TreeRow::new(201, 1, false).with_logical_id(501)],
+            _ => Vec::new(),
+        };
+        let mut state = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        state.rebuild(&[quick, drive], kids);
+        assert!(state.set_expanded(100, true, &[quick, drive], kids));
+        assert!(state.select(100, false));
+
+        assert!(state.tree.is_expanded(100));
+        assert!(!state.tree.is_expanded(200));
+        assert!(state.selected.contains(&100));
+        assert!(!state.selected.contains(&200));
+        assert_eq!(state.row_count(), 3);
+    }
+
+    #[test]
+    fn lazy_expand_emits_single_request_and_suppresses_reentry() {
+        let mut state = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        let unloaded = TreeRow::new(300, 0, true)
+            .with_logical_id(900)
+            .with_loaded(false);
+        let kids = |id: u64| {
+            if id == 300 {
+                vec![TreeRow::new(301, 1, false).with_logical_id(901)]
+            } else {
+                Vec::new()
+            }
+        };
+
+        state.rebuild(&[unloaded], kids);
+        assert!(state.request_expand(300));
+        assert!(!state.request_expand(300), "duplicate expand must be suppressed");
+        assert!(state.tree.is_expanded(300));
+
+        let events = state.drain_events();
+        assert_eq!(
+            events,
+            vec![TreeViewEvent::ExpandRequested {
+                occurrence_key: 300,
+                logical_id: 900,
+            }]
+        );
+
+        // 加载期间即使重建也不渲染旧子节点，且 `is_loading == true` 抑制重入
+        let loading = unloaded.with_loading(true);
+        state.rebuild(&[loading], kids);
+        assert_eq!(state.row_count(), 1);
+        assert!(!state.request_expand(300));
+        assert!(state.drain_events().is_empty());
+
+        // 宿主回填并置 `is_loaded = true` 后自动展示子树
+        let loaded = unloaded.with_loaded(true).with_loading(false);
+        state.rebuild(&[loaded], kids);
+        assert_eq!(state.row_count(), 2);
+    }
+
+    #[test]
+    fn compact_density_uses_28px_rows_and_emits_icon_slots() {
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 140.0))
+            .with_density(TreeViewDensity::Compact);
+        assert_eq!(desc.density, TreeViewDensity::Compact);
+        assert!((desc.row_height - TREE_ROW_COMPACT).abs() < f32::EPSILON);
+
+        let mut state = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        state.set_row_icon(1, TreeRowIcon::Vector(ShellIcon::Folder));
+        state.set_row_icon(2, TreeRowIcon::ExternalTexture(77));
+        state.rebuild(&[root(1), root(2)], children);
+        let rows = state.rows(&desc);
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].rect.size.y - 28.0).abs() < f32::EPSILON);
+
+        let vec_out = emit_tree_row_with_icon(
+            &desc,
+            &rows[0],
+            state.row_icon(1),
+            true,
+            ControlState::default(),
+            &[],
+            TreeViewTokens::navigation_pane(),
+        );
+        let base_out = emit_tree_row(
+            &desc,
+            &rows[0],
+            true,
+            ControlState::default(),
+            &[],
+            TreeViewTokens::navigation_pane(),
+        );
+        assert!(vec_out.primitives.len() > base_out.primitives.len());
+
+        let tex_out = emit_tree_row_with_icon(
+            &desc,
+            &rows[1],
+            state.row_icon(2),
+            false,
+            ControlState::default(),
+            &[],
+            TreeViewTokens::navigation_pane(),
+        );
+        assert!(tex_out
+            .primitives
+            .iter()
+            .any(|p| p.prim_type() == PrimType::Image && p.border_token_or_tex == 77));
+    }
+
+    #[test]
+    fn tree_row_keeps_constant_primitives_across_24_states() {
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 140.0))
+            .with_density(TreeViewDensity::Compact);
+        let row = TreeViewRow {
+            row: TreeRow::new(1, 1, true),
+            item: 0,
+            rect: Rect::new(0.0, 0.0, 260.0, TREE_ROW_COMPACT),
+        };
+        let tokens = TreeViewTokens::navigation_pane();
+        for icon in [
+            TreeRowIcon::None,
+            TreeRowIcon::Vector(ShellIcon::Folder),
+            TreeRowIcon::ExternalTexture(42),
+        ] {
+            let base = emit_tree_row_with_icon(
+                &desc,
+                &row,
+                icon,
+                false,
+                ControlState::default(),
+                &[],
+                tokens,
+            )
+            .primitives
+            .len();
+            for phase in [
+                PointerPhase::Idle,
+                PointerPhase::Hovered,
+                PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let count = emit_tree_row_with_icon(
+                                &desc, &row, icon, selected, control, &[], tokens,
+                            )
+                            .primitives
+                            .len();
+                            assert_eq!(count, base, "primitive count changed for {icon:?} {control:?}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

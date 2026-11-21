@@ -314,13 +314,75 @@ impl VirtualGrid {
 }
 
 /// 扁平化树中的单行记录（供虚拟化器使用）。
+///
+/// `id` 作为展示位置唯一键（出现键 `occurrence_key`），驱动展开集合、选中集合与焦点隔离；
+/// `logical_id` 指向底层实体标识（默认等于 `id`），便于同一逻辑节点在多个挂载点出现时独立交互。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TreeRow {
-    /// 调用方模型中的稳定 ID。
+    /// 展示位置唯一键（出现键 `occurrence_key`）。
     pub id: u64,
+    /// 底层实体逻辑标识（默认等于 `id`）。
+    pub logical_id: u64,
+    /// 层级缩进深度（根节点为 0）。
     pub depth: u16,
+    /// 是否存在子节点（展开箭头显隐的唯一判据）。
     pub has_children: bool,
+    /// 当前是否处于展开状态。
     pub expanded: bool,
+    /// 子节点是否已完成加载（默认 `true`；为 `false` 时不展开渲染旧缓存子节点）。
+    pub is_loaded: bool,
+    /// 子节点是否正在异步加载中（默认 `false`）。
+    pub is_loading: bool,
+}
+
+impl TreeRow {
+    /// 创建默认已加载的树行记录（`logical_id == id`、`is_loaded == true`、`is_loading == false`）。
+    #[must_use]
+    pub const fn new(id: u64, depth: u16, has_children: bool) -> Self {
+        Self {
+            id,
+            logical_id: id,
+            depth,
+            has_children,
+            expanded: false,
+            is_loaded: true,
+            is_loading: false,
+        }
+    }
+
+    /// 返回该行的出现键（即 `id`）。
+    #[must_use]
+    pub const fn occurrence_key(self) -> u64 {
+        self.id
+    }
+
+    /// 设置底层实体逻辑标识。
+    #[must_use]
+    pub const fn with_logical_id(mut self, logical_id: u64) -> Self {
+        self.logical_id = logical_id;
+        self
+    }
+
+    /// 设置初始展开态标记。
+    #[must_use]
+    pub const fn with_expanded(mut self, expanded: bool) -> Self {
+        self.expanded = expanded;
+        self
+    }
+
+    /// 设置子节点是否已完成加载。
+    #[must_use]
+    pub const fn with_loaded(mut self, is_loaded: bool) -> Self {
+        self.is_loaded = is_loaded;
+        self
+    }
+
+    /// 设置子节点是否正在异步加载中。
+    #[must_use]
+    pub const fn with_loading(mut self, is_loading: bool) -> Self {
+        self.is_loading = is_loading;
+        self
+    }
 }
 
 /// 扁平化为行并像列表一样分窗的树形视图。
@@ -328,6 +390,7 @@ pub struct TreeRow {
 pub struct VirtualTree {
     rows: Vec<TreeRow>,
     list: VirtualList,
+    /// 按出现键（`TreeRow::id`）索引的展开集合。
     expanded: std::collections::HashSet<u64>,
 }
 
@@ -342,7 +405,8 @@ impl VirtualTree {
     }
 
     /// 替换树模型。`children_of` 返回节点的有序子节点；
-    /// 仅展开的节点会贡献行，因此扁平化开销仅与*可见*树成正比，而非整份文档。
+    /// 仅展开且已完成加载（`is_loaded == true`）的节点会贡献行，
+    /// 因此扁平化开销仅与*可见*树成正比，且未加载节点不会误渲染旧缓存子节点。
     ///
     pub fn rebuild<F>(&mut self, roots: &[TreeRow], children_of: F)
     where
@@ -353,7 +417,7 @@ impl VirtualTree {
         while let Some(mut row) = stack.pop() {
             row.expanded = self.expanded.contains(&row.id);
             self.rows.push(row);
-            if row.expanded {
+            if row.expanded && row.is_loaded {
                 let kids = children_of(row.id);
                 for k in kids.into_iter().rev() {
                     stack.push(k);
@@ -567,36 +631,13 @@ mod tests {
 
     #[test]
     fn tree_only_flattens_expanded_nodes() {
-        let root = TreeRow {
-            id: 1,
-            depth: 0,
-            has_children: true,
-            expanded: false,
-        };
+        let root = TreeRow::new(1, 0, true);
         let mut tree = VirtualTree::new(24.0, 1.0);
         let kids = |id: u64| {
             if id == 1 {
-                vec![
-                    TreeRow {
-                        id: 2,
-                        depth: 1,
-                        has_children: false,
-                        expanded: false,
-                    },
-                    TreeRow {
-                        id: 3,
-                        depth: 1,
-                        has_children: true,
-                        expanded: false,
-                    },
-                ]
+                vec![TreeRow::new(2, 1, false), TreeRow::new(3, 1, true)]
             } else if id == 3 {
-                vec![TreeRow {
-                    id: 4,
-                    depth: 2,
-                    has_children: false,
-                    expanded: false,
-                }]
+                vec![TreeRow::new(4, 2, false)]
             } else {
                 vec![]
             }
@@ -610,6 +651,70 @@ mod tests {
         tree.rebuild(&[root], kids);
         assert_eq!(tree.row_count(), 4);
         assert!(tree.is_expanded(3));
+    }
+
+    #[test]
+    fn occurrence_key_isolates_duplicate_logical_nodes() {
+        let mount_a = TreeRow::new(1001, 0, true).with_logical_id(42);
+        let mount_b = TreeRow::new(2001, 0, true).with_logical_id(42);
+        let mut tree = VirtualTree::new(28.0, 1.0);
+        let kids = |occurrence_key: u64| match occurrence_key {
+            1001 => vec![TreeRow::new(1002, 1, false).with_logical_id(99)],
+            2001 => vec![TreeRow::new(2002, 1, false).with_logical_id(99)],
+            _ => Vec::new(),
+        };
+
+        tree.set_expanded(1001, true);
+        tree.rebuild(&[mount_a, mount_b], kids);
+        assert_eq!(tree.row_count(), 3);
+        assert!(tree.is_expanded(1001));
+        assert!(!tree.is_expanded(2001));
+
+        tree.update(0.0, 200.0);
+        let first = tree.row_at(0).expect("first mount");
+        let child = tree.row_at(1).expect("child under first mount");
+        let second = tree.row_at(2).expect("second mount");
+        assert_eq!(first.id, 1001);
+        assert_eq!(first.logical_id, 42);
+        assert!(first.expanded);
+        assert_eq!(child.id, 1002);
+        assert_eq!(second.id, 2001);
+        assert_eq!(second.logical_id, 42);
+        assert!(!second.expanded);
+    }
+
+    #[test]
+    fn unloaded_node_keeps_chevron_without_expanding_children() {
+        let mut root = TreeRow::new(10, 0, true)
+            .with_logical_id(77)
+            .with_loaded(false)
+            .with_loading(true);
+        let mut tree = VirtualTree::new(28.0, 1.0);
+        let kids = |id: u64| {
+            if id == 10 {
+                vec![TreeRow::new(11, 1, false), TreeRow::new(12, 1, false)]
+            } else {
+                Vec::new()
+            }
+        };
+
+        tree.set_expanded(10, true);
+        tree.rebuild(&[root], kids);
+        assert_eq!(
+            tree.row_count(),
+            1,
+            "unloaded node must not expand cached children"
+        );
+        tree.update(0.0, 200.0);
+        let emitted = tree.row_at(0).expect("root row");
+        assert!(emitted.has_children);
+        assert!(emitted.expanded);
+        assert!(!emitted.is_loaded);
+        assert!(emitted.is_loading);
+
+        root = root.with_loaded(true).with_loading(false);
+        tree.rebuild(&[root], kids);
+        assert_eq!(tree.row_count(), 3, "loaded node expands its children");
     }
 
     #[test]
