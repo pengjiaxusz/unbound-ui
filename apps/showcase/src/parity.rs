@@ -42,7 +42,7 @@ use crate::theme;
 /// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，再后 28 个为
 /// 「导航、浮层、集合与日期类」批次，后续包含补齐与扩展控件。
 /// 控件名统一使用 WinUI 3 官方规范名。
-pub const SUPPORTED_CONTROLS: [&str; 66] = [
+pub const SUPPORTED_CONTROLS: [&str; 72] = [
     // 首批试点（6）
     "Button",
     "CheckBox",
@@ -116,6 +116,13 @@ pub const SUPPORTED_CONTROLS: [&str; 66] = [
     // 第六批：集合与选补容器类补充（2）
     "RangeSelector",
     "HeaderedContentControl",
+    // 第七批：NavigationView 多形态差分矩阵（6 扩展场景）
+    "NavigationViewLeftClosed",
+    "NavigationViewLeftCompact",
+    "NavigationViewLeftMinimal",
+    "NavigationViewTop",
+    "NavigationViewHierarchical",
+    "NavigationViewChrome",
 ];
 
 /// 把一个 WinUI 3 规范名解析为目录标识。
@@ -126,6 +133,12 @@ pub const SUPPORTED_CONTROLS: [&str; 66] = [
 pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId> {
     match control {
         "Border" | "Card" => Some(unbound_widgets::WidgetCatalogId::Containers),
+        "NavigationViewLeftClosed"
+        | "NavigationViewLeftCompact"
+        | "NavigationViewLeftMinimal"
+        | "NavigationViewTop"
+        | "NavigationViewHierarchical"
+        | "NavigationViewChrome" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
         "TitleBar" => None,
         other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
     }
@@ -2290,16 +2303,237 @@ fn emit_case(
 
             Vec2::new(bar_w, bar_h)
         }
-        "NavigationView" => {
-            let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture = unbound_widgets::slot_fixture::emit_canonical_navigation_view_fixture(
-                rect,
-                fixture_state,
-                text_ctx,
-                700,
-            );
-            push(scene, fixture.output);
-            fixture.total_size
+        "NavigationView"
+        | "NavigationViewLeftClosed"
+        | "NavigationViewLeftCompact"
+        | "NavigationViewLeftMinimal"
+        | "NavigationViewTop"
+        | "NavigationViewHierarchical"
+        | "NavigationViewChrome" => {
+            let (default_w, default_h) = match case.control {
+                "NavigationViewTop" => (360.0_f32, 200.0_f32),
+                "NavigationViewChrome" => (420.0_f32, 280.0_f32),
+                _ => (360.0_f32, 280.0_f32),
+            };
+            let nav_w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                default_w
+            };
+            let nav_h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                default_h
+            };
+            let nav_r = Rect::new(rect.origin.x, rect.origin.y, nav_w, nav_h);
+
+            let (desc, expanded_ids) = match case.control {
+                "NavigationViewLeftClosed" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                    .is_pane_open(false)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                "NavigationViewLeftCompact" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftCompact)
+                    .open_pane_length(220.0)
+                    .is_pane_open(true)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                "NavigationViewLeftMinimal" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftMinimal)
+                    .is_pane_open(checked)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                "NavigationViewTop" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
+                                    .with_glyph("\u{E9D2}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(4, "Reports")
+                                    .with_glyph("\u{E8A5}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Top)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                "NavigationViewHierarchical" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Collections")
+                                    .with_glyph("\u{E8B7}")
+                                    .selects_on_invoked(false)
+                                    .with_children(vec![
+                                        unbound_widgets::NavigationViewMenuItem::item(
+                                            unbound_widgets::NavigationViewItem::new(21, "Notes")
+                                                .with_glyph("\u{E7C3}"),
+                                        ),
+                                        unbound_widgets::NavigationViewMenuItem::item(
+                                            unbound_widgets::NavigationViewItem::new(22, "Mail")
+                                                .with_glyph("\u{E715}"),
+                                        ),
+                                    ]),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                    .open_pane_length(220.0)
+                    .is_pane_open(true)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .selected_item(Some(22)),
+                    vec![2],
+                ),
+                "NavigationViewChrome" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                    .open_pane_length(220.0)
+                    .is_pane_open(true)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Visible,
+                    )
+                    .is_back_enabled(true)
+                    .pane_title("Menu")
+                    .header("Home")
+                    .with_auto_suggest_box("Search")
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                _ => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::header("Workspace"),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::separator(),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
+                                    .with_glyph("\u{E9D2}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                    .open_pane_length(220.0)
+                    .is_pane_open(true)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
+                    .footer_menu_items(vec![unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(90, "Account")
+                            .with_glyph("\u{E77B}"),
+                    )])
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+            };
+
+            let mut nav_state = unbound_widgets::NavigationViewState::from_desc(&desc);
+            nav_state.expanded_item_ids = expanded_ids;
+            nav_state.set_animations_enabled(false, &desc);
+            let emitted =
+                unbound_widgets::emit_navigation_view(700, &desc, control, &nav_state, text_ctx);
+            push(scene, emitted.output);
+            Vec2::new(nav_w, nav_h)
         }
         "ListView" => {
             // WinUI 3 ListView 集合视图规范：

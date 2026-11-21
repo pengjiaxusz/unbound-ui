@@ -97,6 +97,9 @@ internal static class Catalog
         "HyperlinkButton", "RepeatButton", "DropDownButton", "ToggleSplitButton",
         // 第五批：输入与日期类补充（3）
         "PasswordBox", "DatePicker", "CalendarDatePicker",
+        // 第六批：NavigationView 多形态差分矩阵（6 扩展场景）
+        "NavigationViewLeftClosed", "NavigationViewLeftCompact", "NavigationViewLeftMinimal",
+        "NavigationViewTop", "NavigationViewHierarchical", "NavigationViewChrome",
     };
 
     private static readonly string[] ImplementedStateList = { "normal", "disabled", "checked", "focused" };
@@ -152,6 +155,8 @@ internal static class Catalog
             "ToggleButton" or "SplitButton" or "ColorPicker" or "NumberBox" or
             "AutoSuggestBox" or "RichTextBlock" or "ProgressBar" or
             "InfoBar" or "MenuBar" or "CommandBar" or "NavigationView" or
+            "NavigationViewLeftClosed" or "NavigationViewLeftCompact" or "NavigationViewLeftMinimal" or
+            "NavigationViewTop" or "NavigationViewHierarchical" or "NavigationViewChrome" or
             "TabView" or "Pivot" or "BreadcrumbBar" or "SelectorBar" or "PipsPager" or
             "Expander" or "SplitView" or "Border" or "Card" or "StackPanel" or
             "ScrollView" or "TreeView" or "ListView" or "FlipView" or "CalendarView" or
@@ -616,11 +621,189 @@ internal static class Catalog
 
             case "NavigationView":
                 {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
                     var nav = new NavigationView
                     {
-                        Width = 300,
-                        Height = 200,
+                        Width = 360,
+                        Height = 280,
                         PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        OpenPaneLength = 220,
+                        IsPaneOpen = true,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    nav.MenuItems.Add(new NavigationViewItemHeader { Content = "Workspace" });
+                    nav.MenuItems.Add(home);
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Library",
+                        Icon = new SymbolIcon(Symbol.Library),
+                    });
+                    nav.MenuItems.Add(new NavigationViewItemSeparator());
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Analytics",
+                        Icon = new SymbolIcon(Symbol.FourBars),
+                    });
+                    nav.FooterMenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Account",
+                        Icon = new SymbolIcon(Symbol.Contact),
+                    });
+                    nav.SelectedItem = home;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewLeftClosed":
+                {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        IsPaneOpen = false,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    nav.MenuItems.Add(home);
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Library",
+                        Icon = new SymbolIcon(Symbol.Library),
+                    });
+                    nav.SelectedItem = home;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewLeftCompact":
+                {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.LeftCompact,
+                        OpenPaneLength = 220,
+                        IsPaneOpen = true,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    nav.MenuItems.Add(home);
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Library",
+                        Icon = new SymbolIcon(Symbol.Library),
+                    });
+                    nav.SelectedItem = home;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewLeftMinimal":
+                {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.LeftMinimal,
+                        IsPaneOpen = false,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    nav.MenuItems.Add(home);
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Library",
+                        Icon = new SymbolIcon(Symbol.Library),
+                    });
+                    nav.SelectedItem = home;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewTop":
+                {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 200,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Top,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    nav.MenuItems.Add(home);
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Library",
+                        Icon = new SymbolIcon(Symbol.Library),
+                    });
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Analytics",
+                        Icon = new SymbolIcon(Symbol.FourBars),
+                    });
+                    nav.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Reports",
+                        Icon = new SymbolIcon(Symbol.Document),
+                    });
+                    nav.SelectedItem = home;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewHierarchical":
+                {
+                    var mail = new NavigationViewItem
+                    {
+                        Content = "Mail",
+                        Icon = new SymbolIcon(Symbol.Mail),
+                    };
+                    var collections = new NavigationViewItem
+                    {
+                        Content = "Collections",
+                        Icon = new SymbolIcon(Symbol.Folder),
+                        IsExpanded = true,
+                        SelectsOnInvoked = false,
+                    };
+                    collections.MenuItems.Add(new NavigationViewItem
+                    {
+                        Content = "Notes",
+                        Icon = new SymbolIcon(Symbol.Page),
+                    });
+                    collections.MenuItems.Add(mail);
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        OpenPaneLength = 220,
+                        IsPaneOpen = true,
                         IsSettingsVisible = true,
                         IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
                     };
@@ -629,11 +812,40 @@ internal static class Catalog
                         Content = "Home",
                         Icon = new SymbolIcon(Symbol.Home),
                     });
+                    nav.MenuItems.Add(collections);
+                    nav.SelectedItem = mail;
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewChrome":
+                {
+                    var home = new NavigationViewItem
+                    {
+                        Content = "Home",
+                        Icon = new SymbolIcon(Symbol.Home),
+                    };
+                    var nav = new NavigationView
+                    {
+                        Width = 420,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        OpenPaneLength = 220,
+                        IsPaneOpen = true,
+                        IsSettingsVisible = true,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Visible,
+                        IsBackEnabled = true,
+                        PaneTitle = "Menu",
+                        Header = "Home",
+                        AutoSuggestBox = new AutoSuggestBox { PlaceholderText = "Search" },
+                    };
+                    nav.MenuItems.Add(home);
                     nav.MenuItems.Add(new NavigationViewItem
                     {
                         Content = "Library",
                         Icon = new SymbolIcon(Symbol.Library),
                     });
+                    nav.SelectedItem = home;
                     element = nav;
                     return true;
                 }
