@@ -47,6 +47,21 @@ impl crate::ClipboardProvider for WinClipboard {
     }
 }
 
+/// 按平台创建窗口渲染表面：Windows 上使用 Win32 `HWND`，非 Windows 平台显式返回不支持错误。
+fn create_window_surface(gpu: &Gpu, hwnd: isize) -> Result<Surface, unbound_gpu::device::GpuError> {
+    #[cfg(windows)]
+    {
+        Surface::new_win32(gpu, hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (gpu, hwnd);
+        Err(unbound_gpu::device::GpuError::Allocation(
+            "windowed presentation is implemented for Win32 only".into(),
+        ))
+    }
+}
+
 /// 按表面能力解析交换链合成方式。
 ///
 /// 请求预乘 alpha 但驱动不支持时回退为不透明：宁可窗口不透明，也不能让内容以
@@ -691,7 +706,7 @@ impl<A: Application> WindowedRunner<A> {
 
         let recovered = recover_with(policy, || {
             let gpu = Gpu::new(device_config.clone())?;
-            let surface = match Surface::new_win32(&gpu, hwnd) {
+            let surface = match create_window_surface(&gpu, hwnd) {
                 Ok(s) => s,
                 Err(err) => {
                     gpu.destroy();
@@ -850,7 +865,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
         };
 
-        let surface = match Surface::new_win32(&gpu, hwnd) {
+        let surface = match create_window_surface(&gpu, hwnd) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(

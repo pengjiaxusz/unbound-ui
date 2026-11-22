@@ -29,6 +29,9 @@ accesskit.workspace = true
 crossbeam-channel.workspace = true
 rustc-hash.workspace = true
 
+[target.'cfg(not(windows))'.dependencies]
+unbound-text = { workspace = true, features = ["backend-swash"] }
+
 [dev-dependencies]
 unbound-text.workspace = true
 unbound-canvas.workspace = true

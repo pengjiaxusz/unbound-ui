@@ -1,9 +1,9 @@
 //! 光栅器运行期切换、整表重建与回退诊断的无头测试。
 
 use unbound_math::Vec2;
-use unbound_text::{
-    AtlasTarget, GlyphCache, InvalidationTier, RasterBackend, TextEngine, TextStyle,
-};
+#[cfg(all(windows, feature = "backend-directwrite"))]
+use unbound_text::AtlasTarget;
+use unbound_text::{GlyphCache, InvalidationTier, RasterBackend, TextEngine, TextStyle};
 
 static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -34,6 +34,7 @@ fn switching_rasterizer_twenty_times_no_leak_no_growth() {
     let mut initial_page_count = 0;
 
     for i in 0..20 {
+        #[cfg_attr(not(windows), allow(unused_variables))]
         let target_backend = if i % 2 == 0 {
             RasterBackend::Cosmic
         } else {

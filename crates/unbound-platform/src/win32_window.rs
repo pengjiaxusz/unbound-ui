@@ -17,6 +17,7 @@ use crate::resize::Extent;
 use crate::window::{PlatformError, ScreenRect};
 
 /// 用于从后台线程唤醒 Win32 消息循环的自定义窗口消息。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const WM_APP_WAKE: u32 = 0x8001; // WM_APP + 1
 
 /// 原生窗口唯一标识（对应 Win32 `HWND` 整数值）。
@@ -126,6 +127,7 @@ pub struct Window {
 }
 
 impl Window {
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn new(
         hwnd: isize,
         hinstance: isize,
@@ -148,6 +150,7 @@ impl Window {
 
     /// 将当前窗口标记为指定业务浮层 ID 对应的原生弹出窗宿主。
     #[must_use]
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn with_popup_id(mut self, popup_id: u64) -> Self {
         self.popup_id = Some(popup_id);
         self

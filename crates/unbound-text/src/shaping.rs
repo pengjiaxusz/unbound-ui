@@ -591,6 +591,7 @@ impl TextEngine {
 
     /// 基于已有 `FontSystem` 构建（测试中可使用最小字体集）。
     #[must_use]
+    #[cfg_attr(not(windows), allow(unused_mut))]
     pub fn with_font_system(mut font_system: FontSystem) -> Self {
         #[cfg(windows)]
         {

@@ -24,9 +24,11 @@ use showcase::target::{self, Target};
 use unbound_app::{AppRuntime, Locale};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
+#[cfg(windows)]
+use unbound_text::EmojiBackend;
 use unbound_text::{
-    CapabilityStatus, EmojiBackend, EmojiPresentation, EmojiSource, LineBreakMode, PhaseMode,
-    RasterBackend, TextCapabilities, TextRenderReport, TextRenderSettings, TextShaper,
+    CapabilityStatus, EmojiPresentation, EmojiSource, LineBreakMode, PhaseMode, RasterBackend,
+    TextCapabilities, TextRenderReport, TextRenderSettings, TextShaper,
 };
 
 const VIEWPORT: (f32, f32) = (1440.0, 1200.0);
@@ -396,6 +398,7 @@ fn text_render_backend_interactive_toggle_and_report_sync() {
 
     let page_index = PageId::TextRender.index() as u8;
     let cosmic_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_COSMIC));
+    #[cfg(windows)]
     let dw_btn_node = target::id(Target::Demo(page_index, 0, PART_BACKEND_DW));
 
     // 1. 点击切换到 Cosmic (Swash) 后端
