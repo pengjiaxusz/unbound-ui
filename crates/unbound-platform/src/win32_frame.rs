@@ -171,6 +171,7 @@ impl FrameHitMetrics {
     }
 
     /// 测试逻辑坐标点是否落入以原子 i32 存储的矩形内。
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn contains_logical(
         &self,
         x: i32,

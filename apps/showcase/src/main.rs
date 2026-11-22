@@ -411,6 +411,21 @@ impl Showcase {
     }
 }
 
+/// 按平台创建窗口渲染表面：Windows 上使用 Win32 `HWND`，非 Windows 平台显式返回不支持错误。
+fn create_window_surface(gpu: &Gpu, hwnd: isize) -> Result<Surface, unbound_gpu::device::GpuError> {
+    #[cfg(windows)]
+    {
+        Surface::new_win32(gpu, hwnd)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (gpu, hwnd);
+        Err(unbound_gpu::device::GpuError::Allocation(
+            "windowed presentation is implemented for Win32 only".into(),
+        ))
+    }
+}
+
 /// 提取 Win32 原生窗口句柄。
 fn window_hwnd(window: &Window) -> Option<isize> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -732,7 +747,7 @@ impl PlatformApp for Showcase {
             window.request_close();
             return;
         };
-        let surface = match Surface::new_win32(&gpu, hwnd) {
+        let surface = match create_window_surface(&gpu, hwnd) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
@@ -848,7 +863,7 @@ impl PlatformApp for Showcase {
             eprintln!("the secondary window has no native handle");
             return;
         };
-        let surface = match Surface::new_win32(&renderer.gpu, raw) {
+        let surface = match create_window_surface(&renderer.gpu, raw) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(

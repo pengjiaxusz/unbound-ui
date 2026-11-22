@@ -101,6 +101,7 @@ pub trait PlatformApp {
 
 /// 平台窗口：持有初始窗口配置与原生 Win32 事件循环。
 pub struct PlatformWindow {
+    #[cfg_attr(not(windows), allow(dead_code))]
     config: WindowConfig,
 }
 
@@ -153,6 +154,7 @@ pub fn raw_window_handle(window: &Window) -> Option<raw_window_handle::RawWindow
 }
 
 /// 排空入站无障碍动作并发布出站增量。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn pump_a11y<A: PlatformApp>(
     app: &mut A,
     a11y: &mut Win32A11y,
@@ -169,6 +171,7 @@ pub(crate) fn pump_a11y<A: PlatformApp>(
 }
 
 /// Win32 窗口样式位常量（独立于目标平台暴露，便于跨平台单元测试验证样式选择策略）。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) mod style_bits {
     pub const WS_OVERLAPPED: u32 = 0x0000_0000;
     /// `WS_POPUP`：无边框方案曾使用的样式位。当前实现改用保留 `WS_CAPTION` 的
@@ -194,6 +197,7 @@ pub(crate) mod style_bits {
 ///
 /// 合并是对整条队列查找同类事件后原地覆盖，因此同类事件在批内最多保留最后一条，且其队列位置
 /// 可能早于其间插入的其他事件；消费方不得依赖被合并事件的相对顺序。
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: PlatformEvent) {
     match event {
         PlatformEvent::Resized(extent) => {
@@ -246,6 +250,7 @@ pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: Platf
 ///   同时在 `resizable = true` 时保留 `WS_THICKFRAME` 以支持四边/四角缩放与 Snap Layout，
 ///   非客户区标题栏与边框统一由 `WM_NCCALCSIZE` 返回 `0` 裁切，避免出现系统白边。
 #[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn compute_window_style(config: &WindowConfig) -> u32 {
     use style_bits::*;
     if config.decorations {
