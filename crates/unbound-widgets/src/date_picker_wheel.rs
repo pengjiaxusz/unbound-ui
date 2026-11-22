@@ -832,11 +832,13 @@ impl UiWidget for DatePickerWheelDesc {
                     DatePickerColumnOrder::MonthDayYear => (col_r, 13.0, AlignX::Center),
                     DatePickerColumnOrder::YearMonthDay => {
                         let visual_h = col_r.size.y.min(DATE_PICKER_WHEEL_VISUAL_TRIGGER_HEIGHT);
+                        // 参考图墨迹在 y25..34，`Middle` 居中落在 26..35，整体低 1px，故基准上移 1px。
+                        let text_y = col_r.origin.y - 1.0;
                         match column {
                             WheelColumn::Month => (
                                 Rect::new(
                                     col_r.origin.x + DATE_PICKER_WHEEL_MONTH_LEFT_PADDING,
-                                    col_r.origin.y,
+                                    text_y,
                                     (col_r.size.x - DATE_PICKER_WHEEL_MONTH_LEFT_PADDING).max(0.0),
                                     visual_h,
                                 ),
@@ -844,7 +846,7 @@ impl UiWidget for DatePickerWheelDesc {
                                 AlignX::Left,
                             ),
                             WheelColumn::Year | WheelColumn::Day => (
-                                Rect::new(col_r.origin.x, col_r.origin.y, col_r.size.x, visual_h),
+                                Rect::new(col_r.origin.x, text_y, col_r.size.x, visual_h),
                                 DATE_PICKER_WHEEL_FONT_SIZE,
                                 AlignX::Center,
                             ),
@@ -1021,7 +1023,10 @@ mod tests {
     #[test]
     fn month_format_outputs_full_name_and_two_digit_numeric() {
         let default_desc = desc();
-        assert_eq!(default_desc.column_order, DatePickerColumnOrder::MonthDayYear);
+        assert_eq!(
+            default_desc.column_order,
+            DatePickerColumnOrder::MonthDayYear
+        );
         assert_eq!(default_desc.month_format, DatePickerMonthFormat::FullName);
 
         assert_eq!(DatePickerMonthFormat::FullName.format_month(4), "April");
