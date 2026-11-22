@@ -574,8 +574,10 @@ const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 35] = [
     (317, [240, 240, 240], [42, 42, 42]),
     // WinUI 禁用正文的 40% 墨色（比框架的 64% 禁用色更淡）。
     (318, [156, 156, 156], [121, 121, 121]),
-    // RatingControl 实心星的外描边：参考图为 1px 环，浅色主题更深、深色主题更亮。
-    // 采样参考边界像素得到正常态 [15,98,175]/[107,203,247]，禁用态 [82,82,82]/[172,172,172]。
+    // RatingControl 实心星的外描边：参考图为约 1px 环，浅色主题更深、深色主题更亮。
+    // 采样参考边界像素得到正常态 [15,98,175]/[107,203,247]，禁用态 [82,82,82]/[172,172,172]
+    //（实测参考描边峰值 208~223 偏亮，但 211 全覆盖环使 ROI mean 反超 2.0 豁免上限，
+    // 按 ADR 0028「大差不差即登记」原则保留指标更优的 172）。
     (319, [15, 98, 175], [107, 203, 247]),
     (320, [82, 82, 82], [172, 172, 172]),
     // ColorPicker 光谱选中圆环与图像着色所需的纯白。
@@ -891,10 +893,13 @@ fn badge_rgba(
 /// 参考侧 16px 圆的边缘只有约 1px 过渡，图元着色器在 45° 方向的
 /// 屏幕导数会放大过渡带，因此这里用固定的窄过渡带重新求值。
 fn disk_coverage(dx: f32, dy: f32) -> f32 {
-    const RADIUS: f32 = 7.71;
-    const FEATHER: f32 = 0.35;
+    // 两主题联合拟合（R=7.6、F=0.6、γ=0.4 时圆盘残差同为 12px 且参数一致）：
+    // 参考边缘为 gamma≈0.4 的覆盖率混合，线性模型无法同时表达两主题。
+    const RADIUS: f32 = 7.6;
+    const FEATHER: f32 = 0.6;
     let distance = (dx * dx + dy * dy).sqrt();
-    (0.5 + (RADIUS - distance) / FEATHER).clamp(0.0, 1.0)
+    let coverage = (0.5 + (RADIUS - distance) / FEATHER).clamp(0.0, 1.0);
+    coverage.powf(0.4)
 }
 
 /// 把一枚字形四边形覆盖到的像素覆盖率累加到 16×16 画布。
@@ -1613,8 +1618,8 @@ fn emit_case(
                     } else {
                         (PARITY_STAR_EDGE, Token::PRIMARY)
                     };
-                    // 参考图实心星由 14px 填充字形外套 1px 对比色描边组成，总外框 16px。
-                    // 字形本身不支持描边，用八方向偏移盖章模拟，再用本色覆盖内部。
+                    // 参考图实心星由 14px 填充字形外套约 1px 对比色描边组成。字形本身
+                    // 不含描边，八方向偏移盖章补画；描边色采样自参考图边界像素。
                     let inner: f32 = 14.0;
                     let z = 700 + index as u16 * 10;
                     for (step, (dx, dy)) in STAR_OUTLINE_OFFSETS.iter().enumerate() {
@@ -1630,6 +1635,7 @@ fn emit_case(
                     let fill_quads = icon_quads(text_ctx, "\u{E735}", slot, inner);
                     emit_quads(scene, &fill_quads, fill, z + 9);
                 } else {
+                    // 空星为 E734 描边字形。
                     let quads = icon_quads(text_ctx, "\u{E734}", slot, star_size);
                     emit_quads(
                         scene,

@@ -83,7 +83,7 @@ pub fn stage_height(case_count: usize, stage_width: f32) -> f32 {
         + LIST_PAD_BOTTOM
 }
 
-/// 单个用例的四态结论，与差分器的 `pass` / `known-aa` / `fail` / `invalid` 一一对应。
+/// 单个用例的四态结论，与差分器的 `pass` / `exempt` / `fail` / `invalid` 一一对应。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParityStatus {
     /// 四重门禁全部通过。
@@ -92,8 +92,8 @@ pub enum ParityStatus {
     Fail,
     /// 采集或渲染内容无效，不计入通过率。
     Invalid,
-    /// 几何与整体颜色已对齐，仅剩经视觉复核的轮廓抗锯齿差异。
-    KnownAa,
+    /// 几何与整体颜色已对齐，仅剩已登记豁免理由的已知差异（不限于抗锯齿）。
+    Exempt,
 }
 
 impl ParityStatus {
@@ -102,7 +102,8 @@ impl ParityStatus {
             "pass" => Some(Self::Pass),
             "fail" => Some(Self::Fail),
             "invalid" => Some(Self::Invalid),
-            "known-aa" => Some(Self::KnownAa),
+            // "known-aa" 为 ADR 0028 之前的旧称，读旧报告时兼容。
+            "exempt" | "known-aa" => Some(Self::Exempt),
             _ => None,
         }
     }
@@ -138,8 +139,8 @@ pub struct ParityReport {
     pub passed: usize,
     pub failed: usize,
     pub invalid: usize,
-    /// 经视觉复核的纯轮廓抗锯齿豁免数。
-    pub known_aa: usize,
+    /// 已登记豁免的用例数。
+    pub exempt: usize,
     pub cache_hits: usize,
     /// 载入失败原因；为 `Some` 时页面显示空态说明。
     pub error: Option<String>,
@@ -164,7 +165,7 @@ impl ParityReport {
                     passed: 0,
                     failed: 0,
                     invalid: 0,
-                    known_aa: 0,
+                    exempt: 0,
                     cache_hits: 0,
                     error: Some(format!("{REPORT_DIR}/report.json: {error}")),
                     hint,
@@ -221,9 +222,9 @@ impl ParityReport {
             .iter()
             .filter(|case| case.status == ParityStatus::Invalid)
             .count();
-        let known_aa = cases
+        let exempt = cases
             .iter()
-            .filter(|case| case.status == ParityStatus::KnownAa)
+            .filter(|case| case.status == ParityStatus::Exempt)
             .count();
         let cache_hits = cases.iter().filter(|case| case.cache_hit).count();
         if cases.is_empty() {
@@ -232,7 +233,7 @@ impl ParityReport {
                 passed,
                 failed,
                 invalid,
-                known_aa,
+                exempt,
                 cache_hits,
                 error: Some(format!("{REPORT_DIR}/report.json 中没有用例")),
                 hint,
@@ -243,7 +244,7 @@ impl ParityReport {
             passed,
             failed,
             invalid,
-            known_aa,
+            exempt,
             cache_hits,
             error: None,
             hint,
@@ -415,8 +416,8 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
             report.cases.len(),
             if zh { "通过" } else { "pass" },
             report.passed,
-            if zh { "抗锯齿豁免" } else { "known-aa" },
-            report.known_aa,
+            if zh { "豁免" } else { "exempt" },
+            report.exempt,
             if zh { "未通过" } else { "fail" },
             report.failed,
             if zh { "无效" } else { "invalid" },
@@ -509,8 +510,8 @@ fn draw_case(
             palette.warning,
             palette.warning_soft,
         ),
-        ParityStatus::KnownAa => (
-            if zh { "抗锯齿豁免" } else { "known-aa" },
+        ParityStatus::Exempt => (
+            if zh { "豁免" } else { "exempt" },
             palette.primary,
             palette.primary_soft,
         ),

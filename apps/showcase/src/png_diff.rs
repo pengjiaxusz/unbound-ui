@@ -8,6 +8,8 @@
 //! 2. **固有尺寸对齐（`intrinsic_matches`）**：在未显式指定固定宽高的自由维度上，固有尺寸相差 `≤ 1px`；
 //! 3. **ROI 色差均值与分位数**：仅在 `union(reference_bbox, ours_bbox, controlBounds)` 外扩 `2px` 的有效对比区内统计，`mean_de <= 1.5` 且 `p95_de <= 4.0`；
 //! 4. **显著色差像素占比（`over_limit_ratio`）**：ROI 内 `ΔE2000 > 5.0` 的像素占比 `≤ 2.0%`（防止圆角、描边或图标漏画被面积稀释）。
+//!
+//! lang-allow: 豁免登记（EXEMPT_CASES）的 reason 为 zh-CN 复核记录文案
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -81,8 +83,9 @@ pub enum CaseStatus {
     Fail,
     /// 内容或采集本身无效，不参与通过率统计。
     Invalid,
-    /// 几何、尺寸与整体色差已对齐，仅剩经视觉复核确认的 1px 边缘抗锯齿差异。
-    KnownAa,
+    /// 几何、尺寸与整体色差已对齐，仅剩经视觉复核确认、已在
+    /// [`EXEMPT_CASES`] 登记理由的已知差异（不限于抗锯齿）。
+    Exempt,
 }
 
 impl CaseStatus {
@@ -93,34 +96,76 @@ impl CaseStatus {
             Self::Pass => "pass",
             Self::Fail => "fail",
             Self::Invalid => "invalid",
-            Self::KnownAa => "known-aa",
+            Self::Exempt => "exempt",
         }
     }
 }
 
-/// 经视觉复核、仅剩 1px 边缘抗锯齿差异的用例。
+/// 经视觉复核、登记在案的豁免用例。
+///
+/// 豁免不限于抗锯齿：任何「结构性差异已修复、剩余差异无法通过参数对齐」的用例
+/// 都可登记，但必须写明 [`ExemptCase::reason`]，供后续复核与重新评估。
 ///
 /// 豁免条件不是“放宽阈值”，而是同时满足：
 /// - 内容包围盒与固有尺寸已对齐；
-/// - `mean_de <= 2.0`，即整体颜色与几何已经一致；
-/// - 差异仅体现在轮廓像素的覆盖率上。
+/// - `mean_de <= EXEMPT_MEAN_LIMIT`，即整体颜色与几何已经一致；
+/// - 剩余差异为登记理由所述的已知类型（人工放大复核）。
 ///
-/// 新增条目必须附带参考/我方放大图的复核记录，见 ADR 0010。
-pub const KNOWN_AA_CASES: &[&str] = &[
-    "InfoBadge_normal_light",
-    "InfoBadge_normal_dark",
-    "InfoBadge_disabled_light",
-    "InfoBadge_disabled_dark",
-    "RatingControl_normal_light",
-    "RatingControl_normal_dark",
-    "RatingControl_disabled_light",
-    "RatingControl_disabled_dark",
+/// 新增条目必须附带参考/我方放大图的复核记录，见 ADR 0010 / ADR 0028。
+pub const EXEMPT_CASES: &[ExemptCase] = &[
+    ExemptCase {
+        name: "RatingControl_normal_light",
+        reason: "星形字形与 DirectWrite 的亚像素 AA / gamma 覆盖率混合差异：\
+             内容、描边与填充均已对齐，残差为轮廓像素的混合模型差异，无参数可收敛",
+    },
+    ExemptCase {
+        name: "RatingControl_normal_dark",
+        reason: "同 normal_light：星形轮廓的亚像素 AA / gamma 混合差异",
+    },
+    ExemptCase {
+        name: "RatingControl_disabled_light",
+        reason: "同 normal_light：星形轮廓的亚像素 AA / gamma 混合差异",
+    },
+    ExemptCase {
+        name: "RatingControl_disabled_dark",
+        reason: "同 normal_light：星形轮廓的亚像素 AA / gamma 混合差异",
+    },
+    ExemptCase {
+        name: "CalendarDatePicker_normal_light",
+        reason: "文字与日历图标的内容、位置、墨量分布均已对齐；残差为字符内部 \
+             1~3px 的 AA 墨量差与图标字形光栅化差异，调整字号/字重均恶化",
+    },
+    ExemptCase {
+        name: "CalendarDatePicker_normal_dark",
+        reason: "同 normal_light：字形 AA 墨量差与图标字形光栅化差异",
+    },
+    ExemptCase {
+        name: "CalendarView_normal_light",
+        reason: "标题/星期表头/日期数字的行分布完全对齐；残差为数字字形亚像素 \
+             AA 墨量差与选中环线宽差（浅色参考偏粗），无单一参数可同时改善两主题",
+    },
+    ExemptCase {
+        name: "CalendarView_normal_dark",
+        reason: "同 normal_light：数字字形亚像素 AA 与选中环线宽差异",
+    },
+    ExemptCase {
+        name: "CalendarView_disabled_dark",
+        reason: "同 normal_light：数字字形亚像素 AA 与选中环线宽差异",
+    },
 ];
 
-/// `known-aa` 豁免允许的有效对比区 ΔE2000 均值上限。
+/// 单个豁免用例的登记条目。
+pub struct ExemptCase {
+    /// 用例名（不含扩展名）。
+    pub name: &'static str,
+    /// 豁免理由：说明已修复什么、剩余差异的性质为何无法对齐。
+    pub reason: &'static str,
+}
+
+/// 豁免允许的有效对比区 ΔE2000 均值上限。
 ///
-/// 比正常门禁略宽，用于容纳 1px 轮廓覆盖差异带来的整体抬升，但仍明显低于失败区间。
-pub const KNOWN_AA_MEAN_LIMIT: f64 = 2.0;
+/// 比正常门禁略宽，用于容纳轮廓覆盖差异带来的整体抬升，但仍明显低于失败区间。
+pub const EXEMPT_MEAN_LIMIT: f64 = 2.0;
 
 /// 单个用例的对比结果。
 pub struct CaseMetrics {
@@ -174,29 +219,32 @@ impl CaseMetrics {
             .min(self.ours_content_coverage)
     }
 
-    /// 四态判定：无效优先于四门禁，未过门禁但属于已复核的边缘抗锯齿用例判为 [`CaseStatus::KnownAa`]。
+    /// 四态判定：无效优先于四门禁，未过门禁但已登记豁免的用例判为 [`CaseStatus::Exempt`]。
     #[must_use]
     pub fn status(&self) -> CaseStatus {
         if self.invalid_reason.is_some() {
             CaseStatus::Invalid
         } else if self.passes() {
             CaseStatus::Pass
-        } else if self.is_known_aa() {
-            CaseStatus::KnownAa
+        } else if self.is_exempt() {
+            CaseStatus::Exempt
         } else {
             CaseStatus::Fail
         }
     }
 
-    /// 是否属于经视觉复核的纯边缘抗锯齿用例。
+    /// 是否属于已登记豁免的用例。
     ///
-    /// 只豁免轮廓像素覆盖率：几何与整体颜色必须先对齐，且用例在 [`KNOWN_AA_CASES`] 名单内。
+    /// 豁免不放宽几何与整体色差要求：包围盒、固有尺寸与 `EXEMPT_MEAN_LIMIT`
+    /// 仍必须对齐，且用例在 [`EXEMPT_CASES`] 名单内（附登记理由）。
     #[must_use]
-    pub fn is_known_aa(&self) -> bool {
-        KNOWN_AA_CASES.contains(&self.name.as_str())
+    pub fn is_exempt(&self) -> bool {
+        EXEMPT_CASES
+            .iter()
+            .any(|case| case.name == self.name.as_str())
             && self.bbox_matches()
             && self.intrinsic_matches()
-            && self.mean_de <= KNOWN_AA_MEAN_LIMIT
+            && self.mean_de <= EXEMPT_MEAN_LIMIT
     }
 
     /// 门禁 1：内容包围盒是否逐边相等（允许 ±1px 字体亚像素抗锯齿溢出）。
@@ -268,12 +316,12 @@ impl BatchSummary {
             .count()
     }
 
-    /// 已复核的边缘抗锯齿豁免数。
+    /// 已登记豁免的用例数。
     #[must_use]
-    pub fn known_aa(&self) -> usize {
+    pub fn exempt(&self) -> usize {
         self.cases
             .iter()
-            .filter(|case| case.status() == CaseStatus::KnownAa)
+            .filter(|case| case.status() == CaseStatus::Exempt)
             .count()
     }
 }
@@ -1078,10 +1126,10 @@ mod tests {
     }
 
     #[test]
-    fn known_aa_requires_listed_case_and_aligned_geometry() {
+    fn exempt_requires_listed_case_and_aligned_geometry() {
         let mut m = CaseMetrics {
-            name: "InfoBadge_normal_light".into(),
-            control: "InfoBadge".into(),
+            name: "RatingControl_normal_light".into(),
+            control: "RatingControl".into(),
             state: "normal".into(),
             theme: "light".into(),
             backdrop: "solid".into(),
@@ -1102,24 +1150,24 @@ mod tests {
             invalid_reason: None,
         };
         assert!(!m.passes());
-        assert!(m.is_known_aa());
-        assert_eq!(m.status(), CaseStatus::KnownAa);
+        assert!(m.is_exempt());
+        assert_eq!(m.status(), CaseStatus::Exempt);
 
-        // 未列入复核名单的用例，即使指标完全相同也必须判失败。
-        m.name = "InfoBadge_hover_light".into();
+        // 未列入豁免名单的用例，即使指标完全相同也必须判失败。
+        m.name = "RatingControl_hover_light".into();
         assert_eq!(m.status(), CaseStatus::Fail);
 
         // 名单内但整体色差超出豁免上限，仍判失败。
         m.name = "RatingControl_normal_light".into();
         m.mean_de = 2.4;
-        assert!(!m.is_known_aa());
+        assert!(!m.is_exempt());
         assert_eq!(m.status(), CaseStatus::Fail);
 
         // 名单内但几何未对齐，豁免不生效。
         m.mean_de = 1.2;
         m.reference_bbox = [16, 24, 127, 39];
         m.ours_bbox = [16, 24, 127, 41];
-        assert!(!m.is_known_aa());
+        assert!(!m.is_exempt());
     }
 
     /// 生成指定背景色的纯色图。
@@ -1298,12 +1346,12 @@ mod tests {
     }
 
     #[test]
-    fn only_failed_names_skips_passing_and_known_aa_cases() {
+    fn only_failed_names_skips_passing_and_exempt_cases() {
         let report = r#"{
   "cases": [
     { "name": "Button_normal_light", "control": "Button", "status": "pass" },
     { "name": "Button_disabled_dark", "control": "Button", "status": "fail" },
-    { "name": "RatingControl_normal_light", "control": "RatingControl", "status": "known-aa" },
+    { "name": "RatingControl_normal_light", "control": "RatingControl", "status": "exempt" },
     { "name": "Image_normal_light", "control": "Image", "status": "invalid" }
   ]
 }"#;

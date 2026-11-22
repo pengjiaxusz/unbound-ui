@@ -1872,9 +1872,9 @@ fn run_parity_diff(mut options: ParityDiffOptions) {
     ) {
         Ok(summary) => {
             println!(
-                "parity: pass={} known-aa={} fail={} invalid={} (of {}, {} cached, {} filtered) - {}",
+                "parity: pass={} exempt={} fail={} invalid={} (of {}, {} cached, {} filtered) - {}",
                 summary.passed(),
-                summary.known_aa(),
+                summary.exempt(),
                 summary.failed(),
                 summary.invalid(),
                 summary.cases.len(),
@@ -1889,7 +1889,7 @@ fn run_parity_diff(mut options: ParityDiffOptions) {
                     !matches!(
                         case.status(),
                         showcase::png_diff::CaseStatus::Pass
-                            | showcase::png_diff::CaseStatus::KnownAa
+                            | showcase::png_diff::CaseStatus::Exempt
                     )
                 })
                 .take(8)
