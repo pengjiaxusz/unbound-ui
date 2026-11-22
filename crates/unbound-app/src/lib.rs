@@ -260,6 +260,8 @@ macro_rules! ui_key {
 
 /// [`unbound_widgets::UiWidget`] 的类型擦除 trait 对象适配器。
 pub trait ErasedUiWidget: Send + Sync + core::fmt::Debug {
+    /// 返回底层具体控件类型的动态引用（供运行时执行外部纹理句柄解析等桥接操作）。
+    fn as_any(&self) -> &dyn core::any::Any;
     /// 使用真实文本整形计算控件的固有尺寸。
     fn intrinsic_size_erased(&self, text_ctx: &mut unbound_widgets::TextCtx<'_>) -> Vec2;
     /// 将输入事件直接 reduce 到局部控件状态。
@@ -284,6 +286,10 @@ pub trait ErasedUiWidget: Send + Sync + core::fmt::Debug {
 }
 
 impl<W: unbound_widgets::UiWidget> ErasedUiWidget for W {
+    fn as_any(&self) -> &dyn core::any::Any {
+        self
+    }
+
     fn intrinsic_size_erased(&self, text_ctx: &mut unbound_widgets::TextCtx<'_>) -> Vec2 {
         self.intrinsic_size(text_ctx)
     }
@@ -6073,15 +6079,101 @@ impl<A: Application> AppRuntime<A> {
                         .insert(entry.key, (scrolled_rect, Arc::clone(widget)));
                     widget.ensure_state_erased(entry.key, &mut self.widget_state.borrow_mut());
                     let store = self.widget_state.borrow();
-                    let output = apply_z_base(
-                        widget.emit_laid_out_erased(entry.key, rect, state, &store, &mut text_ctx),
-                        entry.z_base,
-                    );
+                    let raw_output = if let Some(tabs_desc) =
+                        widget.as_any().downcast_ref::<unbound_widgets::TabsDesc>()
+                    {
+                        if tabs_desc.items.iter().any(|it| {
+                            matches!(it.widget_icon, unbound_widgets::WidgetIcon::ExternalTexture(_))
+                        }) {
+                            let mut resolved = tabs_desc.clone();
+                            for it in &mut resolved.items {
+                                it.widget_icon =
+                                    resolve_widget_icon(&self.asset_hub, it.widget_icon);
+                            }
+                            resolved.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        } else {
+                            widget.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        }
+                    } else if let Some(addr_desc) =
+                        widget
+                            .as_any()
+                            .downcast_ref::<unbound_widgets::AddressBarDesc>()
+                    {
+                        if addr_desc.segments.iter().any(|seg| {
+                            matches!(
+                                seg.widget_icon,
+                                unbound_widgets::WidgetIcon::ExternalTexture(_)
+                            )
+                        }) {
+                            let mut resolved = addr_desc.clone();
+                            for seg in &mut resolved.segments {
+                                seg.widget_icon =
+                                    resolve_widget_icon(&self.asset_hub, seg.widget_icon);
+                            }
+                            resolved.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        } else {
+                            widget.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        }
+                    } else if let Some(btn_desc) =
+                        widget.as_any().downcast_ref::<unbound_widgets::ButtonDesc>()
+                    {
+                        if matches!(
+                            btn_desc.widget_icon,
+                            unbound_widgets::WidgetIcon::ExternalTexture(_)
+                        ) {
+                            let mut resolved = btn_desc.clone();
+                            resolved.widget_icon =
+                                resolve_widget_icon(&self.asset_hub, resolved.widget_icon);
+                            resolved.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        } else {
+                            widget.emit_laid_out_erased(
+                                entry.key,
+                                rect,
+                                state,
+                                &store,
+                                &mut text_ctx,
+                            )
+                        }
+                    } else {
+                        widget.emit_laid_out_erased(entry.key, rect, state, &store, &mut text_ctx)
+                    };
+                    let output = apply_z_base(raw_output, entry.z_base);
                     self.collector.push(entry.key, output);
                 }
                 WidgetSpec::Button(desc) => {
                     let mut desc = desc.clone();
                     desc.rect = rect;
+                    desc.widget_icon = resolve_widget_icon(&self.asset_hub, desc.widget_icon);
                     let output = apply_z_base(
                         desc.emit_laid_out(entry.key, rect, state, &(), &mut text_ctx),
                         entry.z_base,
@@ -6274,18 +6366,9 @@ impl<A: Application> AppRuntime<A> {
                             self.collector
                                 .push(row.row.id ^ 0x5452_4545_0002, divider_out);
                         }
-                        // 将 `TreeRowIcon::ExternalTexture(handle_raw)` 桥接至 `AssetHub` 已上传的外部纹理 GPU 槽位；
-                        // 若句柄尚未驻留则退化为 `TreeRowIcon::None`，避免绑定无效纹理槽。
-                        let resolved_icon = match snap.icon {
-                            unbound_widgets::TreeRowIcon::ExternalTexture(handle_raw) => self
-                                .asset_hub
-                                .external_texture_slot(ExternalTextureHandle(handle_raw))
-                                .map(|(slot, _, _)| {
-                                    unbound_widgets::TreeRowIcon::ExternalTexture(u64::from(slot))
-                                })
-                                .unwrap_or(unbound_widgets::TreeRowIcon::None),
-                            other => other,
-                        };
+                        // 将 `WidgetIcon::ExternalTexture(handle_raw)` 统一桥接至 `AssetHub` 已上传的外部纹理 GPU 槽位；
+                        // 若句柄尚未驻留则退化为 `WidgetIcon::None`，避免绑定无效纹理槽。
+                        let resolved_icon = resolve_widget_icon(&self.asset_hub, snap.icon);
                         let has_icon = !matches!(resolved_icon, unbound_widgets::TreeRowIcon::None);
                         let raw_label = snap
                             .label
@@ -6408,6 +6491,9 @@ impl<A: Application> AppRuntime<A> {
                         desc.rect = rect;
                     }
                     desc.z = entry.z_base.saturating_add(desc.z);
+                    for seg in &mut desc.segments {
+                        seg.widget_icon = resolve_widget_icon(&self.asset_hub, seg.widget_icon);
+                    }
                     let layout = unbound_widgets::compute_layout(&desc);
                     // 按 `address_bar_sub_node(entry.key, kind)` 自动反解悬停与按压子热区，
                     // 兼顾业务层手动覆写的 `hovered_hit` / `pressed_hit`。
@@ -6749,6 +6835,7 @@ impl<A: Application> AppRuntime<A> {
                 } => {
                     let mut desc = desc.clone();
                     desc.z = entry.z_base.saturating_add(desc.z.min(100));
+                    resolve_menu_item_icons(&self.asset_hub, &mut desc.items);
                     let (mut out, _) = unbound_widgets::emit_menu(
                         entry.key,
                         *anchor_key,
@@ -7734,6 +7821,36 @@ impl<A: Application> AppRuntime<A> {
     fn sync_focus_context(&mut self) {
         self.ctx.focused = self.focus.focused();
         self.ctx.focus_visible = self.focus.focus_visible();
+    }
+}
+
+/// 将 [`unbound_widgets::WidgetIcon::ExternalTexture`] 中的逻辑句柄解析为
+/// [`crate::assets::AssetHub`] 已上传的 GPU Bindless 纹理槽位；
+/// 若句柄尚未驻留或已释放，则安全降级为 [`unbound_widgets::WidgetIcon::None`]，避免绑定无效纹理槽。
+#[must_use]
+fn resolve_widget_icon(
+    asset_hub: &crate::assets::AssetHub,
+    icon: unbound_widgets::WidgetIcon,
+) -> unbound_widgets::WidgetIcon {
+    match icon {
+        unbound_widgets::WidgetIcon::ExternalTexture(handle_raw) => asset_hub
+            .external_texture_slot(ExternalTextureHandle(handle_raw))
+            .map(|(slot, _, _)| unbound_widgets::WidgetIcon::ExternalTexture(u64::from(slot)))
+            .unwrap_or(unbound_widgets::WidgetIcon::None),
+        other => other,
+    }
+}
+
+/// 递归解析菜单项及其子菜单中的 [`unbound_widgets::WidgetIcon::ExternalTexture`] 句柄。
+fn resolve_menu_item_icons(
+    asset_hub: &crate::assets::AssetHub,
+    items: &mut [unbound_widgets::MenuItem],
+) {
+    for item in items {
+        item.widget_icon = resolve_widget_icon(asset_hub, item.widget_icon);
+        if let Some(sub) = item.submenu.as_mut() {
+            resolve_menu_item_icons(asset_hub, sub);
+        }
     }
 }
 
@@ -8785,6 +8902,172 @@ mod tests {
                 .iter()
                 .any(|p| p.local_pos[0] < unshifted_text_x - 20.0 && p.clip_idx != CLIP_NONE),
             "active edit glyphs must shift left by scroll_x under clip"
+        );
+    }
+
+    #[test]
+    fn widget_icon_external_textures_resolve_across_widgets_and_fallback_when_uncommitted() {
+        use unbound_gpu::data::PrimType;
+        use unbound_widgets::{
+            AddressBarDesc, AddressBarState, ContextMenuState, MenuDesc, MenuItem, PathSegment,
+            ShellIcon, TabItem, TabsDesc, TreeViewDesc, TreeViewState, WidgetIcon,
+        };
+        use unbound_world::TreeRow;
+
+        struct IconBridgeApp {
+            tree_state: RefCell<TreeViewState>,
+            address_state: AddressBarState,
+            menu_state: ContextMenuState,
+            ready_handle: Option<ExternalTextureHandle>,
+            pending_handle: Option<ExternalTextureHandle>,
+        }
+
+        impl Application for IconBridgeApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                let ready_icon = self
+                    .ready_handle
+                    .map_or(WidgetIcon::None, |h| WidgetIcon::ExternalTexture(h.0));
+                let pending_icon = self
+                    .pending_handle
+                    .map_or(WidgetIcon::None, |h| WidgetIcon::ExternalTexture(h.0));
+
+                v.column(1, |col| {
+                    col.tree_view(
+                        10,
+                        TreeViewDesc::new(Rect::new(0.0, 0.0, 240.0, 120.0)),
+                        &mut self.tree_state.borrow_mut(),
+                    );
+                    col.address_bar(
+                        11,
+                        AddressBarDesc::with_path_segments(
+                            Rect::new(0.0, 0.0, 420.0, 32.0),
+                            "C:\Work",
+                            vec![
+                                PathSegment::new("C:", "C:\").with_widget_icon(ready_icon),
+                                PathSegment::new("Work", "C:\Work"),
+                            ],
+                        ),
+                        &self.address_state,
+                    );
+                    col.button(
+                        12,
+                        ButtonDesc::new(Rect::new(0.0, 0.0, 120.0, 32.0), "ReadyBtn")
+                            .with_widget_icon(ready_icon),
+                    );
+                    col.button(
+                        13,
+                        ButtonDesc::new(Rect::new(0.0, 0.0, 120.0, 32.0), "PendingBtn")
+                            .with_widget_icon(pending_icon),
+                    );
+                    col.tabs(
+                        14,
+                        TabsDesc::new(Rect::new(0.0, 0.0, 360.0, 40.0), &[]).with_items(vec![
+                            TabItem::new(101, "ReadyTab").with_widget_icon(ready_icon),
+                            TabItem::new(102, "PendingTab")
+                                .with_icon(ShellIcon::Folder)
+                                .with_widget_icon(pending_icon),
+                        ]),
+                    );
+                    col.context_menu(
+                        15,
+                        MenuDesc::new(
+                            Rect::new(0.0, 0.0, 180.0, 80.0),
+                            vec![
+                                MenuItem::action("ReadyItem").with_widget_icon(ready_icon),
+                                MenuItem::action("PendingItem").with_widget_icon(pending_icon),
+                            ],
+                        ),
+                        &self.menu_state,
+                    );
+                });
+            }
+        }
+
+        let mut tree = TreeViewState::new(28.0);
+        tree.rebuild(&[TreeRow::new(501, 0, false), TreeRow::new(502, 0, false)], |_| {
+            Vec::new()
+        });
+        let mut menu_state = ContextMenuState::new();
+        menu_state.open_at(Vec2::new(60.0, 60.0), 12, None);
+
+        let app = IconBridgeApp {
+            tree_state: RefCell::new(tree),
+            address_state: AddressBarState::new(),
+            menu_state,
+            ready_handle: None,
+            pending_handle: None,
+        };
+        let mut rt = AppRuntime::new(app, Vec2::new(1000.0, 700.0));
+        let ready_h =
+            rt.asset_hub_mut()
+                .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
+        let pending_h =
+            rt.asset_hub_mut()
+                .upload_external_rgba8(16, 16, true, vec![128u8; 16 * 16 * 4]);
+        rt.asset_hub_mut()
+            .commit_external_texture_slot(ready_h, Ok(63));
+
+        // 校验辅助函数本身：已提交返回 GPU 槽位，未提交退化为 None，矢量与 None 原样透传
+        assert_eq!(
+            resolve_widget_icon(rt.asset_hub(), WidgetIcon::ExternalTexture(ready_h.0)),
+            WidgetIcon::ExternalTexture(63)
+        );
+        assert_eq!(
+            resolve_widget_icon(rt.asset_hub(), WidgetIcon::ExternalTexture(pending_h.0)),
+            WidgetIcon::None
+        );
+        assert_eq!(
+            resolve_widget_icon(rt.asset_hub(), WidgetIcon::Vector(ShellIcon::Folder)),
+            WidgetIcon::Vector(ShellIcon::Folder)
+        );
+
+        {
+            let a = rt.application_mut();
+            a.ready_handle = Some(ready_h);
+            a.pending_handle = Some(pending_h);
+            let mut ts = a.tree_state.borrow_mut();
+            ts.set_row_icon(501, WidgetIcon::ExternalTexture(ready_h.0));
+            ts.set_row_icon(502, WidgetIcon::ExternalTexture(pending_h.0));
+        }
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+
+        let scene = rt.scene();
+        let none_raw = u32::from(unbound_theme::Token::NONE.raw());
+        let has_image_slot = |node_key: u64, slot: u32| -> bool {
+            scene.node_spans.get(&node_key).is_some_and(|&(s, e)| {
+                scene.primitives[s as usize..e as usize].iter().any(|p| {
+                    p.prim_type() == PrimType::Image
+                        && p.border_token_or_tex == slot
+                        && p.fill_token_or_uv == none_raw
+                })
+            })
+        };
+        let has_any_image = |node_key: u64| -> bool {
+            scene.node_spans.get(&node_key).is_some_and(|&(s, e)| {
+                scene.primitives[s as usize..e as usize]
+                    .iter()
+                    .any(|p| p.prim_type() == PrimType::Image)
+            })
+        };
+
+        assert!(has_image_slot(501, 63), "tree row ready icon must bind slot 63");
+        assert!(!has_any_image(502), "tree row pending icon must not emit image");
+        assert!(has_image_slot(11, 63), "address bar root icon must bind slot 63");
+        assert!(has_image_slot(12, 63), "ready button icon must bind slot 63");
+        assert!(!has_any_image(13), "pending button icon must not emit image");
+        assert!(has_image_slot(14, 63), "tabs ready icon must bind slot 63");
+        assert!(has_image_slot(mix_key(15, 0x4354_584D), 63), "context menu ready icon must bind slot 63");
+        assert!(
+            !scene.primitives.iter().any(|p| {
+                p.prim_type() == PrimType::Image && p.border_token_or_tex == pending_h.0 as u32
+            }),
+            "uncommitted external handle must never leak into GPU image primitives"
         );
     }
 }

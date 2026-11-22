@@ -16,6 +16,7 @@ use crate::image::IconDesc;
 use crate::overlay::OverlayEntry;
 use crate::primitive::{instance, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
+use crate::shell::{emit_widget_icon_primitives, WidgetIcon};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 菜单的命中测试层级。
@@ -52,6 +53,8 @@ pub struct MenuItem {
     pub selected: bool,
     /// 前置图标（若有）。
     pub icon: Option<IconDesc>,
+    /// 统一前置图标槽（支持内置矢量与外部彩色纹理）。
+    pub widget_icon: WidgetIcon,
     /// 可勾选行的勾选状态（`Some` 表示可勾选）。
     pub checked: Option<bool>,
     /// 按 `ArrowRight` 打开的嵌套子菜单（若有）。
@@ -69,6 +72,7 @@ impl MenuItem {
             separator: false,
             selected: false,
             icon: None,
+            widget_icon: WidgetIcon::None,
             checked: None,
             submenu: None,
         }
@@ -84,6 +88,7 @@ impl MenuItem {
             separator: true,
             selected: false,
             icon: None,
+            widget_icon: WidgetIcon::None,
             checked: None,
             submenu: None,
         }
@@ -107,6 +112,13 @@ impl MenuItem {
     #[must_use]
     pub fn with_icon(mut self, icon: IconDesc) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// 附加统一前置图标（支持内置矢量或外部彩色纹理）。
+    #[must_use]
+    pub fn with_widget_icon(mut self, icon: WidgetIcon) -> Self {
+        self.widget_icon = icon;
         self
     }
 
@@ -488,6 +500,7 @@ pub fn emit_menu(
     let radii = [desc.radius; 4];
     let offset = state.scroll_offset();
     let mut primitives: Vec<GpuPrimitiveInstance> = Vec::with_capacity(3 + desc.items.len() * 2);
+    let mut payloads = Vec::new();
 
     primitives.push(instance(
         rect,
@@ -564,6 +577,36 @@ pub fn emit_menu(
             SubElement::Content,
             desc.z,
         ));
+        // 统一前置图标（`16×16`，位于胶囊左侧内缩 10px 处垂直居中）
+        if item.widget_icon != WidgetIcon::None {
+            let icon_rect = Rect::new(
+                pill.origin.x + 10.0,
+                row.origin.y + (row.size.y - 16.0) * 0.5,
+                16.0,
+                16.0,
+            );
+            let item_disabled = control.disabled || item.disabled;
+            let icon_color = if item_disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            };
+            let icon_bg = if highlighted {
+                Token::HOVER
+            } else {
+                Token::OVERLAY_BG
+            };
+            emit_widget_icon_primitives(
+                item.widget_icon,
+                icon_rect,
+                icon_color,
+                icon_bg,
+                item_disabled,
+                desc.z,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
         // 「当前值」标记：与高亮分开，键盘移到别的行时仍指示已选中的项。
         if item.selected {
             let bar_height = (row.size.y * 0.52).clamp(10.0, 16.0);
@@ -605,7 +648,7 @@ pub fn emit_menu(
     (
         WidgetOutput {
             primitives,
-            payloads: Vec::new(),
+            payloads,
             hit,
             a11y: Some(a11y),
             focusable: false,
@@ -703,5 +746,41 @@ mod tests {
         assert_eq!(item.label, "Open");
         assert!(desc.item_a11y(1).unwrap().label.is_empty());
         assert_eq!(separator_indices(&desc), vec![1]);
+    }
+
+    #[test]
+    fn menu_item_widget_icon_emits_external_texture_and_preserves_constant_count() {
+        let desc = MenuDesc::new(
+            Rect::new(100.0, 100.0, 220.0, 120.0),
+            vec![
+                MenuItem::action("Open").with_widget_icon(WidgetIcon::ExternalTexture(61)),
+                MenuItem::action("Disabled")
+                    .disabled()
+                    .with_widget_icon(WidgetIcon::ExternalTexture(62)),
+            ],
+        );
+        let idle = MenuState::new();
+        let mut hovered = MenuState::new();
+        hovered.highlighted = Some(0);
+
+        let idle_out = emit_menu(1, 2, &desc, &idle, ControlState::default()).0;
+        let hovered_out = emit_menu(1, 2, &desc, &hovered, ControlState::default()).0;
+        assert_eq!(idle_out.primitives.len(), hovered_out.primitives.len());
+
+        let img_enabled = idle_out
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image && p.border_token_or_tex == 61)
+            .expect("enabled menu item external icon");
+        assert_eq!(img_enabled.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert!((img_enabled.opacity() - 1.0).abs() < 0.01);
+
+        let img_disabled = idle_out
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image && p.border_token_or_tex == 62)
+            .expect("disabled menu item external icon");
+        assert_eq!(img_disabled.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert!((img_disabled.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
     }
 }

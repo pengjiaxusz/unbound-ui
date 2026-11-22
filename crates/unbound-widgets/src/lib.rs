@@ -82,9 +82,9 @@ pub use slot_fixture::{
 
 pub use shell::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
-    emit_shell_icon_primitives, emit_sidebar_item, AppBrandBadgeDesc, FeatureCardDesc,
-    HeroBackdropDesc, IconButtonDesc, ShellIcon, ShellIconDesc, SidebarItemDesc,
-    SidebarSectionHeaderDesc,
+    emit_shell_icon_primitives, emit_sidebar_item, emit_widget_icon_primitives, AppBrandBadgeDesc,
+    FeatureCardDesc, HeroBackdropDesc, IconButtonDesc, ShellIcon, ShellIconDesc, SidebarItemDesc,
+    SidebarSectionHeaderDesc, WidgetIcon,
 };
 pub use title_bar::{
     TitleBarChrome, TitleBarDesc, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,

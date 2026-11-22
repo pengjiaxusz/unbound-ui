@@ -154,6 +154,75 @@ pub enum ShellIcon {
     Filter,
 }
 
+/// 跨控件统一图标变体（支持内置 Fluent 几何矢量图标与外部 RGBA8 彩色纹理双通道）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum WidgetIcon {
+    /// 不渲染图标。
+    #[default]
+    None,
+    /// 框架内置 Fluent 几何矢量图标（遵循前景色令牌）。
+    Vector(ShellIcon),
+    /// 外部 RGBA8 纹理句柄 ID 或已解析的 GPU Bindless 槽位号。
+    ExternalTexture(u64),
+}
+
+/// 统一发射 [`WidgetIcon`] 图元：
+/// - [`WidgetIcon::None`]：不发射图元；
+/// - [`WidgetIcon::Vector`]：委托 [`emit_shell_icon_primitives`] 渲染内置几何矢量图标；
+/// - [`WidgetIcon::ExternalTexture`]：发射 [`PrimType::Image`]，固定使用 [`Token::NONE`] 作为
+///   `fill`（避免片元着色器在亮色模式下与近黑前景色相乘导致彩色图标发黑），禁用态通过
+///   `z_and_opacity` 降低不透明度为 [`crate::WINUI_DISABLED_OPACITY`]。
+#[allow(clippy::too_many_arguments)]
+pub fn emit_widget_icon_primitives(
+    icon: WidgetIcon,
+    rect: Rect,
+    color: Token,
+    background: Token,
+    disabled: bool,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    match icon {
+        WidgetIcon::None => {}
+        WidgetIcon::Vector(shell_icon) => {
+            emit_shell_icon_primitives(
+                shell_icon, rect, color, background, z, primitives, payloads,
+            );
+        }
+        WidgetIcon::ExternalTexture(slot) => {
+            let payload_idx = payloads.len() as u32;
+            let mut img = instance(
+                rect,
+                [0.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Image,
+                SubElement::Content,
+                z,
+            );
+            img.border_token_or_tex = slot as u32;
+            img.extra_payload_idx = payload_idx;
+            if disabled {
+                img.z_and_opacity =
+                    GpuPrimitiveInstance::pack_z_opacity(z, crate::WINUI_DISABLED_OPACITY);
+            }
+            primitives.push(img);
+            payloads.push(GpuPayload {
+                p0: [0.0, 0.0],
+                p1: [1.0, 1.0],
+                p2: [0.0, 0.0],
+                line_width: 0.0,
+                extra: 0,
+                flags: 0,
+                _reserved: [0; 3],
+            });
+        }
+    }
+}
+
 /// 将 [`ShellIcon`] 居中发射到 `primitives` 与 `payloads` 中。
 #[allow(clippy::too_many_lines)]
 pub fn emit_shell_icon_primitives(
@@ -3027,5 +3096,82 @@ mod tests {
                 "ShellIcon::{icon:?} must keep constant payload count across sizes"
             );
         }
+    }
+
+    #[test]
+    fn widget_icon_external_texture_preserves_color_and_disabled_opacity() {
+        let rect = Rect::new(8.0, 8.0, 16.0, 16.0);
+
+        let mut none_prims = Vec::new();
+        let mut none_payloads = Vec::new();
+        emit_widget_icon_primitives(
+            WidgetIcon::None,
+            rect,
+            Token::ON_SURFACE,
+            Token::SURFACE,
+            false,
+            600,
+            &mut none_prims,
+            &mut none_payloads,
+        );
+        assert!(none_prims.is_empty());
+        assert!(none_payloads.is_empty());
+
+        let mut vec_prims = Vec::new();
+        let mut vec_payloads = Vec::new();
+        emit_widget_icon_primitives(
+            WidgetIcon::Vector(ShellIcon::Folder),
+            rect,
+            Token::ON_SURFACE,
+            Token::SURFACE,
+            false,
+            600,
+            &mut vec_prims,
+            &mut vec_payloads,
+        );
+        assert!(!vec_prims.is_empty());
+
+        let mut enabled_prims = Vec::new();
+        let mut enabled_payloads = Vec::new();
+        emit_widget_icon_primitives(
+            WidgetIcon::ExternalTexture(77),
+            rect,
+            Token::ON_SURFACE,
+            Token::SURFACE,
+            false,
+            600,
+            &mut enabled_prims,
+            &mut enabled_payloads,
+        );
+        assert_eq!(enabled_prims.len(), 1);
+        assert_eq!(enabled_payloads.len(), 1);
+        let img = enabled_prims[0];
+        assert_eq!(img.prim_type(), PrimType::Image);
+        assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(img.border_token_or_tex, 77);
+        assert_eq!(img.extra_payload_idx, 0);
+        assert!((img.opacity() - 1.0).abs() < 0.01);
+        assert_eq!(enabled_payloads[0].p0, [0.0, 0.0]);
+        assert_eq!(enabled_payloads[0].p1, [1.0, 1.0]);
+
+        let mut disabled_prims = Vec::new();
+        let mut disabled_payloads = Vec::new();
+        emit_widget_icon_primitives(
+            WidgetIcon::ExternalTexture(77),
+            rect,
+            Token::TEXT_DISABLED,
+            Token::SURFACE,
+            true,
+            600,
+            &mut disabled_prims,
+            &mut disabled_payloads,
+        );
+        assert_eq!(disabled_prims.len(), 1);
+        assert_eq!(disabled_payloads.len(), 1);
+        let disabled_img = disabled_prims[0];
+        assert_eq!(disabled_img.prim_type(), PrimType::Image);
+        assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(disabled_img.border_token_or_tex, 77);
+        assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
     }
 }

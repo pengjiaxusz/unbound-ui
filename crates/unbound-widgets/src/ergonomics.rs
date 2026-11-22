@@ -562,7 +562,8 @@ impl UiWidget for ButtonDesc {
         } else {
             56.0
         };
-        let icon_extra = if self.shell_icon.is_some() {
+        let has_widget_icon = self.effective_widget_icon() != crate::shell::WidgetIcon::None;
+        let icon_extra = if has_widget_icon {
             if self.label.is_empty() {
                 crate::button::BUTTON_SHELL_ICON_SIZE
             } else {
@@ -572,7 +573,7 @@ impl UiWidget for ButtonDesc {
             0.0
         };
         let chevron_extra = if self.dropdown_chevron {
-            if self.label.is_empty() && self.shell_icon.is_none() && self.icon.is_none() {
+            if self.label.is_empty() && !has_widget_icon && self.icon.is_none() {
                 crate::button::BUTTON_DROPDOWN_CHEVRON_SIZE
             } else {
                 crate::button::BUTTON_DROPDOWN_CHEVRON_SIZE
@@ -598,7 +599,7 @@ impl UiWidget for ButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        desc.centre_label = desc.shell_icon.is_some();
+        desc.centre_label = desc.effective_widget_icon() != crate::shell::WidgetIcon::None;
         let (text_rect, align_x) = if desc.left_align {
             let inset_left = if desc.active_selected { 11.0 } else { 9.0 };
             (

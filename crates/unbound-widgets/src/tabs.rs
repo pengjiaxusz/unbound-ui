@@ -13,7 +13,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
-use crate::shell::{emit_shell_icon_primitives, ShellIcon};
+use crate::shell::{emit_widget_icon_primitives, ShellIcon, WidgetIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -140,6 +140,8 @@ pub struct TabItem {
     pub title: String,
     /// 可选前置矢量图标。
     pub icon: Option<ShellIcon>,
+    /// 统一前置图标槽（支持内置矢量与外部彩色纹理，优先于 `icon`）。
+    pub widget_icon: WidgetIcon,
     /// 该标签页是否带有关闭按钮。
     pub closable: bool,
     /// 是否为固定标签页（固定标签不展示关闭按钮）。
@@ -156,6 +158,7 @@ impl TabItem {
             id,
             title: title.into(),
             icon: None,
+            widget_icon: WidgetIcon::None,
             closable: true,
             pinned: false,
             tooltip: None,
@@ -174,6 +177,25 @@ impl TabItem {
     pub fn with_icon(mut self, icon: ShellIcon) -> Self {
         self.icon = Some(icon);
         self
+    }
+
+    /// 设置标签页统一前置图标（支持内置矢量或外部彩色纹理）。
+    #[must_use]
+    pub fn with_widget_icon(mut self, icon: WidgetIcon) -> Self {
+        self.widget_icon = icon;
+        self
+    }
+
+    /// 解析标签页实际生效的前置图标：优先返回 `widget_icon`，其次回退至 `icon`。
+    #[must_use]
+    pub const fn effective_icon(&self) -> WidgetIcon {
+        match self.widget_icon {
+            WidgetIcon::None => match self.icon {
+                Some(shell_icon) => WidgetIcon::Vector(shell_icon),
+                None => WidgetIcon::None,
+            },
+            other => other,
+        }
     }
 
     /// 标记为固定标签页（同时隐藏关闭按钮）。
@@ -360,7 +382,9 @@ impl TabsDesc {
     #[must_use]
     pub fn icon_rect(&self, index: usize, scroll: f32) -> Option<Rect> {
         let tab = self.items.get(index)?;
-        tab.icon?;
+        if tab.effective_icon() == WidgetIcon::None {
+            return None;
+        }
         let visible = self.tab_rect(index, scroll);
         if visible.size.x < 36.0 || visible.size.y < 16.0 {
             return None;
@@ -996,9 +1020,10 @@ pub fn emit_tab(
         }
     };
 
-    if let (Some(icon), Some(icon_r)) = (item.icon, desc.icon_rect(index, state.scroll_x)) {
-        emit_shell_icon_primitives(
-            icon,
+    let effective_icon = item.effective_icon();
+    if let Some(icon_r) = desc.icon_rect(index, state.scroll_x) {
+        emit_widget_icon_primitives(
+            effective_icon,
             icon_r,
             text_token,
             if active {
@@ -1006,6 +1031,7 @@ pub fn emit_tab(
             } else {
                 Token::HEADER_BG
             },
+            disabled,
             desc.z,
             &mut primitives,
             &mut payloads,
@@ -1593,5 +1619,35 @@ mod tests {
                 screen_pos: [right_pos.x.round() as i32, right_pos.y.round() as i32],
             })
         );
+    }
+
+    #[test]
+    fn tab_item_widget_icon_precedence_and_external_texture_emission() {
+        let plain = TabItem::new(1, "Plain");
+        assert_eq!(plain.effective_icon(), WidgetIcon::None);
+
+        let vec_tab = TabItem::new(2, "Docs").with_icon(ShellIcon::Folder);
+        assert_eq!(vec_tab.effective_icon(), WidgetIcon::Vector(ShellIcon::Folder));
+
+        let tex_tab = TabItem::new(3, "Preview")
+            .with_icon(ShellIcon::Folder)
+            .with_widget_icon(WidgetIcon::ExternalTexture(52));
+        assert_eq!(tex_tab.effective_icon(), WidgetIcon::ExternalTexture(52));
+
+        let desc = TabsDesc::new(Rect::new(0.0, 0.0, 480.0, TAB_STRIP_HEIGHT), &[])
+            .with_items(vec![tex_tab]);
+        assert!(desc.icon_rect(0, 0.0).is_some());
+
+        let state = TabsState::new(0);
+        let tokens = TabsTokens::standard();
+        let out = emit_tab(&desc, &state, 0, ControlState::default(), &[], tokens);
+        let img = out
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("tab external icon primitive");
+        assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(img.border_token_or_tex, 52);
+        assert!((img.opacity() - 1.0).abs() < 0.01);
     }
 }

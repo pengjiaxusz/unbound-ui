@@ -12,7 +12,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
-use crate::shell::{emit_shell_icon_primitives, ShellIcon};
+use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
 use crate::text_input::{
     floor_boundary, focus_underline, reduce_text_input, TextEditState, TextInputDesc,
     TextInputEvent, TextInputOutcome, TextInputVisual,
@@ -57,6 +57,8 @@ pub struct PathSegment {
     pub path: String,
     /// 可选图标（首段常用于标识根/驱动器）。
     pub icon: Option<ShellIcon>,
+    /// 统一图标槽（支持内置矢量与外部彩色纹理，优先于 `icon`）。
+    pub widget_icon: WidgetIcon,
     /// 是否存在子目录（决定是否渲染可点击的 `›` 箭头）。
     pub has_subfolders: bool,
 }
@@ -69,6 +71,7 @@ impl PathSegment {
             label: label.into(),
             path: path.into(),
             icon: None,
+            widget_icon: WidgetIcon::None,
             has_subfolders: true,
         }
     }
@@ -78,6 +81,25 @@ impl PathSegment {
     pub fn with_icon(mut self, icon: ShellIcon) -> Self {
         self.icon = Some(icon);
         self
+    }
+
+    /// 设置该分段的统一图标（支持内置矢量或外部彩色纹理）。
+    #[must_use]
+    pub fn with_widget_icon(mut self, icon: WidgetIcon) -> Self {
+        self.widget_icon = icon;
+        self
+    }
+
+    /// 解析该分段实际生效的图标：优先返回 `widget_icon`，其次回退至 `icon`。
+    #[must_use]
+    pub const fn effective_icon(&self) -> WidgetIcon {
+        match self.widget_icon {
+            WidgetIcon::None => match self.icon {
+                Some(shell_icon) => WidgetIcon::Vector(shell_icon),
+                None => WidgetIcon::None,
+            },
+            other => other,
+        }
     }
 
     /// 设置该分段是否存在子目录（控制 `›` 箭头显隐）。
@@ -331,6 +353,15 @@ impl AddressBarDesc {
     pub fn with_z(mut self, z: u16) -> Self {
         self.z = z;
         self
+    }
+
+    /// 解析地址栏左侧根图标：优先取首个分段的 [`PathSegment::effective_icon`]，未配置时回退 [`ShellIcon::Folder`]。
+    #[must_use]
+    pub fn root_icon(&self) -> WidgetIcon {
+        match self.segments.first().map(PathSegment::effective_icon) {
+            Some(WidgetIcon::None) | None => WidgetIcon::Vector(ShellIcon::Folder),
+            Some(icon) => icon,
+        }
     }
 
     /// 完整路径字符串（优先返回显式 `full_path`，否则以 `/` 连接分段）。
@@ -1503,22 +1534,19 @@ fn emit_address_bar_inner(
         },
     ));
 
-    // 左侧固定 16×16 根目录/驱动器图标
-    let root_icon = desc
-        .segments
-        .first()
-        .and_then(|s| s.icon)
-        .unwrap_or(ShellIcon::Folder);
+    // 左侧固定 16×16 根目录/驱动器图标（支持彩色外部纹理或单色矢量回退）
+    let root_icon = desc.root_icon();
     let root_icon_color = if control.disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_SECONDARY
     };
-    emit_shell_icon_primitives(
+    emit_widget_icon_primitives(
         root_icon,
         layout.root_icon_rect,
         root_icon_color,
         bg,
+        control.disabled,
         z + 1,
         &mut primitives,
         &mut payloads,
@@ -2557,5 +2585,56 @@ mod tests {
             search_box.border_token_or_tex,
             u32::from(Token::OUTLINE_STRONG.raw())
         );
+    }
+
+    #[test]
+    fn path_segment_widget_icon_precedence_and_external_texture_emission() {
+        let plain = PathSegment::new("Drive", "C:\");
+        assert_eq!(plain.effective_icon(), WidgetIcon::None);
+
+        let vec_only = PathSegment::new("Drive", "C:\").with_icon(ShellIcon::Drive);
+        assert_eq!(vec_only.effective_icon(), WidgetIcon::Vector(ShellIcon::Drive));
+
+        let overridden = vec_only
+            .clone()
+            .with_widget_icon(WidgetIcon::ExternalTexture(64));
+        assert_eq!(overridden.effective_icon(), WidgetIcon::ExternalTexture(64));
+
+        let desc = AddressBarDesc::with_path_segments(
+            Rect::new(0.0, 0.0, 520.0, ADDRESS_BAR_HEIGHT),
+            "C:\Users",
+            vec![overridden, PathSegment::new("Users", "C:\Users")],
+        );
+        assert_eq!(desc.root_icon(), WidgetIcon::ExternalTexture(64));
+
+        let state = AddressBarState::new();
+        let enabled = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        let img = enabled
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("address bar external root icon");
+        assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(img.border_token_or_tex, 64);
+        assert!((img.opacity() - 1.0).abs() < 0.01);
+
+        let disabled = emit_address_bar(
+            1,
+            &desc,
+            &state,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            &[],
+        );
+        let disabled_img = disabled
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("disabled address bar external root icon");
+        assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(disabled_img.border_token_or_tex, 64);
+        assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
     }
 }

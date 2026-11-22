@@ -28,7 +28,7 @@ use unbound_world::{NodeId, UiWorld};
 
 use crate::image::IconDesc;
 use crate::primitive::focus_ring;
-use crate::shell::{emit_shell_icon_primitives, ShellIcon};
+use crate::shell::{emit_widget_icon_primitives, ShellIcon, WidgetIcon};
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// 按钮标签字体大小。字形预热必须使用相同字号，否则数字会被光栅化两次。
@@ -226,6 +226,8 @@ pub struct ButtonDesc {
     pub icon: Option<IconDesc>,
     /// 绘制在标签旁的原生矢量图标（由解析几何图元绘制，零字体依赖）。
     pub shell_icon: Option<ShellIcon>,
+    /// 统一图标槽（支持内置矢量与外部彩色纹理，优先于 `shell_icon` 与 `icon`）。
+    pub widget_icon: WidgetIcon,
     /// 将图标绘制在标签之后而非之前。
     pub icon_trailing: bool,
     /// 是否在按钮右侧独立绘制 `12px` 下拉箭头（[`ShellIcon::ChevronDown`]）。
@@ -267,6 +269,7 @@ impl ButtonDesc {
             size: ButtonSize::default(),
             icon: None,
             shell_icon: None,
+            widget_icon: WidgetIcon::None,
             icon_trailing: false,
             dropdown_chevron: false,
             loading: false,
@@ -500,6 +503,25 @@ impl ButtonDesc {
         self
     }
 
+    /// 在标签旁附加统一图标（[`WidgetIcon`]，支持内置矢量或外部彩色纹理）。
+    #[must_use]
+    pub fn with_widget_icon(mut self, icon: WidgetIcon) -> Self {
+        self.widget_icon = icon;
+        self
+    }
+
+    /// 解析按钮实际生效的统一图标：优先返回 `widget_icon`，其次回退至 `shell_icon`。
+    #[must_use]
+    pub const fn effective_widget_icon(&self) -> WidgetIcon {
+        match self.widget_icon {
+            WidgetIcon::None => match self.shell_icon {
+                Some(shell_icon) => WidgetIcon::Vector(shell_icon),
+                None => WidgetIcon::None,
+            },
+            other => other,
+        }
+    }
+
     /// 将图标置于标签之后而非之前。
     #[must_use]
     pub fn with_icon_trailing(mut self, trailing: bool) -> Self {
@@ -690,10 +712,12 @@ pub fn emit_button_with_tokens(
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let z = desc.z;
+    let effective_icon = desc.effective_widget_icon();
+    let has_widget_icon = effective_icon != WidgetIcon::None;
     let extra_icon_prims =
-        usize::from(desc.shell_icon.is_some()) * 6 + usize::from(desc.dropdown_chevron) * 4;
+        usize::from(has_widget_icon) * 6 + usize::from(desc.dropdown_chevron) * 4;
     let extra_icon_payloads =
-        usize::from(desc.shell_icon.is_some()) * 4 + usize::from(desc.dropdown_chevron) * 2;
+        usize::from(has_widget_icon) * 4 + usize::from(desc.dropdown_chevron) * 2;
     let mut primitives = Vec::with_capacity(8 + label.len() + extra_icon_prims);
     let mut payloads = Vec::with_capacity(label.len() + extra_icon_payloads.max(1));
 
@@ -752,8 +776,8 @@ pub fn emit_button_with_tokens(
     let ink = ink_bounds(label);
     let has_label = ink.is_some();
     let shell_gap = if has_label { BUTTON_CONTENT_GAP } else { 0.0 };
-    let leading_shell_icon = desc.shell_icon.is_some() && !desc.icon_trailing;
-    let trailing_shell_icon = desc.shell_icon.is_some() && desc.icon_trailing;
+    let leading_shell_icon = has_widget_icon && !desc.icon_trailing;
+    let trailing_shell_icon = has_widget_icon && desc.icon_trailing;
     let leading_icon = !leading_shell_icon && desc.icon.is_some() && !desc.icon_trailing;
     let trailing_icon = !trailing_shell_icon && desc.icon.is_some() && desc.icon_trailing;
 
@@ -805,20 +829,19 @@ pub fn emit_button_with_tokens(
         ));
         cursor += BUTTON_LOADING_SIZE + BUTTON_CONTENT_GAP;
     } else if leading_shell_icon {
-        if let Some(shell_icon) = desc.shell_icon {
-            shell_icon_at(
-                shell_icon,
-                cursor,
-                rect.center().y,
-                BUTTON_SHELL_ICON_SIZE,
-                fg_token,
-                bg_token,
-                z,
-                &mut primitives,
-                &mut payloads,
-            );
-            cursor += BUTTON_SHELL_ICON_SIZE + shell_gap;
-        }
+        widget_icon_at(
+            effective_icon,
+            cursor,
+            rect.center().y,
+            BUTTON_SHELL_ICON_SIZE,
+            fg_token,
+            bg_token,
+            blocked,
+            z,
+            &mut primitives,
+            &mut payloads,
+        );
+        cursor += BUTTON_SHELL_ICON_SIZE + shell_gap;
     } else if leading_icon {
         if let Some(icon) = &desc.icon {
             icon_at(
@@ -884,20 +907,19 @@ pub fn emit_button_with_tokens(
     }
 
     if trailing_shell_icon {
-        if let Some(shell_icon) = desc.shell_icon {
-            shell_icon_at(
-                shell_icon,
-                cursor + shell_gap,
-                rect.center().y,
-                BUTTON_SHELL_ICON_SIZE,
-                fg_token,
-                bg_token,
-                z,
-                &mut primitives,
-                &mut payloads,
-            );
-            cursor += shell_gap + BUTTON_SHELL_ICON_SIZE;
-        }
+        widget_icon_at(
+            effective_icon,
+            cursor + shell_gap,
+            rect.center().y,
+            BUTTON_SHELL_ICON_SIZE,
+            fg_token,
+            bg_token,
+            blocked,
+            z,
+            &mut primitives,
+            &mut payloads,
+        );
+        cursor += shell_gap + BUTTON_SHELL_ICON_SIZE;
     } else if trailing_icon {
         if let Some(icon) = &desc.icon {
             icon_at(
@@ -920,13 +942,14 @@ pub fn emit_button_with_tokens(
         } else {
             cursor + chevron_gap
         };
-        shell_icon_at(
-            ShellIcon::ChevronDown,
+        widget_icon_at(
+            WidgetIcon::Vector(ShellIcon::ChevronDown),
             chevron_x,
             rect.center().y,
             BUTTON_DROPDOWN_CHEVRON_SIZE,
             fg_token,
             bg_token,
+            blocked,
             z,
             &mut primitives,
             &mut payloads,
@@ -1068,23 +1091,26 @@ fn icon_at(
     primitives.push(primitive);
 }
 
-/// 发射单个原生矢量图标（[`ShellIcon`]），锚定于 `left` 并垂直居中，
+/// 发射单个统一图标（[`WidgetIcon`]），锚定于 `left` 并垂直居中，
 /// 所有产出图元统一归入 [`SubElement::Content`] 以保证与按钮背景/边框严格分层。
 #[allow(clippy::too_many_arguments)]
-fn shell_icon_at(
-    icon: ShellIcon,
+fn widget_icon_at(
+    icon: WidgetIcon,
     left: f32,
     center_y: f32,
     side: f32,
     fg_token: Token,
     bg_token: Token,
+    disabled: bool,
     z: u16,
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
     let icon_rect = Rect::new(left, center_y - side * 0.5, side, side);
     let start_idx = primitives.len();
-    emit_shell_icon_primitives(icon, icon_rect, fg_token, bg_token, z, primitives, payloads);
+    emit_widget_icon_primitives(
+        icon, icon_rect, fg_token, bg_token, disabled, z, primitives, payloads,
+    );
     for primitive in &mut primitives[start_idx..] {
         let (kind, blend, flags) =
             GpuPrimitiveInstance::unpack_type(primitive.prim_type_and_flags);
@@ -1402,5 +1428,50 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn button_widget_icon_external_texture_and_precedence() {
+        let base = ButtonDesc::new(Rect::new(0.0, 0.0, 120.0, 32.0), "Open")
+            .with_shell_icon(ShellIcon::Folder);
+        assert_eq!(
+            base.effective_widget_icon(),
+            WidgetIcon::Vector(ShellIcon::Folder)
+        );
+
+        let tex_desc = base.with_widget_icon(WidgetIcon::ExternalTexture(91));
+        assert_eq!(
+            tex_desc.effective_widget_icon(),
+            WidgetIcon::ExternalTexture(91)
+        );
+
+        let enabled = emit_button(1, &tex_desc, ControlState::default(), &mut []);
+        let img = enabled
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("button external texture primitive");
+        assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(img.border_token_or_tex, 91);
+        assert!((img.opacity() - 1.0).abs() < 0.01);
+
+        let disabled = emit_button(
+            1,
+            &tex_desc,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            &mut [],
+        );
+        let disabled_img = disabled
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("disabled button external texture primitive");
+        assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(disabled_img.border_token_or_tex, 91);
+        assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+        assert_eq!(enabled.primitives.len(), disabled.primitives.len());
     }
 }

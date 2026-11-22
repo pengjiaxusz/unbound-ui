@@ -55,7 +55,8 @@ pub use unbound_widgets::overlay::{OverlayEntry, OverlayKind, OverlayStack};
 pub use unbound_widgets::virtual_masonry::MasonryItem;
 pub use unbound_widgets::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
-    emit_shell_icon_primitives, emit_sidebar_item, schema_form_trailing_action_node,
+    emit_shell_icon_primitives, emit_sidebar_item, emit_widget_icon_primitives,
+    schema_form_trailing_action_node,
     AddressBarDesc, AddressBarEvent, AddressBarHitKind, AddressBarState, AlertDesc,
     AppBrandBadgeDesc, AutoCompleteDesc, AutoCompleteState, BadgeDesc, BadgeVariant, BannerDesc,
     ButtonDesc, ButtonSize, ButtonTokens, ButtonVariant, CalloutDesc, CalloutState, CardDesc,
@@ -80,7 +81,8 @@ pub use unbound_widgets::{
     ToggleButtonDesc, ToggleButtonState, TooltipDesc, TooltipState, TourDesc, TransferDesc,
     TransferState, TreeRowIcon, TreeTableDesc, TreeTableState, TreeViewDensity, TreeViewDesc,
     TreeViewEvent, TreeViewState, VirtualMasonryDesc, VirtualMasonryState, WatermarkDesc,
-    WidgetCatalogId, WidgetOutput, WindowCaptionButton, WindowCaptionKind, ADDRESS_BAR_HEIGHT,
+    WidgetCatalogId, WidgetIcon, WidgetOutput, WindowCaptionButton, WindowCaptionKind,
+    ADDRESS_BAR_HEIGHT,
     TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT,
     TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH,
     TREE_ROW_COMPACT,

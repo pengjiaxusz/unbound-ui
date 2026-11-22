@@ -9,7 +9,7 @@
 use accesskit::Role;
 use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_gpu::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::{Rect, Vec2};
@@ -19,7 +19,7 @@ use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
-use crate::shell::{emit_shell_icon_primitives, ShellIcon};
+use crate::shell::{emit_widget_icon_primitives, WidgetIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
@@ -42,17 +42,8 @@ pub const TREE_ICON_SIZE: f32 = 16.0;
 /// 行图标槽与文本标签之间的水平间距（`6px`）。
 pub const TREE_ICON_GAP: f32 = 6.0;
 
-/// 树形行前置图标槽变体。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum TreeRowIcon {
-    /// 不渲染行图标。
-    #[default]
-    None,
-    /// 框架内置 Fluent 矢量图标。
-    Vector(ShellIcon),
-    /// 外部纹理句柄 ID（由应用层资产系统映射至 RGBA8 外部纹理槽）。
-    ExternalTexture(u64),
-}
+/// 树形行前置图标槽类型别名（向后兼容 [`WidgetIcon`]）。
+pub type TreeRowIcon = WidgetIcon;
 
 /// 树形视图行高密度档位。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -945,57 +936,23 @@ pub fn emit_tree_row_with_icon(
         TREE_ICON_SIZE,
         TREE_ICON_SIZE,
     );
-    match icon {
-        TreeRowIcon::None => {}
-        TreeRowIcon::Vector(shell_icon) => {
-            let icon_color = if disabled {
-                Token::TEXT_DISABLED
-            } else if selected {
-                tokens.text_selected
-            } else {
-                tokens.text
-            };
-            emit_shell_icon_primitives(
-                shell_icon,
-                icon_rect,
-                icon_color,
-                fill,
-                desc.z + 1,
-                &mut primitives,
-                &mut payloads,
-            );
-        }
-        TreeRowIcon::ExternalTexture(tex_handle_id) => {
-            let payload_idx = payloads.len() as u32;
-            let mut img = instance(
-                icon_rect,
-                [0.0; 4],
-                if disabled {
-                    Token::TEXT_DISABLED
-                } else {
-                    Token::ON_SURFACE
-                },
-                Token::NONE,
-                0.0,
-                0.0,
-                PrimType::Image,
-                SubElement::Content,
-                desc.z + 1,
-            );
-            img.border_token_or_tex = tex_handle_id as u32;
-            img.extra_payload_idx = payload_idx;
-            primitives.push(img);
-            payloads.push(GpuPayload {
-                p0: [0.0, 0.0],
-                p1: [1.0, 1.0],
-                p2: [0.0, 0.0],
-                line_width: 0.0,
-                extra: 0,
-                flags: 0,
-                _reserved: [0; 3],
-            });
-        }
-    }
+    let icon_color = if disabled {
+        Token::TEXT_DISABLED
+    } else if selected {
+        tokens.text_selected
+    } else {
+        tokens.text
+    };
+    emit_widget_icon_primitives(
+        icon,
+        icon_rect,
+        icon_color,
+        fill,
+        disabled,
+        desc.z + 1,
+        &mut primitives,
+        &mut payloads,
+    );
 
     glyphs(
         label,
@@ -1116,6 +1073,7 @@ pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> Widg
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::ShellIcon;
 
     fn root(id: u64) -> TreeRow {
         TreeRow::new(id, 0, true)
@@ -1691,5 +1649,59 @@ mod tests {
             disabled_pressed.primitives[0].fill_token_or_uv,
             u32::from(tokens.row.raw())
         );
+    }
+
+    #[test]
+    fn tree_row_icon_alias_uses_token_none_and_disabled_opacity_for_external_texture() {
+        let icon: TreeRowIcon = WidgetIcon::ExternalTexture(88);
+        assert_eq!(icon, TreeRowIcon::ExternalTexture(88));
+
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 140.0))
+            .with_density(TreeViewDensity::Compact);
+        let row = TreeViewRow {
+            row: TreeRow::new(1, 0, false),
+            item: 0,
+            rect: Rect::new(0.0, 0.0, 260.0, TREE_ROW_COMPACT),
+        };
+        let tokens = TreeViewTokens::navigation_pane();
+
+        let normal = emit_tree_row_with_icon(
+            &desc,
+            &row,
+            icon,
+            false,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
+        let img = normal
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("external texture image primitive");
+        assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(img.border_token_or_tex, 88);
+        assert!((img.opacity() - 1.0).abs() < 0.01);
+
+        let disabled = emit_tree_row_with_icon(
+            &desc,
+            &row,
+            icon,
+            false,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            &[],
+            tokens,
+        );
+        let disabled_img = disabled
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image)
+            .expect("disabled external texture image primitive");
+        assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(disabled_img.border_token_or_tex, 88);
+        assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
     }
 }
