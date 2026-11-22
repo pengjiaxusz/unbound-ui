@@ -39,6 +39,12 @@ pub const MONTH_NAMES: [&str; 12] = [
 
 /// 触发器高度。对齐 WinUI `DatePicker` 的 32px 控件高度。
 pub const DATE_PICKER_WHEEL_TRIGGER_HEIGHT: f32 = 32.0;
+/// 触发器视觉绘制高度。对齐 WinUI `DatePicker` 实测 30px 触发框。
+const DATE_PICKER_WHEEL_VISUAL_TRIGGER_HEIGHT: f32 = 30.0;
+/// `YearMonthDay` 模式的触发器字号。对齐 WinUI `ControlContentThemeFontSize = 14.0`。
+const DATE_PICKER_WHEEL_FONT_SIZE: f32 = 14.0;
+/// `YearMonthDay` 模式月份列左侧内边距。
+const DATE_PICKER_WHEEL_MONTH_LEFT_PADDING: f32 = 10.0;
 /// 滚轮每行的高度。
 pub const DATE_PICKER_WHEEL_ROW_HEIGHT: f32 = 32.0;
 /// 滚轮每列可见行数（奇数，保证中间行是选中行）。
@@ -93,6 +99,62 @@ impl WheelColumn {
     }
 }
 
+/// 滚轮日期选择器的列排列顺序。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DatePickerColumnOrder {
+    /// 默认顺序：`[Month, Day, Year]`，三列等宽且全居中。
+    #[default]
+    MonthDayYear,
+    /// 年月日顺序：`[Year, Month, Day]`，按 WinUI `78* : 132* : 78*` 权重分配列宽。
+    YearMonthDay,
+}
+
+impl DatePickerColumnOrder {
+    /// 按当前列序返回三列排列。
+    #[must_use]
+    pub const fn columns(self) -> [WheelColumn; DATE_PICKER_WHEEL_COLUMNS] {
+        match self {
+            Self::MonthDayYear => [WheelColumn::Month, WheelColumn::Day, WheelColumn::Year],
+            Self::YearMonthDay => [WheelColumn::Year, WheelColumn::Month, WheelColumn::Day],
+        }
+    }
+
+    /// 返回指定列在当前列序中的槽位索引（0..3）。
+    #[must_use]
+    pub const fn slot_index(self, column: WheelColumn) -> usize {
+        match (self, column) {
+            (Self::MonthDayYear, WheelColumn::Month) => 0,
+            (Self::MonthDayYear, WheelColumn::Day) => 1,
+            (Self::MonthDayYear, WheelColumn::Year) => 2,
+            (Self::YearMonthDay, WheelColumn::Year) => 0,
+            (Self::YearMonthDay, WheelColumn::Month) => 1,
+            (Self::YearMonthDay, WheelColumn::Day) => 2,
+        }
+    }
+}
+
+/// 滚轮日期选择器的月份文本格式。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DatePickerMonthFormat {
+    /// 默认英文全称（`"January"` .. `"December"`）。
+    #[default]
+    FullName,
+    /// 两位补零数字（`"01"` .. `"12"`）。
+    NumericTwoDigits,
+}
+
+impl DatePickerMonthFormat {
+    /// 按当前格式输出月份文本（`month` 会夹紧到 `1..=12`）。
+    #[must_use]
+    pub fn format_month(self, month: u8) -> String {
+        let clamped = month.clamp(1, 12);
+        match self {
+            Self::FullName => MONTH_NAMES[usize::from(clamped - 1)].to_owned(),
+            Self::NumericTwoDigits => format!("{clamped:02}"),
+        }
+    }
+}
+
 /// 三列滚轮描述符。`rect` 是 32px 高的触发器，滚轮面板绘制在其正下方。
 #[derive(Clone, Debug, PartialEq)]
 pub struct DatePickerWheelDesc {
@@ -104,6 +166,10 @@ pub struct DatePickerWheelDesc {
     pub disabled: bool,
     /// 绘制顺序键。
     pub z: u16,
+    /// 列排列顺序。
+    pub column_order: DatePickerColumnOrder,
+    /// 月份文本格式。
+    pub month_format: DatePickerMonthFormat,
 }
 
 impl DatePickerWheelDesc {
@@ -115,6 +181,8 @@ impl DatePickerWheelDesc {
             label: String::new(),
             disabled: false,
             z: 710,
+            column_order: DatePickerColumnOrder::MonthDayYear,
+            month_format: DatePickerMonthFormat::FullName,
         }
     }
 
@@ -122,6 +190,20 @@ impl DatePickerWheelDesc {
     #[must_use]
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// 设置列排列顺序。
+    #[must_use]
+    pub fn with_column_order(mut self, column_order: DatePickerColumnOrder) -> Self {
+        self.column_order = column_order;
+        self
+    }
+
+    /// 设置月份文本格式。
+    #[must_use]
+    pub fn with_month_format(mut self, month_format: DatePickerMonthFormat) -> Self {
+        self.month_format = month_format;
         self
     }
 
@@ -136,31 +218,67 @@ impl DatePickerWheelDesc {
         )
     }
 
+    /// 计算 `YearMonthDay` 模式下两条 1px 分隔竖线的 X 坐标。
+    fn year_month_day_dividers(&self) -> (f32, f32) {
+        let trigger = self.trigger_rect();
+        let inner_w = (trigger.size.x - 2.0).max(0.0);
+        let c0 = (inner_w * 78.0 / 288.0).round();
+        let c1 = (inner_w * 132.0 / 288.0).round();
+        let div0_x = trigger.origin.x + 1.0 + c0;
+        let div1_x = trigger.origin.x + 1.0 + c0 + c1;
+        (div0_x, div1_x)
+    }
+
     /// 触发栏中第 `column` 列的矩形。
     #[must_use]
     pub fn trigger_column_rect(&self, column: WheelColumn) -> Rect {
         let trigger = self.trigger_rect();
-        let col_w = trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
-        Rect::new(
-            trigger.origin.x + column.index() as f32 * col_w,
-            trigger.origin.y,
-            col_w,
-            trigger.size.y,
-        )
+        match self.column_order {
+            DatePickerColumnOrder::MonthDayYear => {
+                let col_w = trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
+                Rect::new(
+                    trigger.origin.x + column.index() as f32 * col_w,
+                    trigger.origin.y,
+                    col_w,
+                    trigger.size.y,
+                )
+            }
+            DatePickerColumnOrder::YearMonthDay => {
+                let (div0_x, div1_x) = self.year_month_day_dividers();
+                let left_inner = trigger.origin.x + 1.0;
+                let right_inner = (trigger.max().x - 1.0).max(left_inner);
+                let (x, max_x) = match column {
+                    WheelColumn::Year => (left_inner, div0_x.min(right_inner)),
+                    WheelColumn::Month => {
+                        ((div0_x + 1.0).min(right_inner), div1_x.min(right_inner))
+                    }
+                    WheelColumn::Day => ((div1_x + 1.0).min(right_inner), right_inner),
+                };
+                Rect::new(x, trigger.origin.y, (max_x - x).max(0.0), trigger.size.y)
+            }
+        }
     }
 
-    /// 触发栏中第 `index` 条列间分割线矩形（0 = 月日间，1 = 日年间）。
+    /// 触发栏中第 `index` 条列间分割线矩形（0 = 第 1 与第 2 列间，1 = 第 2 与第 3 列间）。
     #[must_use]
     pub fn trigger_divider_rect(&self, index: usize) -> Rect {
         let trigger = self.trigger_rect();
-        let col_w = trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
-        let x = trigger.origin.x + (index + 1) as f32 * col_w;
-        Rect::new(
-            x - 0.5,
-            trigger.origin.y + 1.0,
-            1.0,
-            (trigger.size.y - 2.0).max(0.0),
-        )
+        let visual_h = trigger.size.y.min(DATE_PICKER_WHEEL_VISUAL_TRIGGER_HEIGHT);
+        let x = match self.column_order {
+            DatePickerColumnOrder::MonthDayYear => {
+                let col_w = trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
+                trigger.origin.x + (index + 1) as f32 * col_w - 0.5
+            }
+            DatePickerColumnOrder::YearMonthDay => {
+                let (div0_x, div1_x) = self.year_month_day_dividers();
+                if index == 0 {
+                    div0_x
+                } else {
+                    div1_x
+                }
+            }
+        };
+        Rect::new(x, trigger.origin.y + 1.0, 1.0, (visual_h - 2.0).max(0.0))
     }
 
     /// 设置无障碍标签。
@@ -195,7 +313,7 @@ impl DatePickerWheelDesc {
         let panel = self.panel_rect();
         let width = (panel.size.x - 16.0).max(0.0) / DATE_PICKER_WHEEL_COLUMNS as f32;
         Rect::new(
-            panel.origin.x + 8.0 + column.index() as f32 * width,
+            panel.origin.x + 8.0 + self.column_order.slot_index(column) as f32 * width,
             panel.origin.y + 8.0,
             width,
             DATE_PICKER_WHEEL_ROW_HEIGHT * DATE_PICKER_WHEEL_ROWS as f32,
@@ -432,7 +550,7 @@ pub fn emit_date_picker_wheel(
         trigger.origin.x,
         trigger.origin.y,
         trigger.size.x,
-        trigger.size.y.min(30.0),
+        trigger.size.y.min(DATE_PICKER_WHEEL_VISUAL_TRIGGER_HEIGHT),
     );
     primitives.push(surface(visual_trigger, 4.0, fill, z));
     primitives.push(outlined(
@@ -460,20 +578,8 @@ pub fn emit_date_picker_wheel(
         },
         z + 1,
     ));
-    let col_w = visual_trigger.size.x / DATE_PICKER_WHEEL_COLUMNS as f32;
-    for i in 1..DATE_PICKER_WHEEL_COLUMNS {
-        let div_x = visual_trigger.origin.x + i as f32 * col_w;
-        primitives.push(surface(
-            Rect::new(
-                div_x - 0.5,
-                visual_trigger.origin.y + 1.0,
-                1.0,
-                (visual_trigger.size.y - 2.0).max(0.0),
-            ),
-            0.0,
-            border,
-            z + 1,
-        ));
+    for i in 0..(DATE_PICKER_WHEEL_COLUMNS - 1) {
+        primitives.push(surface(desc.trigger_divider_rect(i), 0.0, border, z + 1));
     }
 
     // 2. 展开态绘制滚轮面板：阴影、表面、描边、选中行高亮与每列上下 Chevron。
@@ -682,14 +788,14 @@ impl UiWidget for DatePickerWheelDesc {
 
         if state.open {
             let row_h = DATE_PICKER_WHEEL_ROW_HEIGHT;
-            for column in WheelColumn::ALL {
+            for column in desc.column_order.columns() {
                 let column_rect = desc.column_rect(column);
                 for row in 0..DATE_PICKER_WHEEL_ROWS {
                     let value = state.selected(column) + row as i32 - 2;
                     let text = match column {
                         WheelColumn::Month => {
-                            let m = (value - 1).rem_euclid(12) as usize;
-                            MONTH_NAMES[m].to_owned()
+                            let m = u8::try_from((value - 1).rem_euclid(12) + 1).unwrap_or(1);
+                            desc.month_format.format_month(m)
                         }
                         WheelColumn::Day => {
                             let days = i32::from(days_in_month(state.year, state.month)).max(1);
@@ -715,19 +821,42 @@ impl UiWidget for DatePickerWheelDesc {
                 }
             }
         } else {
-            for column in WheelColumn::ALL {
+            for column in desc.column_order.columns() {
                 let col_r = desc.trigger_column_rect(column);
                 let text = match column {
-                    WheelColumn::Month => state.month_name().to_owned(),
+                    WheelColumn::Month => desc.month_format.format_month(state.month),
                     WheelColumn::Day => format!("{:02}", state.day),
                     WheelColumn::Year => state.year.to_string(),
                 };
+                let (text_rect, font_size, align_x) = match desc.column_order {
+                    DatePickerColumnOrder::MonthDayYear => (col_r, 13.0, AlignX::Center),
+                    DatePickerColumnOrder::YearMonthDay => {
+                        let visual_h = col_r.size.y.min(DATE_PICKER_WHEEL_VISUAL_TRIGGER_HEIGHT);
+                        match column {
+                            WheelColumn::Month => (
+                                Rect::new(
+                                    col_r.origin.x + DATE_PICKER_WHEEL_MONTH_LEFT_PADDING,
+                                    col_r.origin.y,
+                                    (col_r.size.x - DATE_PICKER_WHEEL_MONTH_LEFT_PADDING).max(0.0),
+                                    visual_h,
+                                ),
+                                DATE_PICKER_WHEEL_FONT_SIZE,
+                                AlignX::Left,
+                            ),
+                            WheelColumn::Year | WheelColumn::Day => (
+                                Rect::new(col_r.origin.x, col_r.origin.y, col_r.size.x, visual_h),
+                                DATE_PICKER_WHEEL_FONT_SIZE,
+                                AlignX::Center,
+                            ),
+                        }
+                    }
+                };
                 glyphs.extend(text_ctx.shape_line(
                     &text,
-                    col_r,
-                    13.0,
+                    text_rect,
+                    font_size,
                     400,
-                    AlignX::Center,
+                    align_x,
                     AlignY::Middle,
                 ));
             }
@@ -849,5 +978,60 @@ mod tests {
         let esc = KeyChord::named("Escape");
         assert!(state.handle_key(&esc));
         assert!(!state.open);
+    }
+
+    #[test]
+    fn year_month_day_columns_and_dividers_match_winui_proportions() {
+        let desc = DatePickerWheelDesc::new(Rect::new(16.0, 16.0, 360.0, 32.0))
+            .with_column_order(DatePickerColumnOrder::YearMonthDay);
+
+        let div0 = desc.trigger_divider_rect(0);
+        let div1 = desc.trigger_divider_rect(1);
+        assert_eq!(div0, Rect::new(114.0, 17.0, 1.0, 28.0));
+        assert_eq!(div1, Rect::new(278.0, 17.0, 1.0, 28.0));
+
+        assert_eq!(
+            desc.trigger_column_rect(WheelColumn::Year),
+            Rect::new(17.0, 16.0, 97.0, 32.0)
+        );
+        assert_eq!(
+            desc.trigger_column_rect(WheelColumn::Month),
+            Rect::new(115.0, 16.0, 163.0, 32.0)
+        );
+        assert_eq!(
+            desc.trigger_column_rect(WheelColumn::Day),
+            Rect::new(279.0, 16.0, 96.0, 32.0)
+        );
+
+        let state = DatePickerWheelState::new(2024, 4, 15);
+        let idle = emit_date_picker_wheel(1, &desc, &state, ControlState::default(), &mut []);
+        let disabled = emit_date_picker_wheel(
+            1,
+            &desc,
+            &state,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            &mut [],
+        );
+        assert_eq!(idle.primitives.len(), disabled.primitives.len());
+    }
+
+    #[test]
+    fn month_format_outputs_full_name_and_two_digit_numeric() {
+        let default_desc = desc();
+        assert_eq!(default_desc.column_order, DatePickerColumnOrder::MonthDayYear);
+        assert_eq!(default_desc.month_format, DatePickerMonthFormat::FullName);
+
+        assert_eq!(DatePickerMonthFormat::FullName.format_month(4), "April");
+        assert_eq!(
+            DatePickerMonthFormat::NumericTwoDigits.format_month(4),
+            "04"
+        );
+        assert_eq!(
+            DatePickerMonthFormat::NumericTwoDigits.format_month(12),
+            "12"
+        );
     }
 }

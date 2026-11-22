@@ -762,8 +762,8 @@ pub use calendar_date_picker::{
     CALENDAR_DATE_PICKER_HEIGHT,
 };
 pub use date_picker_wheel::{
-    emit_date_picker_wheel, DatePickerWheelDesc, DatePickerWheelState, WheelColumn,
-    DATE_PICKER_WHEEL_TRIGGER_HEIGHT,
+    emit_date_picker_wheel, DatePickerColumnOrder, DatePickerMonthFormat, DatePickerWheelDesc,
+    DatePickerWheelState, WheelColumn, DATE_PICKER_WHEEL_TRIGGER_HEIGHT,
 };
 pub use drop_down_button::{
     emit_drop_down_button, DropDownButtonDesc, DropDownButtonKey, DropDownButtonState,

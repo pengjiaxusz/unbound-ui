@@ -1988,7 +1988,9 @@ fn emit_case(
             Vec2::new(size.x, 32.0)
         }
         "DatePicker" => {
-            let desc = DatePickerWheelDesc::new(rect);
+            let desc = DatePickerWheelDesc::new(rect)
+                .with_column_order(unbound_widgets::DatePickerColumnOrder::YearMonthDay)
+                .with_month_format(unbound_widgets::DatePickerMonthFormat::NumericTwoDigits);
             let state = DatePickerWheelState::new(2024, 4, 15);
             let size = desc.intrinsic_size(text_ctx);
             push(
