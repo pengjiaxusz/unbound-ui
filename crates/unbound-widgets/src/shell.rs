@@ -46,8 +46,14 @@ pub enum ShellIcon {
     Layers,
     /// 向下展开箭头。
     ChevronDown,
+    /// 向上收起箭头。
+    ChevronUp,
+    /// 向左返回箭头（纯 v 形，无长杆；对齐 WinUI 3 返回键的 6x10 墨迹）。
+    Back,
     /// 向右折叠箭头。
     ChevronRight,
+    /// 水平三点省略号（溢出菜单按钮）。
+    Ellipsis,
     /// 勾选对号。
     Check,
     /// 关闭叉号。
@@ -312,6 +318,58 @@ pub fn emit_shell_icon_primitives(
                 primitives,
                 payloads,
             );
+        }
+        ShellIcon::ChevronUp => {
+            curve_stroke(
+                [c.x - 4.2, c.y + 2.4],
+                [c.x, c.y - 1.8],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x, c.y - 1.8],
+                [c.x + 4.2, c.y + 2.4],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Back => {
+            // 竖直 v 形：墨迹约 6x10px，与 WinUI 3 NavigationView 返回键一致。
+            curve_stroke(
+                [c.x + 2.2, c.y - 4.4],
+                [c.x - 2.6, c.y],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x - 2.6, c.y],
+                [c.x + 2.2, c.y + 4.4],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Ellipsis => {
+            // 三个 3px 圆点，总宽 14px，与 WinUI 顶部溢出按钮一致。
+            for i in 0..3 {
+                primitives.push(surface(
+                    Rect::new(c.x - 7.0 + i as f32 * 5.5, c.y - 1.5, 3.0, 3.0),
+                    1.5,
+                    color,
+                    z,
+                ));
+            }
         }
         ShellIcon::ChevronRight => {
             curve_stroke(

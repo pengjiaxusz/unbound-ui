@@ -147,6 +147,10 @@ pub fn dark() -> Palette {
         (Token::NAV_TEXT_MUTED, c(197, 197, 197, 255)),
         // 深色 `CardBackgroundFillColorDefault` 为 5.12% 白薄纱，叠在 `#202020` 上实测为 (43,43,43)。
         (Token::CARD_BG, c(255, 255, 255, veil(13))),
+        // `NavigationViewContentBackground` = `LayerFillColorDefault`：深色实测 (39,39,39)。
+        (Token::NAV_CONTENT_BG, c(255, 255, 255, veil(6))),
+        // `ControlStrokeColorDefault` 深色为 15% 黑，叠在 `#202020` 上实测 (29,29,29)。
+        (Token::NAV_CONTENT_STROKE, c(0, 0, 0, 38)),
         (Token::OVERLAY_BG, c(44, 44, 44, 255)),
         (Token::HUD_BG, c(44, 44, 44, 240)),
         (Token::HUD_TEXT, c(255, 255, 255, 255)),
@@ -272,10 +276,14 @@ pub fn light() -> Palette {
         (Token::HEADER_BG, c(243, 243, 243, 0)),
         (Token::NAV_BG, c(243, 243, 243, 0)),
         (Token::NAV_HOVER, c(0, 0, 0, light_base_veil(8))),
-        (Token::NAV_SELECTED, c(0, 0, 0, light_base_veil(14))),
+        (Token::NAV_SELECTED, c(0, 0, 0, light_base_veil(9))),
         (Token::NAV_TEXT, c(26, 26, 26, 255)),
         (Token::NAV_TEXT_MUTED, c(92, 92, 92, 255)),
         (Token::CARD_BG, c(255, 255, 255, 178)),
+        // 浅色 `LayerFillColorDefault` 为 50% 白薄纱，叠在 `#F3F3F3` 上实测 (249,249,249)。
+        (Token::NAV_CONTENT_BG, c(255, 255, 255, 128)),
+        // `ControlStrokeColorDefault` 浅色为 6% 黑，叠在 `#F3F3F3` 上实测 (229,229,229)。
+        (Token::NAV_CONTENT_STROKE, c(0, 0, 0, light_base_veil(15))),
         (Token::OVERLAY_BG, c(249, 249, 249, 255)),
         (Token::HUD_BG, c(249, 249, 249, 246)),
         (Token::HUD_TEXT, c(26, 26, 26, 255)),

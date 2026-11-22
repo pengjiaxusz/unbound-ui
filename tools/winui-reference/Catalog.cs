@@ -727,6 +727,31 @@ internal static class Catalog
                     });
                     nav.SelectedItem = home;
                     AddEnglishSettingsFooter(nav);
+                    // `LeftCompact` 会在 `UpdatePaneVisibility` 里强制把 `IsPaneOpen` 收回 false，
+                    // 构造期设 true 无效；本场景要的是「紧凑模式展开」这一形态，故在进入可视树后重设。
+                    // 展开动作会把键盘焦点送进首个菜单项并画出 2px 焦点框，这里再把焦点收回控件本身，
+                    // 只保留纯选中态（焦点框由 focused 用例单独覆盖）。
+                    //
+                    // 仅靠 `Loaded` 还不够稳：采集宿主切换主题会再触发一轮布局，`UpdatePaneVisibility`
+                    // 会以「窗口宽度 < CompactModeThresholdWidth」为由把窗格重新收回（曾导致浅色图被
+                    // 截成折叠态）。故补一道布局钩子，在窗格被收回时重新撑开。
+                    var reopenGuard = 0;
+                    nav.Loaded += (_, _) =>
+                    {
+                        nav.IsPaneOpen = true;
+                        nav.IsTabStop = true;
+                        nav.Focus(FocusState.Programmatic);
+                    };
+                    nav.LayoutUpdated += (_, _) =>
+                    {
+                        if (!nav.IsPaneOpen && reopenGuard++ < 8)
+                        {
+                            nav.IsPaneOpen = true;
+                            // 每次重新撑开都会把键盘焦点送进首个菜单项并画出 2px 焦点框，
+                            // 这里同步把焦点收回控件本体，只保留纯选中态。
+                            nav.Focus(FocusState.Programmatic);
+                        }
+                    };
                     element = nav;
                     return true;
                 }

@@ -2424,6 +2424,7 @@ fn emit_case(
                         ],
                     )
                     .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Top)
+                    .overflow_label_mode(unbound_widgets::NavigationViewOverflowLabelMode::NoLabel)
                     .is_settings_visible(true)
                     .is_back_button_visible(
                         unbound_widgets::NavigationViewBackButtonVisible::Collapsed,

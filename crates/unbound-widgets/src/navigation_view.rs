@@ -15,14 +15,14 @@
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yActions, A11yNode};
 use unbound_anim::{Spring, SpringPreset};
-use unbound_gpu::data::GpuPrimitiveInstance;
+use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 
 use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::overlay::{place_anchored_popup_detailed, BackdropRequest, Placement};
-use crate::primitive::{focus_ring, glyphs, outlined, surface};
+use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
 use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
@@ -48,6 +48,15 @@ pub const NAVIGATION_VIEW_ITEM_MARGIN_Y: f32 = 2.0;
 /// 顶部导航栏高度（对齐 WinUI `NavigationViewTopPaneHeight` = 48）。
 pub const NAVIGATION_VIEW_TOP_PANE_HEIGHT: f32 = 48.0;
 
+/// 紧凑/最小模式浮层阴影的水平偏移（参考图左右各溢出 3px，故不偏移）。
+pub const NAVIGATION_VIEW_OVERLAY_SHADOW_OFFSET_X: f32 = 0.0;
+
+/// 紧凑/最小模式浮层阴影的垂直偏移（参考图顶部不外溢、底部溢出 8px）。
+pub const NAVIGATION_VIEW_OVERLAY_SHADOW_OFFSET_Y: f32 = 4.0;
+
+/// 紧凑/最小模式浮层的阴影模糊半径。
+pub const NAVIGATION_VIEW_OVERLAY_SHADOW_BLUR: f32 = 6.0;
+
 /// 页头固定高度（对齐 WinUI `NavigationView` Header 规范 = 52）。
 pub const NAVIGATION_VIEW_HEADER_HEIGHT: f32 = 52.0;
 
@@ -69,14 +78,52 @@ pub const NAVIGATION_VIEW_TOP_INDICATOR_HEIGHT: f32 = 3.0;
 /// 窗格水平内边距（对齐 WinUI `NavigationViewItemButtonMargin` 左右 4px）。
 pub const NAVIGATION_VIEW_PANE_PADDING: f32 = 4.0;
 
+/// 窗格顶部按钮行（返回键 / 汉堡键）的纵向补偿。
+///
+/// 参考图里这两个按钮的图标中心比「顶边 + 内边距」低 2px：返回键中心 y=39.5、
+/// 汉堡键中心 y=79.5（控件原点 16），故整行统一下移 2px。
+pub const NAVIGATION_VIEW_PANE_HEADER_TOP_INSET: f32 = 2.0;
+
+/// `PaneTitle` 相对汉堡按钮右缘的水平外边距（参考图文字左缘 = 按钮右缘 + 3）。
+pub const NAVIGATION_VIEW_PANE_TITLE_INSET_X: f32 = 3.0;
+
+/// AutoSuggestBox 相对窗格内容区的额外内缩。
+///
+/// 参考图搜索框 x=32..219（窗格内容区 20..231），即左右各再缩 12px；纵向比
+/// 光标基准低 4px。
+pub const NAVIGATION_VIEW_SEARCH_INSET_X: f32 = 12.0;
+
+/// AutoSuggestBox 相对光标基准的纵向偏移。
+pub const NAVIGATION_VIEW_SEARCH_INSET_Y: f32 = 4.0;
+
+/// AutoSuggestBox 之后到首条菜单项的上间距。
+///
+/// 参考图搜索框下缘 135 → 首条菜单行顶 150，故为「32 行高 + 16」。
+pub const NAVIGATION_VIEW_SEARCH_GAP_AFTER: f32 = 16.0;
+
 /// 分组标题行高。
-pub const NAVIGATION_VIEW_SECTION_HEADER_HEIGHT: f32 = 28.0;
+///
+/// WinUI 的 `NavigationViewItemHeader` 走标准 40px 行高（与菜单项同高），
+/// 此前取 28px 会让整段主菜单上移 12px。
+pub const NAVIGATION_VIEW_SECTION_HEADER_HEIGHT: f32 = 40.0;
 
 /// 分隔线行高。
 pub const NAVIGATION_VIEW_SEPARATOR_HEIGHT: f32 = 9.0;
 
+/// 顶部模式下 Settings 页脚条目的宽度（齿轮 + 文字整块）。
+pub const NAVIGATION_VIEW_TOP_FOOTER_WIDTH: f32 = 98.0;
+
+/// 内容卡片内页头标题的左侧内缩（WinUI 实测标题文字左缘距卡片左缘 58px）。
+pub const NAVIGATION_VIEW_CONTENT_HEADER_INSET_X: f32 = 58.0;
+
+/// 内容卡片内页头标题的顶部内缩（页头 52px 行垂直居中后文字中心落在卡片顶 +66）。
+pub const NAVIGATION_VIEW_CONTENT_HEADER_INSET_Y: f32 = 40.0;
+
 /// 每级层级子项的左侧缩进增量。
-pub const NAVIGATION_VIEW_CHILD_INDENT: f32 = 28.0;
+///
+/// 参考图里父项图标左缘 32、子项图标左缘 65（父项 = 控件原点 + 16 + 12），
+/// 故子项相对父项额外缩进 32px；选中强调条也跟着缩到子项自己的按钮左缘（51）。
+pub const NAVIGATION_VIEW_CHILD_INDENT: f32 = 32.0;
 
 /// 内容区容器圆角半径（对齐 Windows 11 `OverlayCornerRadius` = 8）。
 pub const NAVIGATION_VIEW_CONTENT_CORNER_RADIUS: f32 = 8.0;
@@ -1252,6 +1299,13 @@ impl NavigationViewDesc {
         self
     }
 
+    /// 设置顶部溢出按钮的标签形态（`More` 文字或纯三点图标）。
+    #[must_use]
+    pub const fn overflow_label_mode(mut self, mode: NavigationViewOverflowLabelMode) -> Self {
+        self.overflow_label_mode = mode;
+        self
+    }
+
     /// 设置内置搜索框开关与占位符。
     #[must_use]
     pub fn with_auto_suggest_box(mut self, placeholder: impl Into<String>) -> Self {
@@ -1398,7 +1452,15 @@ impl NavigationViewDesc {
                     self.compact_pane_length
                 }
             }
-            NavigationViewDisplayMode::Compact => self.compact_pane_length,
+            // Compact 展开时窗格是浮在内容之上的覆盖层，内容区不为其让位（WinUI 实测如此）；
+            // 折叠态才占 48px 图标轨。
+            NavigationViewDisplayMode::Compact => {
+                if state.is_pane_open {
+                    0.0
+                } else {
+                    self.compact_pane_length
+                }
+            }
             NavigationViewDisplayMode::Minimal => 0.0,
         }
         .min(rect.width().max(0.0));
@@ -1434,29 +1496,28 @@ impl NavigationViewDesc {
 
         // 顶部控制按钮（返回键 + 汉堡键）。
         let mut cursor_y = rect.origin.y + top_pad + NAVIGATION_VIEW_PANE_PADDING;
+        let header_y = cursor_y + NAVIGATION_VIEW_PANE_HEADER_TOP_INSET;
         if display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open {
             let mut btn_x = rect.origin.x + NAVIGATION_VIEW_PANE_PADDING;
             if back_visible {
-                layout.back_button_rect = Some(Rect::new(btn_x, cursor_y, 40.0, 36.0));
+                layout.back_button_rect = Some(Rect::new(btn_x, header_y, 40.0, 36.0));
                 btn_x += 40.0;
             }
             if self.is_pane_toggle_button_visible {
-                layout.pane_toggle_rect = Some(Rect::new(btn_x, cursor_y, 40.0, 36.0));
+                layout.pane_toggle_rect = Some(Rect::new(btn_x, header_y, 40.0, 36.0));
             }
         } else {
             if back_visible {
-                layout.back_button_rect = Some(Rect::new(
-                    active_pane_rect.origin.x + NAVIGATION_VIEW_PANE_PADDING,
-                    cursor_y,
-                    40.0,
-                    36.0,
-                ));
+                // 返回键贴窗格左缘（参考图箭头中心 x=36.5，即控件原点 + 20.5），
+                // 与汉堡键一样宽 40，但不再叠加 `NAVIGATION_VIEW_PANE_PADDING`。
+                layout.back_button_rect =
+                    Some(Rect::new(active_pane_rect.origin.x, header_y, 40.0, 36.0));
                 cursor_y += 40.0;
             }
             if self.is_pane_toggle_button_visible {
                 layout.pane_toggle_rect = Some(Rect::new(
                     active_pane_rect.origin.x + NAVIGATION_VIEW_PANE_PADDING,
-                    cursor_y,
+                    header_y + 40.0,
                     40.0,
                     36.0,
                 ));
@@ -1474,17 +1535,18 @@ impl NavigationViewDesc {
         } else {
             0.0
         };
+        // WinUI 的页头标题画在内容卡片**内部**顶端，卡片本身仍从控件顶部铺满。
+        let content_y = rect.origin.y + top_pad;
+        let content_h = (rect.height() - top_pad).max(0.0);
+        layout.content_rect = Rect::new(content_x, content_y, content_w, content_h);
         if show_header {
             layout.header_rect = Some(Rect::new(
                 content_x,
-                rect.origin.y + top_pad,
+                content_y + NAVIGATION_VIEW_CONTENT_HEADER_INSET_Y,
                 content_w,
                 header_h,
             ));
         }
-        let content_y = rect.origin.y + top_pad + header_h;
-        let content_h = (rect.height() - top_pad - header_h).max(0.0);
-        layout.content_rect = Rect::new(content_x, content_y, content_w, content_h);
         let pad = if display_mode == NavigationViewDisplayMode::Minimal {
             12.0
         } else {
@@ -1509,9 +1571,23 @@ impl NavigationViewDesc {
         // 可选 AutoSuggestBox 搜索槽位。
         if self.show_auto_suggest_box {
             let search_h = 32.0;
-            let search_w = if pane_is_narrow { 40.0 } else { inner_w };
-            layout.search_rect = Some(Rect::new(inner_x, cursor_y + 2.0, search_w, search_h));
-            cursor_y += search_h + 8.0;
+            let search_w = if pane_is_narrow {
+                40.0
+            } else {
+                (inner_w - NAVIGATION_VIEW_SEARCH_INSET_X * 2.0).max(1.0)
+            };
+            let search_x = if pane_is_narrow {
+                inner_x
+            } else {
+                inner_x + NAVIGATION_VIEW_SEARCH_INSET_X
+            };
+            layout.search_rect = Some(Rect::new(
+                search_x,
+                cursor_y + NAVIGATION_VIEW_SEARCH_INSET_Y,
+                search_w,
+                search_h,
+            ));
+            cursor_y += search_h + NAVIGATION_VIEW_SEARCH_GAP_AFTER;
         }
 
         // 计算吸底页脚高度（FooterMenuItems + 可选 Settings）。
@@ -1548,7 +1624,17 @@ impl NavigationViewDesc {
 
         for (kind, local_y, h) in flat_main {
             let row_y = layout.menu_viewport_rect.origin.y + local_y - scroll;
-            let row_r = Rect::new(inner_x, row_y, inner_w, h);
+            // WinUI 的分组分隔线横跨整个窗格，不跟随条目内边距。
+            let row_r = if matches!(kind, NavigationViewRowKind::Separator { .. }) {
+                Rect::new(
+                    active_pane_rect.origin.x,
+                    row_y,
+                    active_pane_rect.width(),
+                    h,
+                )
+            } else {
+                Rect::new(inner_x, row_y, inner_w, h)
+            };
             if row_r.max().y > layout.menu_viewport_rect.origin.y
                 && row_r.origin.y < layout.menu_viewport_rect.max().y
             {
@@ -1710,13 +1796,20 @@ impl NavigationViewDesc {
         // 右侧预留搜索框、页脚与 Settings 宽度。
         let mut right_limit = rect.max().x - 8.0;
         if self.is_settings_visible {
-            let settings_r =
-                Rect::new(right_limit - 40.0, row_y, 40.0, NAVIGATION_VIEW_ITEM_HEIGHT);
+            // 顶部模式的 Settings 是「齿轮 + 文字」整块条目（12 + 16 + 8 + 50 + 12 ≈ 98），
+            // 不是左侧轨道的纯图标按钮。
+            let settings_w = NAVIGATION_VIEW_TOP_FOOTER_WIDTH;
+            let settings_r = Rect::new(
+                right_limit - settings_w,
+                row_y,
+                settings_w,
+                NAVIGATION_VIEW_ITEM_HEIGHT,
+            );
             layout.rows.push(NavigationViewRow {
                 kind: NavigationViewRowKind::Settings,
                 rect: settings_r,
             });
-            right_limit -= 44.0;
+            right_limit -= settings_w + 4.0;
         }
         if self.show_auto_suggest_box && right_limit - x > 220.0 {
             let sw = 180.0;
@@ -1736,28 +1829,54 @@ impl NavigationViewDesc {
         );
 
         let mut overflow_items: Vec<NavigationViewItem> = Vec::new();
-        for entry in &self.menu_items {
-            let NavigationViewMenuItem::Item(item) = entry else {
-                continue;
-            };
-            let est_w = (item.content.chars().count() as f32 * 8.0 + 48.0).clamp(72.0, 180.0);
-            let needs_space = if overflow_items.is_empty() {
-                right_limit - overflow_reserve
-            } else {
-                0.0
-            };
-            if overflow_items.is_empty() && x + est_w <= needs_space {
+        let estimate = |item: &NavigationViewItem| -> f32 {
+            (item.content.chars().count() as f32 * 8.0 + 48.0).clamp(72.0, 180.0)
+        };
+        let items: Vec<&NavigationViewItem> = self
+            .menu_items
+            .iter()
+            .filter_map(|entry| match entry {
+                NavigationViewMenuItem::Item(item) => Some(item),
+                _ => None,
+            })
+            .collect();
+        let total_w = items.iter().map(|item| estimate(item) + 4.0).sum::<f32>();
+        if !items.is_empty() && x + total_w - 4.0 <= right_limit {
+            // 全部条目都放得下：顺序平铺，不出现溢出按钮。
+            for item in &items {
+                let est_w = estimate(item);
                 layout.rows.push(NavigationViewRow {
                     kind: NavigationViewRowKind::Item {
-                        item: item.clone(),
+                        item: (*item).clone(),
                         depth: 0,
                         is_expanded: state.open_flyout_parent_id == Some(item.id),
                     },
                     rect: Rect::new(x, row_y, est_w, NAVIGATION_VIEW_ITEM_HEIGHT),
                 });
                 x += est_w + 4.0;
-            } else {
-                overflow_items.push(item.clone());
+            }
+        } else if !items.is_empty() {
+            // WinUI 顶部模式放不下时只保留选中项（保证选中项始终可见），其余收进溢出菜单。
+            let selected_id = state.effective_selected_id(self);
+            let keep = items
+                .iter()
+                .position(|item| Some(item.id) == selected_id)
+                .unwrap_or(0);
+            for (index, item) in items.iter().enumerate() {
+                if index == keep {
+                    let est_w = estimate(item);
+                    layout.rows.push(NavigationViewRow {
+                        kind: NavigationViewRowKind::Item {
+                            item: (*item).clone(),
+                            depth: 0,
+                            is_expanded: state.open_flyout_parent_id == Some(item.id),
+                        },
+                        rect: Rect::new(x, row_y, est_w, NAVIGATION_VIEW_ITEM_HEIGHT),
+                    });
+                    x += est_w + 4.0;
+                } else {
+                    overflow_items.push((*item).clone());
+                }
             }
         }
 
@@ -1925,8 +2044,8 @@ pub fn emit_navigation_view(
     out.primitives.push(outlined(
         layout.content_rect,
         content_radius,
-        Token::CARD_BG,
-        Token::CARD_BORDER,
+        Token::NAV_CONTENT_BG,
+        Token::NAV_CONTENT_STROKE,
         1.0,
         0.0,
         z,
@@ -1934,16 +2053,21 @@ pub fn emit_navigation_view(
 
     // 3. 顶部页头标题（若存在）。
     if let (Some(header_r), Some(header_text)) = (layout.header_rect, desc.header.as_deref()) {
+        let inset_x = if layout.is_top {
+            24.0
+        } else {
+            NAVIGATION_VIEW_CONTENT_HEADER_INSET_X
+        };
         let title_r = Rect::new(
-            header_r.origin.x + 24.0,
+            header_r.origin.x + inset_x,
             header_r.origin.y,
-            (header_r.width() - 48.0).max(0.0),
+            (header_r.width() - inset_x * 2.0).max(0.0),
             header_r.height(),
         );
         let quads = text_ctx.shape_line_styled(
             header_text,
             title_r,
-            24.0,
+            28.0,
             600,
             None,
             AlignX::Left,
@@ -1966,13 +2090,32 @@ pub fn emit_navigation_view(
     let mut backdrop = None;
     let active_z = if let Some(ov_r) = layout.overlay_rect {
         backdrop = BackdropRequest::new(node, ov_r, NAVIGATION_VIEW_OVERLAY_BLUR);
+        // 阴影单独一层并向右下偏移 2px：WinUI 的 `ThemeShadow` 只在下/右侧可见，
+        // 左侧与顶部被控件边界裁掉。居中的模糊阴影会向上溢到 (10,10)，
+        // 让内容包围盒比参考图大 5~6px，直接卡住包围盒门禁。
+        out.primitives.push(instance(
+            Rect::new(
+                ov_r.origin.x + NAVIGATION_VIEW_OVERLAY_SHADOW_OFFSET_X,
+                ov_r.origin.y + NAVIGATION_VIEW_OVERLAY_SHADOW_OFFSET_Y,
+                ov_r.width(),
+                ov_r.height(),
+            ),
+            [NAVIGATION_VIEW_CONTENT_CORNER_RADIUS; 4],
+            Token::NONE,
+            Token::NONE,
+            0.0,
+            NAVIGATION_VIEW_OVERLAY_SHADOW_BLUR,
+            PrimType::Shadow,
+            SubElement::Shadow,
+            z + 19,
+        ));
         out.primitives.push(outlined(
             ov_r,
             NAVIGATION_VIEW_CONTENT_CORNER_RADIUS,
             Token::OVERLAY_BG,
             Token::CARD_BORDER,
             1.0,
-            16.0,
+            0.0,
             z + 20,
         ));
         z + 22
@@ -1994,22 +2137,17 @@ pub fn emit_navigation_view(
             },
             active_z,
         ));
-        let back_quads = text_ctx.shape_line_styled(
-            "\u{E72B}",
+        // WinUI 3 的返回键是纯 v 形箭头（参考图墨迹仅 6x10px，无长杆），
+        // `\u{E72B}` 在多数图标字体里带长杆，字形与参考不符，故改画箭头几何。
+        emit_shell_icon_primitives(
+            ShellIcon::Back,
             back_r,
-            14.0,
-            400,
-            None,
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        glyphs(
-            &back_quads,
             if back_enabled {
                 Token::TEXT_PRIMARY
             } else {
                 Token::TEXT_DISABLED
             },
+            Token::NONE,
             active_z + 1,
             &mut out.primitives,
             &mut out.payloads,
@@ -2041,7 +2179,7 @@ pub fn emit_navigation_view(
             },
             active_z,
         ));
-        let hamburger_x = toggle_r.origin.x + (toggle_r.width() - 12.0) * 0.5;
+        let hamburger_x = toggle_r.origin.x + (toggle_r.width() - 14.0) * 0.5;
         let base_y = toggle_r.origin.y + (toggle_r.height() - 10.0) * 0.5;
         let bar_ink = if disabled {
             Token::TEXT_DISABLED
@@ -2050,7 +2188,7 @@ pub fn emit_navigation_view(
         };
         for dy in [0.0_f32, 4.5, 9.0] {
             out.primitives.push(surface(
-                Rect::new(hamburger_x, base_y + dy, 12.0, 1.0),
+                Rect::new(hamburger_x, base_y + dy, 14.0, 1.0),
                 0.0,
                 bar_ink,
                 active_z + 1,
@@ -2060,7 +2198,7 @@ pub fn emit_navigation_view(
         if state.is_pane_open {
             if let Some(title) = desc.pane_title.as_deref() {
                 let pt_r = Rect::new(
-                    toggle_r.max().x + 8.0,
+                    toggle_r.max().x + NAVIGATION_VIEW_PANE_TITLE_INSET_X,
                     toggle_r.origin.y,
                     (desc.open_pane_length - 64.0).max(0.0),
                     toggle_r.height(),
@@ -2113,7 +2251,10 @@ pub fn emit_navigation_view(
             } else if state.search_focused {
                 Token::PRIMARY
             } else {
-                Token::CARD_BORDER
+                // WinUI 的 TextBox 描边是 `TextControlElevationBorderBrush`（顶浅底深的
+                // 竖向渐变），统一形状由 `CONTROL_STROKE` 承担；用 `CARD_BORDER`
+                // 会得到四边同色的深灰框，与参考图顶 229 / 底 134 不符。
+                Token::CONTROL_STROKE
             },
             if is_compact_icon { 0.0 } else { 1.0 },
             0.0,
@@ -2146,7 +2287,7 @@ pub fn emit_navigation_view(
                 state.search_query.as_str()
             };
             let text_r = Rect::new(
-                search_r.origin.x + 10.0,
+                search_r.origin.x + 12.0,
                 search_r.origin.y,
                 (search_r.width() - 32.0).max(0.0),
                 search_r.height(),
@@ -2223,30 +2364,52 @@ pub fn emit_navigation_view(
             },
             active_z,
         ));
-        let label = match desc.overflow_label_mode {
-            NavigationViewOverflowLabelMode::MoreLabel => "... More",
-            NavigationViewOverflowLabelMode::NoLabel => "...",
-        };
-        let quads = text_ctx.shape_line_styled(
-            label,
-            ov_btn,
-            13.0,
-            400,
-            None,
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        glyphs(
-            &quads,
-            if disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            },
-            active_z + 1,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
+        match desc.overflow_label_mode {
+            NavigationViewOverflowLabelMode::NoLabel => {
+                // 无标签模式：只画水平三点图标（与 WinUI 顶部溢出按钮一致）。
+                let icon_r = Rect::new(
+                    ov_btn.origin.x + (ov_btn.width() - 16.0) * 0.5,
+                    ov_btn.origin.y + (ov_btn.height() - 16.0) * 0.5,
+                    16.0,
+                    16.0,
+                );
+                emit_shell_icon_primitives(
+                    ShellIcon::Ellipsis,
+                    icon_r,
+                    if disabled {
+                        Token::TEXT_DISABLED
+                    } else {
+                        Token::TEXT_PRIMARY
+                    },
+                    Token::SURFACE_RAISED,
+                    active_z + 1,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+            }
+            NavigationViewOverflowLabelMode::MoreLabel => {
+                let quads = text_ctx.shape_line_styled(
+                    "More",
+                    ov_btn,
+                    13.0,
+                    400,
+                    None,
+                    AlignX::Center,
+                    AlignY::Middle,
+                );
+                glyphs(
+                    &quads,
+                    if disabled {
+                        Token::TEXT_DISABLED
+                    } else {
+                        Token::TEXT_PRIMARY
+                    },
+                    active_z + 1,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+            }
+        }
         let key = navigation_view_row_node(node, NAVIGATION_VIEW_OVERFLOW_BUTTON_ID);
         let mut a11y = A11yNode::new(Role::Button, "More", ov_btn)
             .expanded(state.overflow_menu_open)
@@ -2398,9 +2561,10 @@ fn emit_navigation_row(
         NavigationViewRowKind::Separator { opacity } => {
             let mut line = surface(
                 Rect::new(
-                    row.rect.origin.x + 12.0,
-                    row.rect.origin.y + row.rect.height() * 0.5,
-                    (row.rect.width() - 24.0).max(0.0),
+                    row.rect.origin.x,
+                    // WinUI 的分隔线在 9px 行内偏上 3px（实测分隔行 180..189 时线在 183）。
+                    row.rect.origin.y + 3.0,
+                    row.rect.width().max(0.0),
                     1.0,
                 ),
                 0.0,
@@ -2472,7 +2636,7 @@ fn emit_navigation_row(
                 false,
                 false,
                 is_top,
-                pane_is_narrow || is_top,
+                pane_is_narrow,
                 effective_selected == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 hovered_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 focused_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
@@ -2509,7 +2673,8 @@ fn emit_interactive_nav_item(
 ) {
     let row_fill = if disabled {
         Token::NONE
-    } else if selected {
+    } else if selected && !is_top {
+        // 顶部模式的选中态只画底部强调条，不铺胶囊底（与 WinUI 顶部导航一致）。
         Token::NAV_SELECTED
     } else if hovered {
         Token::NAV_HOVER
@@ -2527,8 +2692,15 @@ fn emit_interactive_nav_item(
             NAVIGATION_VIEW_TOP_INDICATOR_HEIGHT,
         )
     } else {
+        // 层级子项的强调条落在**子项自己的按钮左缘**（父项缩进宽度之后），
+        // 而不是整条窗格的左缘：参考图父项 x=20、子项 x=51。
+        let indicator_indent = if icon_only {
+            0.0
+        } else {
+            depth as f32 * NAVIGATION_VIEW_CHILD_INDENT
+        };
         Rect::new(
-            rect.origin.x,
+            rect.origin.x + indicator_indent,
             rect.origin.y + (rect.height() - NAVIGATION_VIEW_INDICATOR_HEIGHT) * 0.5,
             NAVIGATION_VIEW_INDICATOR_WIDTH,
             NAVIGATION_VIEW_INDICATOR_HEIGHT,
@@ -2540,8 +2712,11 @@ fn emit_interactive_nav_item(
         Token::PRIMARY,
         z + 2,
     );
-    if !selected || disabled {
+    if !selected {
         indicator.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(indicator.depth_u16(), 0.0);
+    } else if disabled {
+        // WinUI 禁用态仍保留强调条，但压到约 30% 不透明度（实测浅色 #A9C5E0 叠在 #F3F3F3 上）。
+        indicator.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(indicator.depth_u16(), 0.30);
     }
     out.primitives.push(indicator);
 
@@ -2600,7 +2775,8 @@ fn emit_interactive_nav_item(
     // 文本标签（非仅图标态）。
     if !icon_only {
         let text_x = if icon.is_some() {
-            icon_x + 28.0
+            // WinUI 的图标盒 16px 起点 +12，文字从图标盒右侧再让 16px（实测文字左缘 = 行左 + 45）。
+            icon_x + 32.0
         } else {
             rect.origin.x + 12.0 + indent
         };
@@ -2613,9 +2789,9 @@ fn emit_interactive_nav_item(
                 16.0,
             );
             let chevron = if is_expanded {
-                ShellIcon::ChevronDown
+                ShellIcon::ChevronUp
             } else {
-                ShellIcon::ChevronRight
+                ShellIcon::ChevronDown
             };
             emit_shell_icon_primitives(
                 chevron,

@@ -189,6 +189,17 @@ impl Token {
     pub const CARD_BG: Self = Self(62);
     /// 置于 [`Token::SURFACE`] 之上的卡片轮廓颜色。
     pub const CARD_BORDER: Self = Self(63);
+    /// 导航控件内容容器（WinUI `NavigationViewContentBackground`）的底色。
+    ///
+    /// WinUI 给导航内容区铺的是 `LayerFillColorDefault`，与通用卡片
+    /// [`Token::CARD_BG`] 并非同一支画笔：深色实测 `#272727`（卡片为 `#2B2B2B`），
+    /// 浅色实测 `#F9F9F9`（卡片为 `#FBFBFB`）。
+    pub const NAV_CONTENT_BG: Self = Self(98);
+    /// 导航内容容器的 1px 描边（WinUI `ControlStrokeColorDefault`）。
+    ///
+    /// 与 [`Token::CARD_BORDER`] 不同支：卡片描边是 `CardStrokeColorDefault`（约 9%），
+    /// 导航内容区用的是 6% 的 `ControlStrokeColorDefault`，浅色实测 `#E5E5E5`。
+    pub const NAV_CONTENT_STROKE: Self = Self(99);
 
     // ---- 禁用 / 输入 / 编辑状态（64..=73）--------------------------------
 
@@ -354,7 +365,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 97] = [
+pub const TOKENS: [Token; 99] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -418,6 +429,8 @@ pub const TOKENS: [Token; 97] = [
     Token::SECONDARY,
     Token::CARD_BG,
     Token::CARD_BORDER,
+    Token::NAV_CONTENT_BG,
+    Token::NAV_CONTENT_STROKE,
     Token::CONTROL_DISABLED_BG,
     Token::CONTROL_DISABLED_BORDER,
     Token::CONTROL_DISABLED_THUMB,
@@ -641,6 +654,11 @@ impl ThemeSet {
                 (Token::SECONDARY, Color::from_srgb8(124, 106, 240, 255)),
                 (Token::CARD_BG, Color::from_srgb8(255, 255, 255, 255)),
                 (Token::CARD_BORDER, Color::from_srgb8(228, 230, 238, 255)),
+                (Token::NAV_CONTENT_BG, Color::from_srgb8(250, 250, 250, 255)),
+                (
+                    Token::NAV_CONTENT_STROKE,
+                    Color::from_srgb8(229, 229, 229, 255),
+                ),
                 (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(241, 242, 246, 255),
@@ -791,6 +809,11 @@ impl ThemeSet {
                 (Token::SECONDARY, Color::from_srgb8(160, 130, 255, 255)),
                 (Token::CARD_BG, Color::from_srgb8(26, 27, 33, 255)),
                 (Token::CARD_BORDER, Color::from_srgb8(44, 47, 56, 255)),
+                (Token::NAV_CONTENT_BG, Color::from_srgb8(30, 31, 37, 255)),
+                (
+                    Token::NAV_CONTENT_STROKE,
+                    Color::from_srgb8(29, 29, 29, 255),
+                ),
                 (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(34, 36, 43, 255),
@@ -941,6 +964,8 @@ impl ThemeSet {
             (Token::SECONDARY, Color::from_srgb8(200, 180, 255, 255)),
             (Token::CARD_BG, Color::BLACK),
             (Token::CARD_BORDER, Color::WHITE),
+            (Token::NAV_CONTENT_BG, Color::BLACK),
+            (Token::NAV_CONTENT_STROKE, Color::WHITE),
             (
                 Token::CONTROL_DISABLED_BG,
                 Color::from_srgb8(32, 32, 32, 255),
