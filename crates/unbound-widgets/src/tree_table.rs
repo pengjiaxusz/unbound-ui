@@ -19,6 +19,12 @@ use crate::{ControlState, WidgetOutput};
 pub const TREE_TABLE_ROW_HEIGHT: f32 = 32.0;
 /// 表头高度。对齐 WinUI `TableViewHeaderCellPaddingMedium` 的 32px 行。
 pub const TREE_TABLE_HEADER_HEIGHT: f32 = 32.0;
+/// 表头文本左侧内边距。
+pub const TREE_TABLE_HEADER_PAD_LEFT: f32 = 12.0;
+/// 表头文本左右总内边距（左 12px + 右 4px）。
+pub const TREE_TABLE_HEADER_PAD_X: f32 = 16.0;
+/// 单元格文本右侧内边距。
+pub const TREE_TABLE_CELL_PAD_RIGHT: f32 = 8.0;
 
 /// 树形表格中带缩进深度的单行。
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +78,28 @@ impl TreeTableDesc {
             x += w;
         }
         rects
+    }
+
+    /// 计算表头文本在给定列宽下扣除左右内边距后的最大可用宽度。
+    #[must_use]
+    pub fn header_text_width(col_width: f32) -> f32 {
+        (col_width - TREE_TABLE_HEADER_PAD_X).max(0.0)
+    }
+
+    /// 计算单元格文本的左侧缩进（首列包含展开箭头与层级缩进，其余列为固定左侧内边距）。
+    #[must_use]
+    pub fn cell_text_indent(col_idx: usize, depth: usize) -> f32 {
+        if col_idx == 0 {
+            22.0 + depth as f32 * 14.0
+        } else {
+            12.0
+        }
+    }
+
+    /// 计算单元格文本在当前列宽下扣除缩进与右侧内边距后的最大可用宽度。
+    #[must_use]
+    pub fn cell_text_width(col_width: f32, col_idx: usize, depth: usize) -> f32 {
+        (col_width - Self::cell_text_indent(col_idx, depth) - TREE_TABLE_CELL_PAD_RIGHT).max(0.0)
     }
 }
 
@@ -332,10 +360,7 @@ pub fn emit_tree_table_with_glyphs(
     for row_idx in 0..4 {
         let y = rect.origin.y + header_rect.height() + row_idx as f32 * row_h;
         let row_rect = Rect::new(rect.origin.x, y, rect.width(), row_h.max(0.0));
-        let row_id = desc
-            .rows
-            .get(row_idx)
-            .map_or(row_idx as u64, |r| r.id);
+        let row_id = desc.rows.get(row_idx).map_or(row_idx as u64, |r| r.id);
         let is_selected = state.selected == Some(row_id);
         let row_bg = if is_selected {
             Token::HOVER // TabularSurfaceRowBackgroundSelected = SubtleFillColorSecondary
@@ -561,5 +586,37 @@ mod tests {
         frame.close();
         frame.close();
         assert!(Harness::assert_clean(&frame.build()).is_clean());
+    }
+
+    #[test]
+    fn tree_table_cell_text_width_and_ellipsize_prevent_column_overlap() {
+        // 验证表头与各列单元格在不同层级缩进下的可用宽度计算与零下限钳制。
+        assert_eq!(TreeTableDesc::header_text_width(120.0), 104.0);
+        assert_eq!(TreeTableDesc::header_text_width(10.0), 0.0);
+        assert_eq!(TreeTableDesc::cell_text_width(120.0, 0, 0), 90.0);
+        assert_eq!(TreeTableDesc::cell_text_width(120.0, 0, 2), 62.0);
+        assert_eq!(TreeTableDesc::cell_text_width(120.0, 1, 2), 100.0);
+        assert_eq!(TreeTableDesc::cell_text_width(40.0, 0, 3), 0.0);
+
+        // 验证超长单元格文本按可用列宽省略后不超出列宽上限。
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = crate::TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+        let long_text = "ExtremelyLongRenderPassIdentifierThatMustBeEllipsizedBeforeAdjacentColumn";
+        let max_w = TreeTableDesc::cell_text_width(100.0, 0, 1);
+        assert_eq!(max_w, 56.0);
+        let full_w = text_ctx.measure_line(long_text, 12.5, 400).x;
+        let fitted = text_ctx.ellipsize_line(long_text, 12.5, 400, max_w);
+        assert!(text_ctx.measure_line(&fitted, 12.5, 400).x <= max_w);
+        if full_w > max_w {
+            assert!(fitted.ends_with('…'));
+            assert!(fitted.len() < long_text.len());
+        }
+        assert_eq!(text_ctx.ellipsize_line(long_text, 12.5, 400, 0.0), "");
     }
 }

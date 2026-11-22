@@ -25,6 +25,15 @@ pub const SLIDER_THUMB: f32 = 20.0;
 /// 拇指内圆点直径。对齐 WinUI `SliderThumbBackground` 内圈 12px。
 pub const SLIDER_THUMB_DOT: f32 = 12.0;
 
+/// 非空标签滑块的顶部标签与间距预留高度（顶部 16px 标签区 + 4px 间距）。
+pub const SLIDER_LABEL_AREA_HEIGHT: f32 = 20.0;
+
+/// 非空标签滑块的默认固有高度（顶部 16px 标签区 + 4px 间距 + 底部 24px 轨道与拇指区）。
+pub const SLIDER_LABELED_HEIGHT: f32 = 44.0;
+
+/// 启用双区防重叠轨道偏移的最小容器高度阈值。
+const SLIDER_LABELED_MIN_HEIGHT: f32 = 40.0;
+
 /// 滑块的运行方向。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Orientation {
@@ -253,15 +262,33 @@ impl SliderDesc {
     }
 
     /// 在行内居中的轨道矩形。
+    ///
+    /// 当 `label` 非空且容器高度不低于 `40.0` 时，将水平轨道垂直居中于底部轨道区
+    /// （`y + 20.0 + (height - 20.0) * 0.5`），并对中心 Y 施加底边上限钳制，
+    /// 避免顶部 12px 标签与 20px 拇指重叠且确保拇指不向下溢出容器底边；
+    /// 空标签或紧凑高度保持原有居中逻辑向后兼容。
     #[must_use]
     pub fn track_rect(&self) -> Rect {
         match self.orientation {
-            Orientation::Horizontal => Rect::new(
-                self.rect.origin.x,
-                self.rect.origin.y + self.rect.size.y * 0.5 - self.track_height * 0.5,
-                self.rect.size.x,
-                self.track_height,
-            ),
+            Orientation::Horizontal => {
+                let center_y =
+                    if !self.label.is_empty() && self.rect.size.y >= SLIDER_LABELED_MIN_HEIGHT {
+                        let raw_center_y = self.rect.origin.y
+                            + SLIDER_LABEL_AREA_HEIGHT
+                            + (self.rect.size.y - SLIDER_LABEL_AREA_HEIGHT) * 0.5;
+                        let max_center_y =
+                            self.rect.origin.y + self.rect.size.y - self.thumb_size * 0.5;
+                        raw_center_y.min(max_center_y)
+                    } else {
+                        self.rect.origin.y + self.rect.size.y * 0.5
+                    };
+                Rect::new(
+                    self.rect.origin.x,
+                    center_y - self.track_height * 0.5,
+                    self.rect.size.x,
+                    self.track_height,
+                )
+            }
             Orientation::Vertical => Rect::new(
                 self.rect.origin.x + self.rect.size.x * 0.5 - self.track_height * 0.5,
                 self.rect.origin.y,
@@ -743,5 +770,54 @@ mod tests {
             .primitives
             .iter()
             .any(|primitive| primitive.prim_type() == unbound_gpu::data::PrimType::Stroke));
+    }
+
+    #[test]
+    fn labeled_slider_intrinsic_height_and_track_avoid_label_overlap() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = crate::TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        // 非空标签默认固有高度扩展至 44.0，空标签保持 32.0 向后兼容。
+        let labeled_zero = SliderDesc::range(0.0, 100.0, 50.0).label("Volume");
+        let unlabeled_zero = SliderDesc::range(0.0, 100.0, 50.0).label("");
+        assert_eq!(
+            crate::UiWidget::intrinsic_size(&labeled_zero, &mut text_ctx).y,
+            44.0
+        );
+        assert_eq!(
+            crate::UiWidget::intrinsic_size(&unlabeled_zero, &mut text_ctx).y,
+            32.0
+        );
+
+        // 非空标签且高度 >= 40.0 时，轨道居中于底部轨道区，轨道与拇指上边界均不侵入顶部 16px 标签区且拇指不溢出底边。
+        let labeled = SliderDesc::new(
+            Rect::new(10.0, 20.0, 200.0, 44.0),
+            "Volume",
+            50.0,
+            0.0,
+            100.0,
+        );
+        let track = labeled.track_rect();
+        let thumb = labeled.thumb_rect();
+        let expected_center_y = 20.0 + 20.0 + (44.0 - 20.0) * 0.5;
+        assert_eq!(track.origin.y + track.size.y * 0.5, expected_center_y);
+        assert!(track.origin.y >= 20.0 + 16.0);
+        assert!(thumb.origin.y >= 20.0 + 16.0);
+        assert!(thumb.max().y <= 20.0 + 44.0);
+        assert_eq!(
+            value_from_pointer(Vec2::new(110.0, expected_center_y), &labeled),
+            50.0
+        );
+
+        // 空标签保持原有居中逻辑。
+        let unlabeled = SliderDesc::new(Rect::new(10.0, 20.0, 200.0, 32.0), "", 50.0, 0.0, 100.0);
+        let u_track = unlabeled.track_rect();
+        assert_eq!(u_track.origin.y + u_track.size.y * 0.5, 20.0 + 16.0);
     }
 }

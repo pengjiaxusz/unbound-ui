@@ -137,6 +137,52 @@ impl TextCtx<'_> {
         )
     }
 
+    /// 将单行文本按 `max_width` 截断并以省略号收尾，防止超长文本越界覆盖相邻列或装饰图元。
+    pub fn ellipsize_line(&mut self, text: &str, size: f32, weight: u16, max_width: f32) -> String {
+        if !max_width.is_finite() || max_width <= 0.0 || text.is_empty() {
+            return String::new();
+        }
+        if self.measure_line(text, size, weight).x <= max_width {
+            return text.to_owned();
+        }
+        if self.measure_line("…", size, weight).x > max_width {
+            return String::new();
+        }
+        let chars: Vec<char> = text.chars().collect();
+        let mut low = 0usize;
+        let mut high = chars.len();
+        while low < high {
+            let mid = (low + high).div_ceil(2);
+            let mut candidate: String = chars[..mid].iter().collect();
+            candidate.push('…');
+            if self.measure_line(&candidate, size, weight).x <= max_width {
+                low = mid;
+            } else {
+                high = mid - 1;
+            }
+        }
+        let mut out: String = chars[..low].iter().collect();
+        out.push('…');
+        out
+    }
+
+    /// 先按 `rect.width()` 对单行文本做省略截断，再在 `rect` 内对齐排版并光栅化。
+    pub fn shape_line_ellipsized(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        weight: u16,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> Vec<GlyphQuad> {
+        let fitted = self.ellipsize_line(text, size, weight, rect.width());
+        if fitted.is_empty() {
+            return Vec::new();
+        }
+        self.shape_line(&fitted, rect, size, weight, align_x, align_y)
+    }
+
     /// 在 `rect` 内对齐排版并按物理缩放因子光栅化单行文本（返回逻辑像素坐标系的 [`GlyphQuad`]）。
     pub fn shape_line(
         &mut self,
@@ -789,13 +835,16 @@ impl UiWidget for SliderDesc {
     }
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        // WinUI `Slider` 与按钮、输入框共享 32px 标准交互行高；旧实现的 28px
-        // 会在自由维度固有尺寸门禁下被参考边界暴露为偏差。
+        // 无标签滑块与按钮、输入框共享 32px 标准交互行高；
+        // 非空标签滑块扩展至 44px（顶部 16px 标签区 + 4px 间距 + 底部 24px 轨道与拇指区），避免标签与拇指重叠。
+        let min_height = if self.label.is_empty() {
+            unbound_theme::typography::geometry::INPUT_HEIGHT
+        } else {
+            crate::slider::SLIDER_LABELED_HEIGHT
+        };
         Vec2::new(
             self.rect.width().max(160.0),
-            self.rect
-                .height()
-                .max(unbound_theme::typography::geometry::INPUT_HEIGHT),
+            self.rect.height().max(min_height),
         )
     }
 
@@ -2027,14 +2076,15 @@ impl UiWidget for TreeTableDesc {
         let mut glyphs = Vec::new();
         let header_h = TREE_TABLE_HEADER_HEIGHT.min(rect.height());
         let mut col_x = rect.origin.x;
-        for col in &desc.columns {
+        for (c_idx, col) in desc.columns.iter().enumerate() {
+            let col_w = state.column_width(c_idx, &desc.columns);
             let hdr_r = Rect::new(
-                col_x + 12.0,
+                col_x + crate::tree_table::TREE_TABLE_HEADER_PAD_LEFT,
                 rect.origin.y,
-                (col.width - 16.0).max(0.0),
+                TreeTableDesc::header_text_width(col_w),
                 header_h,
             );
-            glyphs.extend(text_ctx.shape_line(
+            glyphs.extend(text_ctx.shape_line_ellipsized(
                 &col.title,
                 hdr_r,
                 12.5,
@@ -2042,7 +2092,7 @@ impl UiWidget for TreeTableDesc {
                 AlignX::Left,
                 AlignY::Middle,
             ));
-            col_x += col.width;
+            col_x += col_w;
         }
         let body_h = (rect.height() - header_h).max(0.0);
         let row_h = TREE_TABLE_ROW_HEIGHT.min(body_h / 4.0);
@@ -2050,14 +2100,15 @@ impl UiWidget for TreeTableDesc {
             let row_y = rect.origin.y + header_h + r_idx as f32 * row_h;
             let mut cx = rect.origin.x;
             for (c_idx, cell) in row.cells.iter().enumerate() {
-                let col_w = desc.columns.get(c_idx).map_or(140.0, |c| c.width);
-                let indent = if c_idx == 0 {
-                    22.0 + row.depth as f32 * 14.0
+                let col_w = if c_idx < desc.columns.len() {
+                    state.column_width(c_idx, &desc.columns)
                 } else {
-                    12.0
+                    140.0
                 };
-                let cell_r = Rect::new(cx + indent, row_y, (col_w - indent - 8.0).max(0.0), row_h);
-                glyphs.extend(text_ctx.shape_line(
+                let indent = TreeTableDesc::cell_text_indent(c_idx, row.depth);
+                let avail_w = TreeTableDesc::cell_text_width(col_w, c_idx, row.depth);
+                let cell_r = Rect::new(cx + indent, row_y, avail_w, row_h);
+                glyphs.extend(text_ctx.shape_line_ellipsized(
                     cell,
                     cell_r,
                     12.5,
