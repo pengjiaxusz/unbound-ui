@@ -330,11 +330,11 @@ impl UiWidget for CalendarDatePickerDesc {
         let mut out = emit_calendar_date_picker(node, &desc, state, control, &mut glyphs);
         if !icon_glyphs.is_empty() && out.primitives.len() >= 8 {
             // 用 WinUI 官方 Segoe Fluent Icons 日历字形替换自绘几何线框（保留前 4 个容器图元与文本字形）。
-            // 图标墨色：WinUI 日历 glyph 使用主文本色（实测参考图墨迹最暗 41，远深于次要色 93）。
+            // 图标墨色：对齐 WinUI `CalendarDatePickerCalendarGlyphForeground`（`TextFillColorSecondaryBrush`）。
             let icon_ink = if control.disabled || desc.disabled {
                 Token::TEXT_DISABLED
             } else {
-                Token::TEXT_PRIMARY
+                Token::TEXT_SECONDARY
             };
             let mut rebuilt_prims =
                 Vec::with_capacity(out.primitives.len() - 4 + icon_glyphs.len());
