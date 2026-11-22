@@ -3742,6 +3742,15 @@ pub fn probe_workbench_widgets(state: ControlState) -> Vec<WidgetOutput> {
         state,
         &glyphs,
     ));
+    let mut vgrid_collector = crate::SceneCollector::new(0);
+    crate::virtual_grid::emit_virtual_grid_scoped(
+        &mut vgrid_collector,
+        9010,
+        &vgrid_desc,
+        &vgrid_state,
+        state,
+        &glyphs,
+    );
     outputs
 }
 

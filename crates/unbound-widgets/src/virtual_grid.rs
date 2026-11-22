@@ -9,20 +9,21 @@ use std::ops::Range;
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
+use unbound_gpu::data::GpuClipNode;
 use unbound_input::{CursorKind, HitRegion, Shape};
 use unbound_math::Rect;
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
+use crate::switch::CONTROL_LAYER;
+use crate::{ControlState, PointerPhase, SceneCollector, WidgetOutput};
 
 /// 虚拟网格单个可见单元格的确定性子节点 ID。
 #[must_use]
 pub const fn virtual_grid_cell_node(node: u64, item_index: usize) -> u64 {
     node.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA500 ^ (item_index as u64)
 }
-use crate::switch::CONTROL_LAYER;
-use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 容器圆角半径（对齐 WinUI `ControlCornerRadius = 4`）。
 const GRID_RADIUS: f32 = 4.0;
@@ -232,8 +233,12 @@ impl VirtualGridDesc {
                 as usize)
                 .min(total_rows);
 
-        let start_row = first_visible.saturating_sub(self.overscan_rows).min(total_rows);
-        let end_row = last_visible.saturating_add(self.overscan_rows).min(total_rows);
+        let start_row = first_visible
+            .saturating_sub(self.overscan_rows)
+            .min(total_rows);
+        let end_row = last_visible
+            .saturating_add(self.overscan_rows)
+            .min(total_rows);
         let start_item = (start_row * columns).min(self.item_count);
         let end_item = (end_row * columns).min(self.item_count);
 
@@ -260,6 +265,12 @@ impl VirtualGridDesc {
         let y = self.rect.origin.y + self.padding + row as f32 * self.row_stride()
             - scroll_y.clamp(0.0, self.max_scroll_y());
         Some(Rect::new(x, y, cell_width, self.row_height))
+    }
+
+    /// 生成对齐容器视口矩形的 GPU 裁剪节点（供 [`SceneCollector::push_clip`] 使用）。
+    #[must_use]
+    pub fn clip_node(&self) -> GpuClipNode {
+        GpuClipNode::from_aabb(self.rect.to_min_max_array())
     }
 }
 
@@ -316,7 +327,8 @@ impl VirtualGridState {
                 .focused_index
                 .or(self.selected_index)
                 .unwrap_or_else(|| {
-                    let top_row = ((self.scroll_y - desc.padding).max(0.0) / stride).floor() as usize;
+                    let top_row =
+                        ((self.scroll_y - desc.padding).max(0.0) / stride).floor() as usize;
                     (top_row * old_cols).min(desc.item_count - 1)
                 })
                 .min(desc.item_count - 1);
@@ -377,7 +389,11 @@ impl VirtualGridState {
         }
         let (cols, _) = desc.layout_columns();
         let last = desc.item_count - 1;
-        let current = self.focused_index.or(self.selected_index).unwrap_or(0).min(last);
+        let current = self
+            .focused_index
+            .or(self.selected_index)
+            .unwrap_or(0)
+            .min(last);
         let page_rows = ((desc.rect.height() / desc.row_stride()).floor() as usize).max(1);
         let page_items = page_rows.saturating_mul(cols);
 
@@ -429,12 +445,29 @@ pub fn emit_virtual_grid(
     } else {
         Token::CARD_BORDER
     };
-    primitives.push(outlined(r, GRID_RADIUS, Token::SURFACE, outer_border, 1.0, 0.0, z));
+    primitives.push(outlined(
+        r,
+        GRID_RADIUS,
+        Token::SURFACE,
+        outer_border,
+        1.0,
+        0.0,
+        z,
+    ));
 
-    // 仅发射 O(visible) 个可见单元格，确保万级条目下帧开销恒定且零节点泄漏。
+    // 仅发射与容器视口相交的 O(visible) 个单元格：
+    // 先跳过完全落在容器 `desc.rect` 之外的 overscan 单元格，再将半截露出的边缘单元格裁剪至容器内，
+    // 防止越界图元覆盖下方或上方相邻控件。
     let mut visible_cells: Vec<(usize, Rect, bool)> = Vec::with_capacity(visible);
     for idx in window.item_range.clone() {
         if let Some(cell_r) = desc.cell_rect(idx, state.scroll_y) {
+            if !cell_r.intersects(&r) {
+                continue;
+            }
+            let clipped_r = cell_r.intersect(&r);
+            if clipped_r.is_empty() {
+                continue;
+            }
             let is_selected = state.selected_index == Some(idx);
             let is_focused = state.focused_index == Some(idx);
             let (fill, border) = if control.disabled {
@@ -446,8 +479,16 @@ pub fn emit_virtual_grid(
             } else {
                 (Token::CARD_BG, Token::CARD_BORDER)
             };
-            primitives.push(outlined(cell_r, GRID_RADIUS, fill, border, 1.0, 0.0, z + 1));
-            visible_cells.push((idx, cell_r, is_selected));
+            primitives.push(outlined(
+                clipped_r,
+                GRID_RADIUS,
+                fill,
+                border,
+                1.0,
+                0.0,
+                z + 1,
+            ));
+            visible_cells.push((idx, clipped_r, is_selected));
         }
     }
 
@@ -457,12 +498,27 @@ pub fn emit_virtual_grid(
         } else {
             Token::TEXT_PRIMARY
         };
-        emit_glyphs(glyphs, text_tok, z + 2, &mut primitives, &mut payloads);
+        // 跳过完全落在容器矩形之外的字形，避免 overscan 文本越界发射。
+        let visible_glyphs: Vec<GlyphQuad> = glyphs
+            .iter()
+            .copied()
+            .filter(|q| q.rect.intersects(&r))
+            .collect();
+        if !visible_glyphs.is_empty() {
+            emit_glyphs(
+                &visible_glyphs,
+                text_tok,
+                z + 2,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
     }
 
+    // 与 `tree_table` 保持一致使用贴边焦点环，避免在 `emit_virtual_grid_scoped` 的容器裁剪作用域内被裁平。
     primitives.push(focus_ring(
-        r.inflate(3.0),
-        GRID_RADIUS + 3.0,
+        r,
+        GRID_RADIUS,
         Token::FOCUS_RING,
         2.0,
         z + 3,
@@ -507,6 +563,23 @@ pub fn emit_virtual_grid(
     }
 
     out
+}
+
+/// 在容器 `desc.rect` 的 `push_clip` / `pop_clip` 裁剪作用域内向 [`SceneCollector`] 发射二维虚拟网格。
+///
+/// 通过对网格绘制区域施加容器 AABB 裁剪，防止底部或顶部半截露出的单元格与文字越界覆盖下方控件。
+pub fn emit_virtual_grid_scoped(
+    collector: &mut SceneCollector,
+    node: u64,
+    desc: &VirtualGridDesc,
+    state: &VirtualGridState,
+    control: ControlState,
+    glyphs: &[GlyphQuad],
+) {
+    let clip = desc.clip_node();
+    collector.push_clip(clip, desc.rect);
+    collector.push(node, emit_virtual_grid(node, desc, state, control, glyphs));
+    collector.pop_clip();
 }
 
 #[cfg(test)]
@@ -591,7 +664,11 @@ mod tests {
         let base = emit_virtual_grid(1, &desc, &st, ControlState::default(), &[])
             .primitives
             .len();
-        for phase in [PointerPhase::Idle, PointerPhase::Hovered, PointerPhase::Pressed] {
+        for phase in [
+            PointerPhase::Idle,
+            PointerPhase::Hovered,
+            PointerPhase::Pressed,
+        ] {
             for focused in [false, true] {
                 for disabled in [false, true] {
                     for selected in [false, true] {
@@ -625,5 +702,98 @@ mod tests {
         frame.close();
         frame.close();
         assert!(Harness::assert_clean(&frame.build()).is_clean());
+    }
+
+    #[test]
+    fn virtual_grid_skips_out_of_bounds_overscan_cells_and_clips_to_container() {
+        let rect = Rect::new(10.0, 20.0, 320.0, 150.0);
+        let desc = VirtualGridDesc::new(rect, 40)
+            .with_column_sizing(GridColumnSizing::Fixed(140.0))
+            .with_row_height(100.0)
+            .with_gaps(8.0, 8.0)
+            .with_overscan_rows(2);
+        let mut st = VirtualGridState::new();
+        st.sync_layout(&desc);
+
+        // 窗口含 2 行 overscan，共 4 行 8 个单元格，但仅有前 2 行（4 个单元格）与容器相交。
+        let window = desc.window(st.scroll_y);
+        assert_eq!(window.visible_count(), 8);
+
+        let inside_glyph = GlyphQuad {
+            rect: Rect::new(24.0, 36.0, 10.0, 12.0),
+            uv: [0.0; 4],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        };
+        let outside_glyph = GlyphQuad {
+            rect: Rect::new(24.0, 260.0, 10.0, 12.0),
+            uv: [0.0; 4],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        };
+
+        let out = emit_virtual_grid(
+            1,
+            &desc,
+            &st,
+            ControlState::default(),
+            &[inside_glyph, outside_glyph],
+        );
+        // 完全落在容器外的 overscan 单元格与字形均不会被发射。
+        assert_eq!(out.sub_hits.len(), 4);
+        assert_eq!(out.payloads.len(), 1);
+        for hit in &out.sub_hits {
+            assert!(
+                rect.contains_rect(&hit.bounds),
+                "cell hit bounds {:?} must stay within container {:?}",
+                hit.bounds,
+                rect
+            );
+        }
+        // 容器外框（index 0）之后、字形与焦点环之前的 4 个单元格图元均应裁剪至容器高度内。
+        for prim in &out.primitives[1..5] {
+            assert!(prim.local_pos[1] >= rect.origin.y);
+            assert!(prim.local_pos[1] + prim.size[1] <= rect.max().y);
+        }
+
+        // 通过 `emit_virtual_grid_scoped` 推入时应施加并正确弹出容器裁剪作用域。
+        let mut collector = SceneCollector::default();
+        emit_virtual_grid_scoped(
+            &mut collector,
+            1,
+            &desc,
+            &st,
+            ControlState::default(),
+            &[inside_glyph, outside_glyph],
+        );
+        assert_eq!(collector.clips.len(), 1);
+        assert_eq!(collector.clips[0].aabb_clip, rect.to_min_max_array());
+        assert!(collector.primitives.iter().all(|prim| prim.clip_idx == 0));
+
+        // 确认裁剪作用域已在返回前弹出，后续控件不再受该裁剪节点约束。
+        let trailing_count = collector.primitives.len();
+        collector.push(
+            2,
+            WidgetOutput {
+                primitives: vec![outlined(
+                    Rect::new(0.0, 200.0, 100.0, 32.0),
+                    4.0,
+                    Token::SURFACE,
+                    Token::CARD_BORDER,
+                    1.0,
+                    0.0,
+                    20,
+                )],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            collector.primitives[trailing_count].clip_idx,
+            unbound_gpu::data::CLIP_NONE
+        );
     }
 }

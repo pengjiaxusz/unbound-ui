@@ -495,8 +495,8 @@ pub use shortcut_bar::{
 };
 pub use task_hud::{emit_task_hud, TaskActivityItem, TaskHudDesc, TaskHudState, TaskStatus};
 pub use virtual_grid::{
-    emit_virtual_grid, virtual_grid_cell_node, GridColumnSizing, VirtualGridDesc, VirtualGridState,
-    VirtualGridWindow,
+    emit_virtual_grid, emit_virtual_grid_scoped, virtual_grid_cell_node, GridColumnSizing,
+    VirtualGridDesc, VirtualGridState, VirtualGridWindow,
 };
 
 pub use accordion::{
