@@ -557,7 +557,7 @@ pub fn render_case(
 ///
 /// 每项为 `(原始槽位, 浅色 sRGB, 深色 sRGB)`；颜色取自 WinUI 3 参考截图里
 /// 那些没有语义令牌可表达的模板过渡色。
-const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 33] = [
+const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 35] = [
     // 选中态 ToggleButton 的侧边与底边（WinUI 以强调色叠加半透明描边）。
     (310, [20, 108, 190], [108, 209, 255]),
     (311, [0, 57, 110], [83, 177, 220]),
@@ -620,6 +620,10 @@ const PARITY_COLORS: [(u16, [u8; 3], [u8; 3]); 33] = [
     (341, [249, 249, 249], [37, 37, 37]),
     // ToggleSplitButton 选中态主区与下拉区之间的暗强调色分隔线。
     (342, [0, 75, 144], [75, 161, 200]),
+    // CalendarView 正常态选中日数字（对齐 WinUI AccentTextFillColorPrimaryBrush）。
+    (343, [0, 62, 146], [153, 235, 255]),
+    // CalendarView 禁用态 15 号选中圆环描边（对齐 WinUI CalendarViewSelectedDisabledBorderBrush）。
+    (344, [200, 200, 200], [66, 66, 66]),
 ];
 
 const PARITY_CHECKED_BORDER: Token = Token::new(310);
@@ -3825,15 +3829,29 @@ fn emit_case(
                 700,
             );
             push(scene, fixture.output);
-            let clip_idx = scene.clips.len() as u32;
+            // 外框裁剪节点：保留完整外框底边与圆角。
+            let outer_clip_idx = scene.clips.len() as u32;
             scene.clips.push(GpuClipNode::from_aabb([
                 rect.origin.x,
                 rect.origin.y,
                 rect.max().x,
                 rect.max().y,
             ]));
+            // 日期网格内缩裁剪节点：使底部第 4 行在 y = 272 截断，留出空白不压穿底边框。
+            let grid_clip_idx = scene.clips.len() as u32;
+            scene.clips.push(GpuClipNode::from_aabb([
+                rect.origin.x,
+                rect.origin.y,
+                rect.max().x,
+                rect.max().y - 3.0,
+            ]));
+            // 深度 >= 703 为日期网格图元（15 号选中圆环 703、日期数字 704），其余外框/分隔线/表头走外框裁剪。
             for primitive in &mut scene.primitives[first..] {
-                primitive.clip_idx = clip_idx;
+                primitive.clip_idx = if primitive.depth_u16() >= 703 {
+                    grid_clip_idx
+                } else {
+                    outer_clip_idx
+                };
             }
             fixture.total_size
         }

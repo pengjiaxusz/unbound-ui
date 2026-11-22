@@ -2719,11 +2719,12 @@ pub fn emit_canonical_calendar_view_fixture(
         Token::CONTROL_STROKE_SUBTLE,
         z + 1,
     ));
+    // 外框描边使用 Token::new(340)（浅 #E5E5E5 / 深 #303030），头部分隔线保持 CONTROL_STROKE_SUBTLE。
     out.primitives.push(primitive::outlined(
         total_r,
         4.0,
         Token::NONE,
-        Token::CONTROL_STROKE_SUBTLE,
+        Token::new(340),
         1.0,
         0.0,
         z,
@@ -2769,7 +2770,8 @@ pub fn emit_canonical_calendar_view_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    let up_r = Rect::new(total_r.max().x - 73.0, total_r.origin.y + 17.0, 16.0, 16.0);
+    // 上下导航三角箭头对齐参考图 y[38..43]，相对原 +17.0 整体下移 +1.0px。
+    let up_r = Rect::new(total_r.max().x - 73.0, total_r.origin.y + 18.0, 16.0, 16.0);
     let up_quads = text_ctx.shape_line_styled(
         "\u{EDDB}",
         up_r,
@@ -2787,7 +2789,7 @@ pub fn emit_canonical_calendar_view_fixture(
         &mut out.payloads,
     );
 
-    let down_r = Rect::new(total_r.max().x - 33.0, total_r.origin.y + 17.0, 16.0, 16.0);
+    let down_r = Rect::new(total_r.max().x - 33.0, total_r.origin.y + 18.0, 16.0, 16.0);
     let down_quads = text_ctx.shape_line_styled(
         "\u{EDDC}",
         down_r,
@@ -2819,15 +2821,19 @@ pub fn emit_canonical_calendar_view_fixture(
         // WinUI CalendarView 在 300px 宽度下，表头槽位较窄导致较宽的 Mo / We 自动折为两行。
         // 折行后整块比单行标签低 3px（参考图墨迹 86..110，单行 94..102），故两行块整体下移 3px。
         if w <= 305.0 && matches!(day_name, "Mo" | "We") {
-            let top_r = Rect::new(cell_x, week_y - 4.0, col_w, 16.0);
-            let bot_r = Rect::new(cell_x, week_y + 12.0, col_w, 16.0);
+            // 参考图中两行折行文本按首字母居中后的左缘左对齐，且下行比原位置低 +1.0px。
+            let first_w = text_ctx.measure_line(&day_name[..1], 12.0, 600).x.ceil();
+            let wrap_x = (cell_x + ((col_w - first_w) * 0.5).max(0.0)).round();
+            let wrap_w = (cell_x + col_w - wrap_x).max(first_w);
+            let top_r = Rect::new(wrap_x, week_y - 4.0, wrap_w, 16.0);
+            let bot_r = Rect::new(wrap_x, week_y + 13.0, wrap_w, 16.0);
             let top_quads = text_ctx.shape_line_styled(
                 &day_name[..1],
                 top_r,
                 12.0,
                 600,
                 None,
-                AlignX::Center,
+                AlignX::Left,
                 AlignY::Middle,
             );
             let bot_quads = text_ctx.shape_line_styled(
@@ -2836,7 +2842,7 @@ pub fn emit_canonical_calendar_view_fixture(
                 12.0,
                 600,
                 None,
-                AlignX::Center,
+                AlignX::Left,
                 AlignY::Middle,
             );
             primitive::glyphs(
@@ -2920,7 +2926,7 @@ pub fn emit_canonical_calendar_view_fixture(
             row_h,
         );
 
-        let is_selected = !disabled && (day == CANONICAL_CALENDAR_SELECTED_DAY);
+        let is_selected = day == CANONICAL_CALENDAR_SELECTED_DAY;
         if is_selected {
             let pill_size = 40.0;
             let pill_r = Rect::new(
@@ -2929,12 +2935,18 @@ pub fn emit_canonical_calendar_view_fixture(
                 pill_size,
                 pill_size,
             );
-            // WinUI CalendarView IsTodayHighlighted=false 时，选中日为空心强调色圆环而非实心圆。
+            // WinUI CalendarView IsTodayHighlighted=false 时，选中日为空心圆环而非实心圆；
+            // 禁用态仍保留 40x40 空心圆环，描边使用 Token::new(344)（浅 RGB(200,200,200) / 深 RGB(66,66,66)）。
+            let ring_stroke = if disabled {
+                Token::new(344)
+            } else {
+                Token::PRIMARY
+            };
             out.primitives.push(primitive::outlined(
                 pill_r,
                 pill_size * 0.5,
                 Token::NONE,
-                Token::PRIMARY,
+                ring_stroke,
                 1.0,
                 0.0,
                 z + 3,
@@ -2944,7 +2956,8 @@ pub fn emit_canonical_calendar_view_fixture(
         let day_ink = if disabled {
             Token::TEXT_DISABLED
         } else if is_selected {
-            Token::PRIMARY
+            // 正常态选中日文字对齐 WinUI AccentTextFillColorPrimaryBrush（浅 RGB(0,62,146) / 深 RGB(153,235,255)）。
+            Token::new(343)
         } else {
             Token::TEXT_PRIMARY
         };
