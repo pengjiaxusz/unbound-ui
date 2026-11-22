@@ -1409,14 +1409,9 @@ impl ViewContext {
     }
 }
 
-/// 声明式视图放置在布局树中的控件。
-///
-/// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
-/// 控件本身从不猜测自身几何。
+/// 虚拟树形视图单行渲染快照。
 #[derive(Clone, Debug)]
-pub /// 虚拟树形视图单行渲染快照。
-#[derive(Clone, Debug)]
-struct TreeViewRowSnapshot {
+pub struct TreeViewRowSnapshot {
     /// 扁平化树行元数据。
     row: unbound_world::TreeRow,
     /// 该行在内容空间中的顺序索引。
@@ -1431,7 +1426,23 @@ struct TreeViewRowSnapshot {
     divider_before: bool,
 }
 
-enum WidgetSpec {
+/// 树形视图滚轮同步水位记录。
+///
+/// 跟踪上次与运行时 [`unbound_widgets::ScrollState`] 对齐的纵向偏移，
+/// 仅在滚轮/滚动条相对上次同步发生增量变化时才同步到 [`unbound_widgets::TreeViewState`]，
+/// 防止每帧用旧滚轮值覆盖调用方通过 `scroll_by` / `scroll_to_row` 设置的程序化滚动。
+#[derive(Clone, Copy, Debug, Default)]
+struct TreeViewScrollSync {
+    /// 上次同步完成时 `ScrollState.offset().y` 的快照值。
+    last_wheel_y: f32,
+}
+
+/// 声明式视图放置在布局树中的控件。
+///
+/// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
+/// 控件本身从不猜测自身几何。
+#[derive(Clone, Debug)]
+pub enum WidgetSpec {
     /// 实现自动固有尺寸测量与发射的声明式 [`UiWidget`]。
     UiWidget(Arc<dyn ErasedUiWidget>),
     /// 扁平按钮。其描述符矩形会被布局后的矩形替换。
@@ -2240,9 +2251,9 @@ impl<'a> ViewBuilder<'a> {
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
             WidgetSpec::ExternalImage { size, .. } => Some(*size),
             WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
-                || desc.rect.height() > 0.0)
+                && desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
-            WidgetSpec::AddressBar { desc, .. } => Some(Vec2::new(
+            WidgetSpec::AddressBar { desc, .. } => (desc.rect.width() > 0.0).then_some(Vec2::new(
                 desc.rect.width(),
                 if desc.rect.height() > 0.0 {
                     desc.rect.height()
@@ -2685,18 +2696,20 @@ impl<'a> ViewBuilder<'a> {
     pub fn tree_view(
         &mut self,
         key: u64,
-        mut desc: unbound_widgets::TreeViewDesc,
+        desc: unbound_widgets::TreeViewDesc,
         state: &mut unbound_widgets::TreeViewState,
     ) -> NodeId {
         let effective_key = self.scoped_key(key);
         let prev_rect = self.widget_rect(effective_key);
-        if desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
-            desc.rect = prev_rect.unwrap_or_else(|| self.viewport_rect());
-        }
-        // 使用上一帧已知布局高度与描述符高度的较大值采样虚拟窗口，避免首帧容器拉伸后漏行；
-        // 最终绘制坐标将在布局求解完成后基于真实 `rect` 重新计算。
+        let has_explicit_size = desc.rect.width() > 0.0 && desc.rect.height() > 0.0;
+        // 使用上一帧已知布局尺寸（或首帧视口尺寸）作为虚拟窗口采样矩形，但不写回 `desc.rect`，
+        // 避免零尺寸弹性树视图被锁死为固定像素尺寸；最终绘制坐标在布局求解后按真实 `rect` 重算。
         let mut query_desc = desc.clone();
-        if let Some(prev) = prev_rect {
+        if !has_explicit_size {
+            query_desc.rect = prev_rect
+                .filter(|r| r.width() > 0.0 && r.height() > 0.0)
+                .unwrap_or_else(|| self.viewport_rect());
+        } else if let Some(prev) = prev_rect {
             if prev.width() > 0.0 && prev.height() > 0.0 {
                 query_desc.rect = Rect::new(
                     prev.origin.x,
@@ -2706,16 +2719,32 @@ impl<'a> ViewBuilder<'a> {
                 );
             }
         }
-        // 若滚轮事件已更新运行时滚动状态，将其同步至树状态以便虚拟窗口命中正确区间。
-        if let Some(wheel_offset) = self
-            .widget_state
-            .borrow()
-            .get::<unbound_widgets::ScrollState>(effective_key)
-            .map(|s| s.offset())
+        // 仅当运行时 `ScrollState.offset().y` 相对上次同步水位发生变化时，
+        // 才将滚轮/滚动条增量同步到 `TreeViewState`，避免覆盖调用方通过 `scroll_by` / `scroll_to_row` 设置的程序化滚动。
         {
-            if (wheel_offset.y - state.scroll_offset()).abs() > 0.01 {
-                let s_desc = query_desc.scroll_desc(state.row_count());
-                state.scroll.jump_to(&s_desc, Vec2::new(0.0, wheel_offset.y));
+            let mut store = self.widget_state.borrow_mut();
+            let wheel_y = store
+                .get::<unbound_widgets::ScrollState>(effective_key)
+                .map(|s| s.offset().y);
+            let last_wheel_y = store
+                .use_state::<TreeViewScrollSync>(effective_key)
+                .last_wheel_y;
+            if let Some(wy) = wheel_y {
+                let delta_y = wy - last_wheel_y;
+                if delta_y.abs() > 0.01 {
+                    let s_desc = query_desc.scroll_desc(state.row_count());
+                    let target_y = state.scroll_offset() + delta_y;
+                    state.scroll.jump_to(&s_desc, Vec2::new(0.0, target_y));
+                    let synced_y = state.scroll_offset();
+                    if let Some(scroll_state) =
+                        store.get_mut::<unbound_widgets::ScrollState>(effective_key)
+                    {
+                        scroll_state.jump_to(&s_desc, Vec2::new(0.0, synced_y));
+                    }
+                    store
+                        .use_state::<TreeViewScrollSync>(effective_key)
+                        .last_wheel_y = synced_y;
+                }
             }
         }
         let scroll_y = state.scroll_offset();
@@ -2737,8 +2766,15 @@ impl<'a> ViewBuilder<'a> {
             })
             .collect();
         let mut node_desc = RawNodeDesc::container();
-        if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
+        if has_explicit_size {
             node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
+        } else {
+            node_desc = node_desc
+                .width(Dim::percent(100.0))
+                .height(Dim::percent(100.0))
+                .flex_grow(1.0);
+            node_desc.min_width = Dim::px(0.0);
+            node_desc.min_height = Dim::px(0.0);
         }
         self.widget(
             key,
@@ -2763,6 +2799,9 @@ impl<'a> ViewBuilder<'a> {
         let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 {
             node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        } else {
+            node_desc = node_desc.width(Dim::percent(100.0)).flex_grow(1.0);
+            node_desc.min_width = Dim::px(0.0);
         }
         let height = if desc.rect.height() > 0.0 {
             desc.rect.height()
@@ -5875,16 +5914,18 @@ impl<A: Application> AppRuntime<A> {
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
                     WidgetSpec::ExternalImage { size, .. } => Some(*size),
                     WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
-                        || desc.rect.height() > 0.0)
+                        && desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
-                    WidgetSpec::AddressBar { desc, .. } => Some(Vec2::new(
-                        desc.rect.width(),
-                        if desc.rect.height() > 0.0 {
-                            desc.rect.height()
-                        } else {
-                            unbound_widgets::ADDRESS_BAR_HEIGHT
-                        },
-                    )),
+                    WidgetSpec::AddressBar { desc, .. } => {
+                        (desc.rect.width() > 0.0).then_some(Vec2::new(
+                            desc.rect.width(),
+                            if desc.rect.height() > 0.0 {
+                                desc.rect.height()
+                            } else {
+                                unbound_widgets::ADDRESS_BAR_HEIGHT
+                            },
+                        ))
+                    }
                     WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
                         || desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -6153,20 +6194,26 @@ impl<A: Application> AppRuntime<A> {
                     }
                     self.collector.push(entry.key, bg);
 
-                    // 计算钳制后的有效滚动偏移，并建立严格对齐最终视口边界的 GPU 裁剪作用域。
+                    // 基于最终布局视口钳制有效滚动偏移，并反向对齐运行时 `ScrollState` 与同步水位，
+                    // 确保程序化滚动与后续滚轮增量从同一基线衔接，同时建立严格对齐视口边界的 GPU 裁剪作用域。
                     let scroll_desc = unbound_widgets::ScrollViewDesc::new(
                         desc.rect,
                         Vec2::new(desc.rect.width(), *content_height),
                     );
-                    let raw_scroll_y = self
-                        .widget_state
-                        .borrow()
-                        .get::<unbound_widgets::ScrollState>(entry.key)
-                        .map(|s| s.offset().y)
-                        .unwrap_or(*scroll_y);
-                    let effective_scroll_y = scroll_desc
-                        .clamp_offset(Vec2::new(0.0, raw_scroll_y))
-                        .y;
+                    let effective_scroll_y = scroll_desc.clamp_offset(Vec2::new(0.0, *scroll_y)).y;
+                    {
+                        let mut store = self.widget_state.borrow_mut();
+                        let scroll_state = store.use_state_or_init::<unbound_widgets::ScrollState>(
+                            entry.key,
+                            unbound_widgets::ScrollState::new,
+                        );
+                        if (scroll_state.offset().y - effective_scroll_y).abs() > 0.01 {
+                            scroll_state.jump_to(&scroll_desc, Vec2::new(0.0, effective_scroll_y));
+                        }
+                        store
+                            .use_state::<TreeViewScrollSync>(entry.key)
+                            .last_wheel_y = effective_scroll_y;
+                    }
                     let clip_node = GpuClipNode::from_aabb([
                         desc.rect.min().x,
                         desc.rect.min().y,
@@ -6182,14 +6229,10 @@ impl<A: Application> AppRuntime<A> {
                     };
                     for snap in rows {
                         // 基于布局求解后的最终 `desc.rect` 重算每行世界坐标，杜绝 `(0, 0)` 原点烘焙溢出。
-                        let row_y =
-                            desc.rect.origin.y + snap.item as f32 * desc.row_height - effective_scroll_y;
-                        let row_rect = Rect::new(
-                            desc.rect.origin.x,
-                            row_y,
-                            desc.rect.size.x,
-                            desc.row_height,
-                        );
+                        let row_y = desc.rect.origin.y + snap.item as f32 * desc.row_height
+                            - effective_scroll_y;
+                        let row_rect =
+                            Rect::new(desc.rect.origin.x, row_y, desc.rect.size.x, desc.row_height);
                         if row_rect.max().y < desc.rect.origin.y
                             || row_rect.origin.y > desc.rect.max().y
                         {
@@ -6232,12 +6275,8 @@ impl<A: Application> AppRuntime<A> {
                             unbound_widgets::ElideMode::End,
                             |candidate| text_ctx.measure_line(candidate, font_size, 400).x,
                         );
-                        let label_rect = Rect::new(
-                            label_x,
-                            row.rect.origin.y,
-                            avail_width,
-                            row.rect.height(),
-                        );
+                        let label_rect =
+                            Rect::new(label_x, row.rect.origin.y, avail_width, row.rect.height());
                         let label = if avail_width > 0.0 && !elided.display.is_empty() {
                             text_ctx.shape_line(
                                 &elided.display,
@@ -6265,8 +6304,7 @@ impl<A: Application> AppRuntime<A> {
                         };
                         let row_state = ControlState {
                             phase: row_phase,
-                            focused: self.ctx.focused == Some(row.row.id)
-                                && self.ctx.focus_visible,
+                            focused: self.ctx.focused == Some(row.row.id) && self.ctx.focus_visible,
                             disabled: state.disabled,
                             selected: snap.selected,
                         };
@@ -6301,10 +6339,7 @@ impl<A: Application> AppRuntime<A> {
                         sb_state.jump_to(&sb_desc, Vec2::new(0.0, effective_scroll_y));
                         sb_state.reveal_scrollbar();
                         let sb_out = unbound_widgets::emit_scroll_view(
-                            entry.key,
-                            &sb_desc,
-                            &sb_state,
-                            state,
+                            entry.key, &sb_desc, &sb_state, state,
                         );
                         sb_out.push_into(&mut self.collector, entry.key ^ 0x5452_4545_0003);
                     }
@@ -6320,21 +6355,16 @@ impl<A: Application> AppRuntime<A> {
                     desc.z = entry.z_base.saturating_add(desc.z);
                     let layout = unbound_widgets::compute_layout(&desc);
 
-                    // 先发射地址栏外框、导航按钮、图标、子热区与无障碍节点（文本层在独立裁剪作用域内绘制）
-                    let chrome_out = unbound_widgets::emit_address_bar_with_visual(
-                        entry.key,
-                        &desc,
-                        bar_state,
-                        state,
-                        &[],
-                        &[],
-                        &unbound_widgets::AddressBarTextVisual::default(),
+                    // 先发射地址栏外框、导航按钮、图标、子热区与无障碍节点（文本与光标/选区/IME 层在独立裁剪作用域内绘制，避免重复占位图元）
+                    let chrome_out = unbound_widgets::emit_address_bar_chrome(
+                        entry.key, &desc, bar_state, state,
                     );
                     self.collector.push(entry.key, chrome_out);
 
-                    // 路径区：施加独立 GPU 裁剪作用域并对面包屑/编辑文本执行尾部省略与光标/选区/IME 发射
+                    // 路径区：施加独立 GPU 裁剪作用域；面包屑执行尾部省略，活动编辑态保留未省略原文并按 `scroll_x` 平移
                     let mut addr_glyphs = Vec::new();
-                    let mut edit_visual = unbound_widgets::AddressBarTextVisual::default().edit_visual;
+                    let mut edit_visual =
+                        unbound_widgets::AddressBarTextVisual::default().edit_visual;
                     if bar_state.editing {
                         let edit_text = if bar_state.edit_core.text().is_empty()
                             && !bar_state.edit_buffer.is_empty()
@@ -6349,25 +6379,24 @@ impl<A: Application> AppRuntime<A> {
                             text_x,
                             layout.address_rect.origin.y,
                             edit_w,
-                            layout.address_rect.size.y.max(24.0),
+                            layout.address_rect.size.y.max(0.0),
+                        );
+                        let scroll_x = bar_state.edit_core.scroll_x();
+                        let scrolled_edit_rect = Rect::new(
+                            edit_rect.origin.x - scroll_x,
+                            edit_rect.origin.y,
+                            edit_rect.size.x + scroll_x.max(0.0),
+                            edit_rect.size.y,
                         );
                         if edit_w > 0.0 && !edit_text.is_empty() {
-                            let elided = unbound_widgets::elide_text_with_measure(
+                            addr_glyphs.extend(text_ctx.shape_line(
                                 edit_text,
-                                edit_w,
-                                unbound_widgets::ElideMode::End,
-                                |candidate| text_ctx.measure_line(candidate, 13.0, 400).x,
-                            );
-                            if !elided.display.is_empty() {
-                                addr_glyphs.extend(text_ctx.shape_line(
-                                    &elided.display,
-                                    edit_rect,
-                                    13.0,
-                                    400,
-                                    unbound_widgets::AlignX::Left,
-                                    unbound_widgets::AlignY::Middle,
-                                ));
-                            }
+                                scrolled_edit_rect,
+                                13.0,
+                                400,
+                                unbound_widgets::AlignX::Left,
+                                unbound_widgets::AlignY::Middle,
+                            ));
                         }
                         edit_visual = unbound_widgets::compute_text_edit_visual(
                             &bar_state.edit_core,
@@ -6437,36 +6466,56 @@ impl<A: Application> AppRuntime<A> {
                             let left_x = layout
                                 .search_icon_rect
                                 .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
-                            let right_x = layout
-                                .search_clear_rect
-                                .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                            let show_clear = !state.disabled && !is_placeholder;
+                            let right_x = if show_clear {
+                                layout
+                                    .search_clear_rect
+                                    .map_or(sr.max().x - 6.0, |cr| cr.origin.x - 6.0)
+                            } else {
+                                sr.max().x - 6.0
+                            };
                             let search_w = (right_x - left_x).max(0.0);
-                            let search_text_rect = Rect::new(
-                                left_x,
-                                sr.origin.y,
-                                search_w,
-                                sr.size.y.max(24.0),
-                            );
+                            let search_text_rect =
+                                Rect::new(left_x, sr.origin.y, search_w, sr.size.y.max(0.0));
                             if search_w > 0.0 && !display.is_empty() {
-                                let elided = unbound_widgets::elide_text_with_measure(
-                                    display,
-                                    search_w,
-                                    unbound_widgets::ElideMode::End,
-                                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
-                                );
-                                if !elided.display.is_empty() {
-                                    let shaped = text_ctx.shape_line(
-                                        &elided.display,
-                                        search_text_rect,
+                                if bar_state.search_focused && !is_placeholder {
+                                    // 搜索聚焦输入态保留未省略原文并按 `scroll_x` 平移，避免与光标/选区错位。
+                                    let scroll_x = bar_state.search_core.scroll_x();
+                                    let scrolled_search_rect = Rect::new(
+                                        search_text_rect.origin.x - scroll_x,
+                                        search_text_rect.origin.y,
+                                        search_text_rect.size.x + scroll_x.max(0.0),
+                                        search_text_rect.size.y,
+                                    );
+                                    search_primary_glyphs.extend(text_ctx.shape_line(
+                                        search_text,
+                                        scrolled_search_rect,
                                         12.5,
                                         400,
                                         unbound_widgets::AlignX::Left,
                                         unbound_widgets::AlignY::Middle,
+                                    ));
+                                } else {
+                                    let elided = unbound_widgets::elide_text_with_measure(
+                                        display,
+                                        search_w,
+                                        unbound_widgets::ElideMode::End,
+                                        |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
                                     );
-                                    if is_placeholder {
-                                        search_placeholder_glyphs.extend(shaped);
-                                    } else {
-                                        search_primary_glyphs.extend(shaped);
+                                    if !elided.display.is_empty() {
+                                        let shaped = text_ctx.shape_line(
+                                            &elided.display,
+                                            search_text_rect,
+                                            12.5,
+                                            400,
+                                            unbound_widgets::AlignX::Left,
+                                            unbound_widgets::AlignY::Middle,
+                                        );
+                                        if is_placeholder {
+                                            search_placeholder_glyphs.extend(shaped);
+                                        } else {
+                                            search_primary_glyphs.extend(shaped);
+                                        }
                                     }
                                 }
                             }
@@ -8167,7 +8216,10 @@ mod tests {
             fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
                 v.column(1, |col| {
                     // 顶部 80px 占位栏，模拟标题栏与工具栏
-                    col.button(2, ButtonDesc::new(Rect::new(0.0, 0.0, 240.0, 80.0), "TopBar"));
+                    col.button(
+                        2,
+                        ButtonDesc::new(Rect::new(0.0, 0.0, 240.0, 80.0), "TopBar"),
+                    );
                     // 刻意传入 (0, 0) 原点描述符，验证发射阶段按布局后的真实原点重算行矩形
                     col.tree_view(
                         12,
@@ -8291,9 +8343,7 @@ mod tests {
     #[test]
     fn address_bar_defaults_height_clips_path_and_search_and_keeps_search_text_inside() {
         use unbound_theme::Token;
-        use unbound_widgets::{
-            AddressBarDesc, AddressBarState, PathSegment, ADDRESS_BAR_HEIGHT,
-        };
+        use unbound_widgets::{AddressBarDesc, AddressBarState, PathSegment, ADDRESS_BAR_HEIGHT};
 
         struct AddressBarTestApp {
             bar_state: AddressBarState,
@@ -8396,6 +8446,246 @@ mod tests {
         assert!(
             saw_placeholder_glyph,
             "empty search box must render placeholder with Token::TEXT_SECONDARY"
+        );
+    }
+
+    #[test]
+    fn zero_sized_address_bar_and_tree_view_fill_flex_parent_and_shrink_on_resize() {
+        use unbound_widgets::{
+            AddressBarDesc, AddressBarState, TreeViewDensity, TreeViewDesc, TreeViewState,
+            ADDRESS_BAR_HEIGHT,
+        };
+        use unbound_world::TreeRow;
+
+        struct FlexLayoutApp {
+            tree_state: RefCell<TreeViewState>,
+            bar_state: AddressBarState,
+        }
+        impl Application for FlexLayoutApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.container(
+                    1,
+                    RawNodeDesc::container()
+                        .width(Dim::percent(100.0))
+                        .height(Dim::percent(100.0)),
+                    |root| {
+                        // 横向 flex 容器中的零宽地址栏应撑满剩余宽度，不得塌陷为 0px
+                        root.container(
+                            2,
+                            RawNodeDesc::container()
+                                .row()
+                                .width(Dim::percent(100.0))
+                                .height(Dim::px(40.0)),
+                            |bar_row| {
+                                bar_row.button(
+                                    3,
+                                    ButtonDesc::new(Rect::new(0.0, 0.0, 100.0, 32.0), "Side"),
+                                );
+                                bar_row.address_bar(
+                                    4,
+                                    AddressBarDesc::new(Rect::ZERO, vec!["C:".to_owned()]),
+                                    &self.bar_state,
+                                );
+                            },
+                        );
+                        // 弹性主区内的零尺寸树视图应严格匹配父容器尺寸并随窗口缩放收缩
+                        root.container(
+                            5,
+                            RawNodeDesc::container()
+                                .width(Dim::percent(100.0))
+                                .flex_grow(1.0),
+                            |body| {
+                                body.tree_view(
+                                    6,
+                                    TreeViewDesc::new(Rect::ZERO)
+                                        .with_density(TreeViewDensity::Compact),
+                                    &mut self.tree_state.borrow_mut(),
+                                );
+                            },
+                        );
+                    },
+                );
+            }
+        }
+
+        let mut tree = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        let roots: Vec<TreeRow> = (1..=6).map(|id| TreeRow::new(id, 0, false)).collect();
+        tree.rebuild(&roots, |_| Vec::new());
+
+        let mut rt = AppRuntime::new(
+            FlexLayoutApp {
+                tree_state: RefCell::new(tree),
+                bar_state: AddressBarState::new(),
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        let _ = rt.frame(0.0);
+
+        let bar_rect = rt.widget_rect(4).expect("address bar laid out");
+        assert!(
+            bar_rect.width() >= 680.0,
+            "zero-width address bar in flex row must expand to remaining width, got {}",
+            bar_rect.width()
+        );
+        assert!((bar_rect.height() - ADDRESS_BAR_HEIGHT).abs() < 0.5);
+
+        let tree_rect_large = rt.widget_rect(6).expect("tree view laid out");
+        assert!((tree_rect_large.width() - 800.0).abs() < 1.0);
+        assert!(
+            (tree_rect_large.height() - 560.0).abs() < 2.0,
+            "zero-size tree view must fill remaining height, got {}",
+            tree_rect_large.height()
+        );
+
+        // 缩小窗口后，弹性树视图与地址栏均必须随之收缩，不能被上一帧尺寸锁死
+        rt.resize(Vec2::new(500.0, 320.0));
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+
+        let bar_rect_small = rt.widget_rect(4).expect("address bar resized");
+        assert!(
+            bar_rect_small.width() <= 405.0 && bar_rect_small.width() >= 380.0,
+            "address bar must shrink with resized row, got {}",
+            bar_rect_small.width()
+        );
+        let tree_rect_small = rt.widget_rect(6).expect("tree view resized");
+        assert!(
+            tree_rect_small.width() <= 501.0 && tree_rect_small.height() <= 282.0,
+            "zero-size tree view must shrink on resize, got {:?}",
+            tree_rect_small
+        );
+    }
+
+    #[test]
+    fn tree_view_wheel_sync_preserves_programmatic_scroll_and_applies_wheel_delta() {
+        use unbound_widgets::{TreeViewDensity, TreeViewDesc, TreeViewState};
+        use unbound_world::TreeRow;
+
+        struct ScrollSyncApp {
+            tree_state: RefCell<TreeViewState>,
+        }
+        impl Application for ScrollSyncApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.tree_view(
+                    20,
+                    TreeViewDesc::new(Rect::new(0.0, 0.0, 220.0, 140.0))
+                        .with_density(TreeViewDensity::Compact),
+                    &mut self.tree_state.borrow_mut(),
+                );
+            }
+        }
+
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 220.0, 140.0))
+            .with_density(TreeViewDensity::Compact);
+        let mut tree = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        let roots: Vec<TreeRow> = (1..=20).map(|id| TreeRow::new(id, 0, false)).collect();
+        tree.rebuild(&roots, |_| Vec::new());
+
+        let mut rt = AppRuntime::new(
+            ScrollSyncApp {
+                tree_state: RefCell::new(tree),
+            },
+            Vec2::new(400.0, 300.0),
+        );
+        let _ = rt.frame(0.0);
+
+        // 先触发一次滚轮滚动，建立运行时 ScrollState
+        rt.wheel(Vec2::new(60.0, 60.0), Vec2::new(0.0, -1.0));
+        let _ = rt.frame(0.0);
+        let after_wheel = rt.app().tree_state.borrow().scroll_offset();
+        assert!(
+            after_wheel > 30.0,
+            "wheel event must scroll tree view, got {after_wheel}"
+        );
+
+        // 随后调用方通过程序化 scroll_by 滚动到更深位置，下一帧重绘不得被旧滚轮值覆盖
+        let _ = rt.app().tree_state.borrow_mut().scroll_by(&desc, 120.0);
+        let expected_prog = rt.app().tree_state.borrow().scroll_offset();
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        let after_prog_frame = rt.app().tree_state.borrow().scroll_offset();
+        assert!(
+            (after_prog_frame - expected_prog).abs() < 0.5,
+            "programmatic scroll must not be overwritten by stale wheel offset: expected {expected_prog}, got {after_prog_frame}"
+        );
+
+        // 再次触发滚轮时应从程序化偏移基线继续累加
+        rt.wheel(Vec2::new(60.0, 60.0), Vec2::new(0.0, -1.0));
+        let _ = rt.frame(0.0);
+        let after_second_wheel = rt.app().tree_state.borrow().scroll_offset();
+        assert!(
+            after_second_wheel > after_prog_frame + 30.0,
+            "subsequent wheel delta must accumulate on top of programmatic offset: {after_second_wheel} <= {after_prog_frame}"
+        );
+    }
+
+    #[test]
+    fn address_bar_active_edit_does_not_elide_and_shifts_by_scroll_x() {
+        use unbound_widgets::{AddressBarDesc, AddressBarState, ADDRESS_BAR_HEIGHT};
+
+        struct EditBarApp {
+            bar_state: AddressBarState,
+        }
+        impl Application for EditBarApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                let desc = AddressBarDesc::new(
+                    Rect::new(0.0, 0.0, 320.0, ADDRESS_BAR_HEIGHT),
+                    vec!["C:".to_owned(), "Workspace".to_owned()],
+                );
+                v.address_bar(40, desc, &self.bar_state);
+            }
+        }
+
+        let long_path = "C:/VeryLongWorkspaceDirectory/SubFolderAlpha/SubFolderBeta/TargetFile.rs";
+        let mut bar_state = AddressBarState::new();
+        bar_state.begin_edit(long_path);
+        bar_state.edit_core.set_scroll_x(40.0);
+
+        let mut rt = AppRuntime::new(EditBarApp { bar_state }, Vec2::new(400.0, 120.0));
+        let _ = rt.frame(0.0);
+
+        let scene = rt.scene();
+        let (addr_start, addr_end) = scene
+            .node_spans
+            .get(&(40u64 ^ 0x4142_5458_0001))
+            .copied()
+            .expect("address edit text layer emitted");
+        let prims = &scene.primitives[addr_start as usize..addr_end as usize];
+        // 活动编辑态不执行省略，应发射完整原文对应字形并按 scroll_x 左移起点（受 clip 裁剪）
+        let bar_rect = rt.widget_rect(40).expect("address bar laid out");
+        let layout = unbound_widgets::compute_layout(&AddressBarDesc::new(
+            bar_rect,
+            vec!["C:".to_owned(), "Workspace".to_owned()],
+        ));
+        let unshifted_text_x = layout.root_icon_rect.max().x + 6.0;
+        let glyph_count = prims
+            .iter()
+            .filter(|p| p.size[1] > 4.0 && p.size[0] > 2.0)
+            .count();
+        assert!(
+            glyph_count >= 25,
+            "active edit text must not be elided down to narrow width, got {glyph_count} glyph prims"
+        );
+        assert!(
+            prims
+                .iter()
+                .any(|p| p.local_pos[0] < unshifted_text_x - 20.0 && p.clip_idx != CLIP_NONE),
+            "active edit glyphs must shift left by scroll_x under clip"
         );
     }
 }

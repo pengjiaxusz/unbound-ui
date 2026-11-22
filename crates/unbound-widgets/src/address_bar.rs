@@ -1130,8 +1130,9 @@ where
     };
 
     let caret_x = x_at(edit.cursor(), &mut measure_width);
-    let caret_h = (text_rect.size.y - 12.0).max(12.0).min(text_rect.size.y);
-    let caret_y = text_rect.origin.y + (text_rect.size.y - caret_h) * 0.5;
+    let rect_h = text_rect.size.y.max(0.0);
+    let caret_h = (rect_h - 12.0).max(12.0).min(rect_h);
+    let caret_y = text_rect.origin.y + (rect_h - caret_h) * 0.5;
     let caret = Rect::new(caret_x, caret_y, 1.5, caret_h);
 
     let selection = edit.selection().and_then(|(start, end)| {
@@ -1301,9 +1302,31 @@ pub fn emit_address_bar(
     )
 }
 
+/// 发射双模复合地址栏外框、导航按钮、图标、子热区与无障碍节点（不含文本与光标/选区/IME 占位图元）。
+///
+/// 适用于宿主在独立 `push_clip` 裁剪层中通过 [`emit_address_bar_text_layer`] 发射文本与编辑叠加层的场景，
+/// 避免在底层外框中重复发射不可见的占位图元。
+#[must_use]
+pub fn emit_address_bar_chrome(
+    node: u64,
+    desc: &AddressBarDesc,
+    state: &AddressBarState,
+    control: ControlState,
+) -> WidgetOutput {
+    emit_address_bar_inner(
+        node,
+        desc,
+        state,
+        control,
+        &[],
+        &[],
+        &AddressBarTextVisual::default(),
+        false,
+    )
+}
+
 /// 发射双模复合地址栏，支持区分主文本与次级色占位文本字形，以及编辑态/搜索框的光标、选区与 IME 预编辑下划线。
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn emit_address_bar_with_visual(
     node: u64,
     desc: &AddressBarDesc,
@@ -1312,6 +1335,29 @@ pub fn emit_address_bar_with_visual(
     primary_glyphs: &[GlyphQuad],
     placeholder_glyphs: &[GlyphQuad],
     visual: &AddressBarTextVisual,
+) -> WidgetOutput {
+    emit_address_bar_inner(
+        node,
+        desc,
+        state,
+        control,
+        primary_glyphs,
+        placeholder_glyphs,
+        visual,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn emit_address_bar_inner(
+    node: u64,
+    desc: &AddressBarDesc,
+    state: &AddressBarState,
+    control: ControlState,
+    primary_glyphs: &[GlyphQuad],
+    placeholder_glyphs: &[GlyphQuad],
+    visual: &AddressBarTextVisual,
+    emit_text_overlays: bool,
 ) -> WidgetOutput {
     let layout = compute_layout(desc);
     let z = desc.z;
@@ -1574,61 +1620,71 @@ pub fn emit_address_bar_with_visual(
     }
 
     // 4. 编辑态/搜索框选区高亮、主文本与次级占位文本字形、光标与 IME 预编辑下划线
-    let edit_active = state.editing && !control.disabled;
-    let search_active =
-        layout.search_rect.is_some() && !layout.search_collapsed && state.search_focused && !control.disabled;
+    if emit_text_overlays {
+        let edit_active = state.editing && !control.disabled;
+        let search_active = layout.search_rect.is_some()
+            && !layout.search_collapsed
+            && state.search_focused
+            && !control.disabled;
 
-    push_selection_overlay(&visual.edit_visual, edit_active, control.disabled, z + 2, &mut primitives);
-    if layout.search_rect.is_some() {
         push_selection_overlay(
-            &visual.search_visual,
-            search_active,
+            &visual.edit_visual,
+            edit_active,
             control.disabled,
             z + 2,
             &mut primitives,
         );
-    }
+        if layout.search_rect.is_some() {
+            push_selection_overlay(
+                &visual.search_visual,
+                search_active,
+                control.disabled,
+                z + 2,
+                &mut primitives,
+            );
+        }
 
-    emit_glyphs(
-        primary_glyphs,
-        if control.disabled {
-            Token::TEXT_DISABLED
-        } else {
-            Token::TEXT_PRIMARY
-        },
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
-    emit_glyphs(
-        placeholder_glyphs,
-        if control.disabled {
-            Token::TEXT_DISABLED
-        } else {
-            Token::TEXT_SECONDARY
-        },
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
+        emit_glyphs(
+            primary_glyphs,
+            if control.disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            },
+            z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+        emit_glyphs(
+            placeholder_glyphs,
+            if control.disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            },
+            z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
 
-    push_caret_and_preedit_overlays(
-        &visual.edit_visual,
-        edit_active,
-        state.edit_core.preedit().is_some(),
-        control.disabled,
-        z + 2,
-        &mut primitives,
-    );
-    if layout.search_rect.is_some() {
         push_caret_and_preedit_overlays(
-            &visual.search_visual,
-            search_active,
-            state.search_core.preedit().is_some(),
+            &visual.edit_visual,
+            edit_active,
+            state.edit_core.preedit().is_some(),
             control.disabled,
             z + 2,
             &mut primitives,
         );
+        if layout.search_rect.is_some() {
+            push_caret_and_preedit_overlays(
+                &visual.search_visual,
+                search_active,
+                state.search_core.preedit().is_some(),
+                control.disabled,
+                z + 2,
+                &mut primitives,
+            );
+        }
     }
     primitives.push(focus_ring(
         addr_r.inflate(2.0),
@@ -2276,5 +2332,40 @@ mod tests {
                     && p.opacity() > 0.5),
             "active edit state must emit visible caret"
         );
+    }
+
+    #[test]
+    fn compute_text_edit_visual_clamps_negative_height_and_chrome_skips_overlay_placeholders() {
+        let state = AddressBarState::new();
+        let neg_rect = Rect::new(10.0, 20.0, 120.0, -8.0);
+        let visual = compute_text_edit_visual(&state.edit_core, neg_rect, true, |_| 0.0);
+        assert!(
+            visual.caret.size.y >= 0.0,
+            "caret height must never be negative, got {}",
+            visual.caret.size.y
+        );
+        assert!((visual.caret.origin.y - 20.0).abs() < 0.01);
+
+        let desc = AddressBarDesc::new(
+            Rect::new(0.0, 0.0, 760.0, ADDRESS_BAR_HEIGHT),
+            vec!["C:".to_owned(), "Users".to_owned()],
+        )
+        .with_search("Search");
+        let full = emit_address_bar_with_visual(
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &[],
+            &[],
+            &AddressBarTextVisual::default(),
+        );
+        let chrome = emit_address_bar_chrome(1, &desc, &state, ControlState::default());
+        assert_eq!(
+            chrome.primitives.len() + 6,
+            full.primitives.len(),
+            "chrome output must omit the 6 redundant text overlay placeholder primitives"
+        );
+        assert_eq!(chrome.sub_hits.len(), full.sub_hits.len());
     }
 }

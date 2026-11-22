@@ -434,9 +434,9 @@ use unbound_world::{NodeId, UiWorld};
 
 pub use address_bar::{
     address_bar_sub_node, compute_layout, compute_text_edit_visual, emit_address_bar,
-    emit_address_bar_text_layer, emit_address_bar_with_visual, AddressBarDesc, AddressBarEvent,
-    AddressBarHitKind, AddressBarLayout, AddressBarState, AddressBarTextVisual, PathSegment,
-    SegmentLayout, ADDRESS_BAR_HEIGHT,
+    emit_address_bar_chrome, emit_address_bar_text_layer, emit_address_bar_with_visual,
+    AddressBarDesc, AddressBarEvent, AddressBarHitKind, AddressBarLayout, AddressBarState,
+    AddressBarTextVisual, PathSegment, SegmentLayout, ADDRESS_BAR_HEIGHT,
 };
 pub use copy_button::{
     emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,

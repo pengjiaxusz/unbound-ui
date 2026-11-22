@@ -1,0 +1,59 @@
+thread 'optimize module 2oj808gnw9gir1ppvzijgc10t' panicked at /rustc-dev/a69a63265cfd9e006d43137f98301b8d274ad4c9/compiler/rustc_codegen_ssa\src\back\write.rs:862:21:
+Error writing pre-lto-bitcode file `\\?\Z:\unbound-ui\target\debug\incremental\unbound_app-0zx9ijmeaag97\s-hoef9ir2od-1akcto0-working\2oj808gnw9gir1ppvzijgc10t.pre-lto.bc`: 磁盘空间不足。 (os error 112)
+stack backtrace:
+   0:     0x7ffd877b5d8f - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ffd877b5d8f - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ffd877b5d8f - std::backtrace::Backtrace::create
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\backtrace.rs:331
+   3:     0x7ffd877b5cda - std::backtrace::Backtrace::force_capture
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\backtrace.rs:312
+   4:     0x7ffd8942e7d5 - core[cd709440cd040aa1]::slice::sort::unstable::heapsort::heapsort::<((rustc_lint_defs[e34038af262da622]::Level, &str), usize), <((rustc_lint_defs[e34038af262da622]::Level, &str), usize) as core[cd709440cd040aa1]::cmp::PartialOrd>::lt>
+   5:     0x7ffd877ca6b4 - std::panicking::panic_with_hook
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\panicking.rs:819
+   6:     0x7ffd877adcae - std::panicking::panic_handler::closure$0
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\panicking.rs:685
+   7:     0x7ffd877aa15f - std::sys::backtrace::__rust_end_short_backtrace<std::panicking::panic_handler::closure_env$0,never$>
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\sys\backtrace.rs:182
+   8:     0x7ffd877ae79e - std::panicking::panic_handler
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\panicking.rs:676
+   9:     0x7ffd8b8a8a0d - core::panicking::panic_fmt
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/core\src\panicking.rs:80
+  10:     0x7ffd83f589fb - std[275a9413675456d5]::sys::backtrace::__rust_begin_short_backtrace::<rustc_codegen_ssa[eeeaca380fc68b18]::back::write::spawn_work<rustc_codegen_llvm[3c27f0eb666cf5db]::LlvmCodegenBackend>::{closure#0}, ()>
+  11:     0x7ffd83f6a7b9 - RINvNtNtNtNtCshDyaaFUO7lt_4core5slice4sort6stable9quicksort9quicksortTNtNtCshZeGcpa4EEh_5alloc6string6StringB16_ENCINvMNtB1a_5sliceSB15_7sort_byNCINvXs1o_NtNtNtB1a_11collections5btree3mapINtB2s_8BTreeMapB16_B16_EINtNtNtNtBa_4iter6traits7collect12FromIterat
+  12:     0x7ffd877d53d3 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\sys\thread\windows.rs:58
+  13:     0x7ffeb82e0033 - BaseThreadInitThunk
+  14:     0x7ffeb90274a0 - RtlUserThreadStart
+
+
+rustc version: 1.100.0-nightly (a69a63265 2026-09-03)
+platform: x86_64-pc-windows-msvcthread 'coordinator' panicked at /rustc-dev/a69a63265cfd9e006d43137f98301b8d274ad4c9/compiler/rustc_codegen_ssa\src\back\write.rs:1731:29:
+/rustc-dev/a69a63265cfd9e006d43137f98301b8d274ad4c9/compiler/rustc_codegen_ssa\src\back\write.rs:1731:29: worker thread panicked
+stack backtrace:
+   0:     0x7ffd877b5d8f - std::backtrace_rs::backtrace::win64::trace
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\..\..\backtrace\src\backtrace\win64.rs:85
+   1:     0x7ffd877b5d8f - std::backtrace_rs::backtrace::trace_unsynchronized
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\..\..\backtrace\src\backtrace\mod.rs:66
+   2:     0x7ffd877b5d8f - std::backtrace::Backtrace::create
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\backtrace.rs:331
+   3:     0x7ffd877b5cda - std::backtrace::Backtrace::force_capture
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\backtrace.rs:312
+   4:     0x7ffd8942e7d5 - core[cd709440cd040aa1]::slice::sort::unstable::heapsort::heapsort::<((rustc_lint_defs[e34038af262da622]::Level, &str), usize), <((rustc_lint_defs[e34038af262da622]::Level, &str), usize) as core[cd709440cd040aa1]::cmp::PartialOrd>::lt>
+   5:     0x7ffd877ca6b4 - std::panicking::panic_with_hook
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\panicking.rs:819
+   6:     0x7ffd8b437e9c - <rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::exec::cold_call::<<rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::incr_result_hashing::{closure#0}>
+   7:     0x7ffd8b41a5c9 - std[275a9413675456d5]::sys::backtrace::__rust_end_short_backtrace::<std[275a9413675456d5]::panicking::begin_panic<alloc[d183853d06dab5c3]::string::String>::{closure#0}, !>
+   8:     0x7ffd8b4108e3 - std[275a9413675456d5]::panicking::begin_panic::<alloc[d183853d06dab5c3]::string::String>
+   9:     0x7ffd8b438446 - <rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::exec::cold_call::<<rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::incr_result_hashing::{closure#0}>
+  10:     0x7ffd8b4388e5 - <rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::exec::cold_call::<<rustc_data_structures[f2274624cf39a9d1]::profiling::SelfProfilerRef>::incr_result_hashing::{closure#0}>
+  11:     0x7ffd8b4220a6 - rustc_middle[68f5cd679e16818c]::util::bug::span_bug_fmt::<rustc_span[4b76680385aa8336]::span_encoding::Span>
+  12:     0x7ffd8b480e86 - rustc_middle[68f5cd679e16818c]::util::bug::bug_fmt
+  13:     0x7ffd878b22fa - <hashbrown[b809b59558cd3e18]::raw::RawTable<((&rustc_codegen_llvm[3c27f0eb666cf5db]::llvm::ffi::Metadata, usize), &rustc_codegen_llvm[3c27f0eb666cf5db]::llvm::ffi::Metadata)>>::reserve_rehash::<hashbrown[b809b59558cd3e18]::map::make_hasher<(&rustc_codegen_llvm[3c27f0eb666cf5db]::llvm::ffi::Metadata, usize), &rustc_codegen_llvm[3c27f0eb666cf5db]::llvm::ffi::Metadata, rustc_hash[2af00fa46f0ce58d]::FxBuildHasher>::{closure#0}>
+  14:     0x7ffd83f5a03d - RINvNtNtCs3ntJ5kfyt9h_3std3sys9backtrace28___rust_begin_short_backtraceNCINvNtNtCskvKwqX1JcWi_17rustc_codegen_ssa4back5write20start_executing_workNtCs5acXIax5GoV_18rustc_codegen_llvm18LlvmCodegenBackendEs1_0INtNtCshDyaaFUO7lt_4core6result6ResultINtB1c_15Ma
+  15:     0x7ffd83f6ae6a - RINvNtNtNtNtCshDyaaFUO7lt_4core5slice4sort6stable9quicksort9quicksortTNtNtCshZeGcpa4EEh_5alloc6string6StringB16_ENCINvMNtB1a_5sliceSB15_7sort_byNCINvXs1o_NtNtNtB1a_11collections5btree3mapINtB2s_8BTreeMapB16_B16_EINtNtNtNtBa_4iter6traits7collect12FromIterat
+  16:     0x7ffd877d53d3 - std::sys::thread::windows::impl$0::new::thread_start
+                               at /rustc/a69a63265cfd9e006d43137f98301b8d274ad4c9/library/std\src\sys\thread\windows.rs:58
+  17:     0x7ffeb82e0033 - BaseThreadInitThunk
+  18:     0x7ffeb90274a0 - RtlUserThreadStart

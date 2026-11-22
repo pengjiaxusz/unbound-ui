@@ -2412,25 +2412,25 @@ impl UiWidget for AddressBarDesc {
                 text_x,
                 layout.address_rect.origin.y,
                 edit_w,
-                layout.address_rect.size.y,
+                layout.address_rect.size.y.max(0.0),
+            );
+            // 活动编辑态保留未省略原文并按 `scroll_x` 平移起点，确保字形与光标/选区坐标严格一致。
+            let scroll_x = state.edit_core.scroll_x();
+            let scrolled_edit_r = Rect::new(
+                edit_r.origin.x - scroll_x,
+                edit_r.origin.y,
+                edit_r.size.x + scroll_x.max(0.0),
+                edit_r.size.y,
             );
             if edit_w > 0.0 && !edit_text.is_empty() {
-                let elided = crate::elided_text::elide_text_with_measure(
+                primary_glyphs.extend(text_ctx.shape_line(
                     edit_text,
-                    edit_w,
-                    crate::elided_text::ElideMode::End,
-                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
-                );
-                if !elided.display.is_empty() {
-                    primary_glyphs.extend(text_ctx.shape_line(
-                        &elided.display,
-                        edit_r,
-                        12.5,
-                        400,
-                        AlignX::Left,
-                        AlignY::Middle,
-                    ));
-                }
+                    scrolled_edit_r,
+                    12.5,
+                    400,
+                    AlignX::Left,
+                    AlignY::Middle,
+                ));
             }
             visual.edit_visual = compute_text_edit_visual(
                 &state.edit_core,
@@ -2475,31 +2475,55 @@ impl UiWidget for AddressBarDesc {
                 let left_x = layout
                     .search_icon_rect
                     .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
-                let right_x = layout
-                    .search_clear_rect
-                    .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                let show_clear = !control.disabled && !is_placeholder;
+                let right_x = if show_clear {
+                    layout
+                        .search_clear_rect
+                        .map_or(sr.max().x - 6.0, |cr| cr.origin.x - 6.0)
+                } else {
+                    sr.max().x - 6.0
+                };
                 let search_w = (right_x - left_x).max(0.0);
-                let text_r = Rect::new(left_x, sr.origin.y, search_w, sr.size.y);
+                let text_r = Rect::new(left_x, sr.origin.y, search_w, sr.size.y.max(0.0));
                 if search_w > 0.0 && !display.is_empty() {
-                    let elided = crate::elided_text::elide_text_with_measure(
-                        display,
-                        search_w,
-                        crate::elided_text::ElideMode::End,
-                        |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
-                    );
-                    if !elided.display.is_empty() {
-                        let shaped = text_ctx.shape_line(
-                            &elided.display,
-                            text_r,
+                    if state.search_focused && !is_placeholder {
+                        // 搜索聚焦输入态保留未省略原文并按 `scroll_x` 平移，避免与光标/选区错位。
+                        let scroll_x = state.search_core.scroll_x();
+                        let scrolled_r = Rect::new(
+                            text_r.origin.x - scroll_x,
+                            text_r.origin.y,
+                            text_r.size.x + scroll_x.max(0.0),
+                            text_r.size.y,
+                        );
+                        primary_glyphs.extend(text_ctx.shape_line(
+                            search_text,
+                            scrolled_r,
                             12.0,
                             400,
                             AlignX::Left,
                             AlignY::Middle,
+                        ));
+                    } else {
+                        let elided = crate::elided_text::elide_text_with_measure(
+                            display,
+                            search_w,
+                            crate::elided_text::ElideMode::End,
+                            |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
                         );
-                        if is_placeholder {
-                            placeholder_glyphs.extend(shaped);
-                        } else {
-                            primary_glyphs.extend(shaped);
+                        if !elided.display.is_empty() {
+                            let shaped = text_ctx.shape_line(
+                                &elided.display,
+                                text_r,
+                                12.0,
+                                400,
+                                AlignX::Left,
+                                AlignY::Middle,
+                            );
+                            if is_placeholder {
+                                placeholder_glyphs.extend(shaped);
+                            } else {
+                                primary_glyphs.extend(shaped);
+                            }
                         }
                     }
                 }
