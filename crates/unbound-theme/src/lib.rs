@@ -200,6 +200,12 @@ impl Token {
     /// 与 [`Token::CARD_BORDER`] 不同支：卡片描边是 `CardStrokeColorDefault`（约 9%），
     /// 导航内容区用的是 6% 的 `ControlStrokeColorDefault`，浅色实测 `#E5E5E5`。
     pub const NAV_CONTENT_STROKE: Self = Self(99);
+    /// WinUI `ControlStrokeColorDefault` 的**半透明**形态：浅色 6% 黑、深色 7% 白。
+    ///
+    /// 压在不同底色上会自然得出参考图里的各个实测值：浅色压 `#F3F3F3` 得 `#E5E5E5`、
+    /// 压 `#FFFFFF` 得 `#F0F0F0`、压 `#FBFBFB` 得 `#ECECEC`；深色压 `#1F1F1F` 得 `#303030`。
+    /// 因此同一条 1px 描边既能当卡片边框、又能当卡片内部的细分隔线，不必按底色各拆一支。
+    pub const CONTROL_STROKE_SUBTLE: Self = Self(100);
 
     // ---- 禁用 / 输入 / 编辑状态（64..=73）--------------------------------
 
@@ -365,7 +371,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 99] = [
+pub const TOKENS: [Token; 100] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -431,6 +437,7 @@ pub const TOKENS: [Token; 99] = [
     Token::CARD_BORDER,
     Token::NAV_CONTENT_BG,
     Token::NAV_CONTENT_STROKE,
+    Token::CONTROL_STROKE_SUBTLE,
     Token::CONTROL_DISABLED_BG,
     Token::CONTROL_DISABLED_BORDER,
     Token::CONTROL_DISABLED_THUMB,
@@ -659,6 +666,7 @@ impl ThemeSet {
                     Token::NAV_CONTENT_STROKE,
                     Color::from_srgb8(229, 229, 229, 255),
                 ),
+                (Token::CONTROL_STROKE_SUBTLE, Color::from_srgb8(0, 0, 0, 15)),
                 (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(241, 242, 246, 255),
@@ -815,6 +823,10 @@ impl ThemeSet {
                     Color::from_srgb8(29, 29, 29, 255),
                 ),
                 (
+                    Token::CONTROL_STROKE_SUBTLE,
+                    Color::from_srgb8(255, 255, 255, 18),
+                ),
+                (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(34, 36, 43, 255),
                 ),
@@ -966,6 +978,7 @@ impl ThemeSet {
             (Token::CARD_BORDER, Color::WHITE),
             (Token::NAV_CONTENT_BG, Color::BLACK),
             (Token::NAV_CONTENT_STROKE, Color::WHITE),
+            (Token::CONTROL_STROKE_SUBTLE, Color::WHITE),
             (
                 Token::CONTROL_DISABLED_BG,
                 Color::from_srgb8(32, 32, 32, 255),

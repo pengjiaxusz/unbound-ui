@@ -2716,14 +2716,14 @@ pub fn emit_canonical_calendar_view_fixture(
     out.primitives.push(primitive::surface(
         Rect::new(total_r.origin.x, total_r.origin.y + 50.0, w, 1.0),
         0.0,
-        Token::new(340),
+        Token::CONTROL_STROKE_SUBTLE,
         z + 1,
     ));
     out.primitives.push(primitive::outlined(
         total_r,
         4.0,
         Token::NONE,
-        Token::new(340),
+        Token::CONTROL_STROKE_SUBTLE,
         1.0,
         0.0,
         z,
@@ -2817,9 +2817,10 @@ pub fn emit_canonical_calendar_view_fixture(
     for (col, &day_name) in CANONICAL_CALENDAR_DAYS_HEADER.iter().enumerate() {
         let cell_x = total_r.origin.x + 2.0 + col as f32 * col_w;
         // WinUI CalendarView 在 300px 宽度下，表头槽位较窄导致较宽的 Mo / We 自动折为两行。
+        // 折行后整块比单行标签低 3px（参考图墨迹 86..110，单行 94..102），故两行块整体下移 3px。
         if w <= 305.0 && matches!(day_name, "Mo" | "We") {
-            let top_r = Rect::new(cell_x, week_y - 7.0, col_w, 16.0);
-            let bot_r = Rect::new(cell_x, week_y + 9.0, col_w, 16.0);
+            let top_r = Rect::new(cell_x, week_y - 4.0, col_w, 16.0);
+            let bot_r = Rect::new(cell_x, week_y + 12.0, col_w, 16.0);
             let top_quads = text_ctx.shape_line_styled(
                 &day_name[..1],
                 top_r,
