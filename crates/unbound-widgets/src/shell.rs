@@ -152,6 +152,8 @@ pub enum ShellIcon {
     Sort,
     /// 漏斗筛选图标。
     Filter,
+    /// 调色板/主题配色图标。
+    Palette,
 }
 
 /// 跨控件统一图标变体（支持内置 Fluent 几何矢量图标与外部 RGBA8 彩色纹理双通道）。
@@ -223,6 +225,45 @@ pub fn emit_widget_icon_primitives(
     }
 }
 
+/// 以二次贝塞尔曲线发射单段弧线描边（用于内凹四角星芒等非直线路径）。
+#[allow(clippy::too_many_arguments)]
+fn quad_curve_stroke(
+    p0: [f32; 2],
+    p1: [f32; 2],
+    p2: [f32; 2],
+    thickness: f32,
+    color: Token,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<GpuPayload>,
+) {
+    let pad = (thickness * 0.5 + 1.5).ceil();
+    let origin_x = p0[0].min(p1[0]).min(p2[0]) - pad;
+    let origin_y = p0[1].min(p1[1]).min(p2[1]) - pad;
+    let w = (p0[0].max(p1[0]).max(p2[0]) - origin_x + pad).max(1.0);
+    let h = (p0[1].max(p1[1]).max(p2[1]) - origin_y + pad).max(1.0);
+    let payload_idx = payloads.len() as u32;
+    payloads.push(GpuPayload::curve(
+        [p0[0] - origin_x, p0[1] - origin_y],
+        [p1[0] - origin_x, p1[1] - origin_y],
+        [p2[0] - origin_x, p2[1] - origin_y],
+        thickness,
+    ));
+    let mut prim = instance(
+        Rect::new(origin_x, origin_y, w, h),
+        [0.0; 4],
+        color,
+        Token::NONE,
+        0.0,
+        0.0,
+        PrimType::Curve,
+        SubElement::Content,
+        z,
+    );
+    prim.extra_payload_idx = payload_idx;
+    primitives.push(prim);
+}
+
 /// 将 [`ShellIcon`] 居中发射到 `primitives` 与 `payloads` 中。
 #[allow(clippy::too_many_lines)]
 pub fn emit_shell_icon_primitives(
@@ -275,19 +316,38 @@ pub fn emit_shell_icon_primitives(
             );
         }
         ShellIcon::Sun => {
-            primitives.push(surface(
-                Rect::new(c.x - 4.5, c.y - 4.5, 9.0, 9.0),
-                4.5,
+            // 中心太阳描边圆 + 8 方向均匀短射线（上下左右 4 条 + 45° 对角线 4 条）。
+            primitives.push(outlined(
+                Rect::new(c.x - 3.4, c.y - 3.4, 6.8, 6.8),
+                3.4,
+                Token::NONE,
                 color,
+                1.5,
+                0.0,
                 z,
             ));
-            for (dx, dy, w, h) in [
-                (-0.9, -8.5, 1.8, 2.8),
-                (-0.9, 5.7, 1.8, 2.8),
-                (-8.5, -0.9, 2.8, 1.8),
-                (5.7, -0.9, 2.8, 1.8),
+            let diag = core::f32::consts::FRAC_1_SQRT_2;
+            let r_in = 5.0;
+            let r_out = 7.0;
+            for (dx, dy) in [
+                (0.0, -1.0),
+                (0.0, 1.0),
+                (-1.0, 0.0),
+                (1.0, 0.0),
+                (-diag, -diag),
+                (diag, -diag),
+                (-diag, diag),
+                (diag, diag),
             ] {
-                primitives.push(surface(Rect::new(c.x + dx, c.y + dy, w, h), 0.9, color, z));
+                curve_stroke(
+                    [c.x + dx * r_in, c.y + dy * r_in],
+                    [c.x + dx * r_out, c.y + dy * r_out],
+                    1.5,
+                    color,
+                    z,
+                    primitives,
+                    payloads,
+                );
             }
         }
         ShellIcon::Moon => {
@@ -756,21 +816,46 @@ pub fn emit_shell_icon_primitives(
             ));
         }
         ShellIcon::Sparkles => {
-            primitives.push(outlined(
-                Rect::new(c.x - 5.0, c.y - 5.0, 10.0, 10.0),
-                5.0,
-                Token::NONE,
-                color,
-                1.5,
-                0.0,
-                z,
-            ));
+            // 主四角内凹星芒（4 条二次贝塞尔弧线 + 中心亮点）+ 右上角伴星十字星芒。
+            let mx = c.x - 1.5;
+            let my = c.y + 0.8;
+            let r = 5.4;
+            let top = [mx, my - r];
+            let right = [mx + r, my];
+            let bottom = [mx, my + r];
+            let left = [mx - r, my];
+            let center = [mx, my];
+            for (p0, p2) in [(top, right), (right, bottom), (bottom, left), (left, top)] {
+                quad_curve_stroke(p0, center, p2, 1.4, color, z, primitives, payloads);
+            }
             primitives.push(surface(
-                Rect::new(c.x - 2.0, c.y - 2.0, 4.0, 4.0),
-                2.0,
+                Rect::new(mx - 1.2, my - 1.2, 2.4, 2.4),
+                1.2,
                 color,
                 z + 1,
             ));
+            // 右上角伴星（竖横交叉星芒）。
+            let sx = c.x + 4.4;
+            let sy = c.y - 4.4;
+            let sr = 2.4;
+            curve_stroke(
+                [sx, sy - sr],
+                [sx, sy + sr],
+                1.4,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [sx - sr, sy],
+                [sx + sr, sy],
+                1.4,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
         }
         ShellIcon::Eye => {
             primitives.push(outlined(
@@ -1734,6 +1819,37 @@ pub fn emit_shell_icon_primitives(
                 z,
             ));
         }
+        ShellIcon::Palette => {
+            // 调色板非对称圆角外轮廓（右下拇指托收口）+ 4 个弧形排列色点 + 右下拇指孔。
+            primitives.push(instance(
+                Rect::new(c.x - 6.8, c.y - 6.8, 13.6, 13.6),
+                [6.8, 6.8, 2.4, 6.8],
+                Token::NONE,
+                color,
+                1.5,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Background,
+                z,
+            ));
+            for (dx, dy) in [(-3.6, 1.2), (-2.6, -2.6), (1.2, -3.6), (3.8, -0.8)] {
+                primitives.push(surface(
+                    Rect::new(c.x + dx - 1.1, c.y + dy - 1.1, 2.2, 2.2),
+                    1.1,
+                    color,
+                    z + 1,
+                ));
+            }
+            primitives.push(outlined(
+                Rect::new(c.x + 0.6, c.y + 1.2, 3.2, 3.2),
+                1.6,
+                Token::NONE,
+                color,
+                1.2,
+                0.0,
+                z + 1,
+            ));
+        }
     }
 }
 
@@ -1893,19 +2009,25 @@ pub fn emit_icon_button(node: u64, desc: &IconButtonDesc, control: ControlState)
     let mut primitives = Vec::with_capacity(12);
     let mut payloads = Vec::with_capacity(4);
     let active_selected = desc.selected || control.selected;
-    let fill = match control.phase {
-        PointerPhase::Hovered => Token::CONTROL_HOVER,
-        PointerPhase::Pressed => Token::NAV_SELECTED,
-        PointerPhase::Idle => {
-            if active_selected {
-                Token::NAV_SELECTED
-            } else {
-                Token::NONE
+    let fill = if control.disabled {
+        Token::NONE
+    } else {
+        match control.phase {
+            PointerPhase::Hovered => Token::CONTROL_HOVER,
+            PointerPhase::Pressed => Token::NAV_SELECTED,
+            PointerPhase::Idle => {
+                if active_selected {
+                    Token::NAV_SELECTED
+                } else {
+                    Token::NONE
+                }
             }
         }
     };
     primitives.push(surface(desc.rect, desc.radius, fill, desc.z));
-    let fg = if active_selected {
+    let fg = if control.disabled {
+        Token::TEXT_DISABLED
+    } else if active_selected {
         Token::PRIMARY
     } else {
         Token::TEXT_PRIMARY
@@ -3173,5 +3295,155 @@ mod tests {
         assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert_eq!(disabled_img.border_token_or_tex, 77);
         assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+    }
+
+    #[test]
+    fn sparkles_sun_palette_emit_non_empty_constant_geometry() {
+        let cases = [
+            (ShellIcon::Sparkles, 7usize, 6usize),
+            (ShellIcon::Sun, 9usize, 8usize),
+            (ShellIcon::Palette, 6usize, 0usize),
+        ];
+        let small = Rect::new(0.0, 0.0, 16.0, 16.0);
+        let large = Rect::new(12.0, 8.0, 24.0, 24.0);
+        for (icon, expected_prims, expected_payloads) in cases {
+            let mut prims_small = Vec::new();
+            let mut payloads_small = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                small,
+                Token::TEXT_PRIMARY,
+                Token::SURFACE_RAISED,
+                620,
+                &mut prims_small,
+                &mut payloads_small,
+            );
+            let mut prims_large = Vec::new();
+            let mut payloads_large = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                large,
+                Token::TEXT_SECONDARY,
+                Token::SURFACE,
+                620,
+                &mut prims_large,
+                &mut payloads_large,
+            );
+            assert!(
+                !prims_small.is_empty(),
+                "ShellIcon::{icon:?} must emit at least one primitive"
+            );
+            assert_eq!(
+                prims_small.len(),
+                expected_prims,
+                "ShellIcon::{icon:?} unexpected primitive count"
+            );
+            assert_eq!(
+                payloads_small.len(),
+                expected_payloads,
+                "ShellIcon::{icon:?} unexpected payload count"
+            );
+            assert_eq!(
+                prims_small.len(),
+                prims_large.len(),
+                "ShellIcon::{icon:?} must keep constant primitive count across sizes"
+            );
+            assert_eq!(
+                payloads_small.len(),
+                payloads_large.len(),
+                "ShellIcon::{icon:?} must keep constant payload count across sizes"
+            );
+        }
+    }
+
+    #[test]
+    fn sparkles_sun_palette_keep_constant_primitives_and_tokens_across_24_states() {
+        let icons = [ShellIcon::Sparkles, ShellIcon::Sun, ShellIcon::Palette];
+        let rect = Rect::new(0.0, 0.0, 32.0, 32.0);
+        let disabled_raw = u32::from(Token::TEXT_DISABLED.raw());
+        let primary_raw = u32::from(Token::TEXT_PRIMARY.raw());
+        let hover_raw = u32::from(Token::CONTROL_HOVER.raw());
+        let none_raw = u32::from(Token::NONE.raw());
+
+        for icon in icons {
+            let desc = IconButtonDesc::new(icon, "Theme action").with_rect(rect);
+            let mut prim_counts = Vec::with_capacity(24);
+            let mut payload_counts = Vec::with_capacity(24);
+
+            for phase in [
+                PointerPhase::Idle,
+                PointerPhase::Hovered,
+                PointerPhase::Pressed,
+            ] {
+                for focused in [false, true] {
+                    for disabled in [false, true] {
+                        for selected in [false, true] {
+                            let control = ControlState {
+                                phase,
+                                focused,
+                                disabled,
+                                selected,
+                            };
+                            let out = emit_icon_button(1, &desc, control);
+                            prim_counts.push(out.primitives.len());
+                            payload_counts.push(out.payloads.len());
+                        }
+                    }
+                }
+            }
+
+            assert_eq!(prim_counts.len(), 24);
+            assert!(
+                prim_counts.windows(2).all(|w| w[0] == w[1]),
+                "ShellIcon::{icon:?} primitive count drifted across 24 states: {prim_counts:?}"
+            );
+            assert!(
+                payload_counts.windows(2).all(|w| w[0] == w[1]),
+                "ShellIcon::{icon:?} payload count drifted across 24 states: {payload_counts:?}"
+            );
+
+            let idle = emit_icon_button(1, &desc, ControlState::default());
+            let hovered = emit_icon_button(
+                1,
+                &desc,
+                ControlState {
+                    phase: PointerPhase::Hovered,
+                    ..ControlState::default()
+                },
+            );
+            let disabled = emit_icon_button(
+                1,
+                &desc,
+                ControlState {
+                    phase: PointerPhase::Hovered,
+                    disabled: true,
+                    ..ControlState::default()
+                },
+            );
+
+            // 悬停态底色胶囊切换为 CONTROL_HOVER，禁用态抑制底色为 NONE。
+            assert_eq!(idle.primitives[0].fill_token_or_uv, none_raw);
+            assert_eq!(hovered.primitives[0].fill_token_or_uv, hover_raw);
+            assert_eq!(disabled.primitives[0].fill_token_or_uv, none_raw);
+            assert!(disabled.hit.is_none());
+            assert!(!disabled.focusable);
+
+            // 图标内部所有图元在默认态使用 TEXT_PRIMARY，在禁用态切换为 TEXT_DISABLED。
+            let idle_icon_slice = &idle.primitives[1..idle.primitives.len() - 1];
+            let disabled_icon_slice = &disabled.primitives[1..disabled.primitives.len() - 1];
+            assert!(!idle_icon_slice.is_empty());
+            assert!(
+                idle_icon_slice.iter().all(|p| {
+                    p.fill_token_or_uv == primary_raw || p.border_token_or_tex == primary_raw
+                }),
+                "ShellIcon::{icon:?} idle primitives must use TEXT_PRIMARY"
+            );
+            assert!(
+                disabled_icon_slice.iter().all(|p| {
+                    p.fill_token_or_uv == disabled_raw || p.border_token_or_tex == disabled_raw
+                }),
+                "ShellIcon::{icon:?} disabled primitives must use TEXT_DISABLED"
+            );
+        }
     }
 }
