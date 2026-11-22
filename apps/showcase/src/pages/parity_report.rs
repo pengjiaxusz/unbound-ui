@@ -444,7 +444,9 @@ pub fn report(ctx: &mut DemoCtx<'_, '_>) {
     let bar = Rect::new(summary.origin.x + 16.0, summary.origin.y + 68.0, 200.0, 8.0);
     ctx.canvas
         .rect(bar, 4.0, palette.control_track, 0, 0.0, 0.0);
-    let ratio = report.passed as f32 / report.cases.len().max(1) as f32;
+    // 进度条统计“已收口”用例：pass 与 exempt 都算（ADR 0028 的豁免即接受），
+    // 否则存在豁免时进度条永远到不了 100%，读起来像还有未完成的工作。
+    let ratio = (report.passed + report.exempt) as f32 / report.cases.len().max(1) as f32;
     ctx.canvas.rect(
         Rect::new(bar.origin.x, bar.origin.y, bar.size.x * ratio, bar.size.y),
         4.0,
