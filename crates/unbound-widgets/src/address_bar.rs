@@ -2589,10 +2589,10 @@ mod tests {
 
     #[test]
     fn path_segment_widget_icon_precedence_and_external_texture_emission() {
-        let plain = PathSegment::new("Drive", "C:\");
+        let plain = PathSegment::new("Drive", "C:\\");
         assert_eq!(plain.effective_icon(), WidgetIcon::None);
 
-        let vec_only = PathSegment::new("Drive", "C:\").with_icon(ShellIcon::Drive);
+        let vec_only = PathSegment::new("Drive", "C:\\").with_icon(ShellIcon::Drive);
         assert_eq!(vec_only.effective_icon(), WidgetIcon::Vector(ShellIcon::Drive));
 
         let overridden = vec_only
@@ -2602,8 +2602,8 @@ mod tests {
 
         let desc = AddressBarDesc::with_path_segments(
             Rect::new(0.0, 0.0, 520.0, ADDRESS_BAR_HEIGHT),
-            "C:\Users",
-            vec![overridden, PathSegment::new("Users", "C:\Users")],
+            "C:\\Users",
+            vec![overridden, PathSegment::new("Users", "C:\\Users")],
         );
         assert_eq!(desc.root_icon(), WidgetIcon::ExternalTexture(64));
 

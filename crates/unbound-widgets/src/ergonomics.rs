@@ -599,7 +599,8 @@ impl UiWidget for ButtonDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        desc.centre_label = desc.effective_widget_icon() != crate::shell::WidgetIcon::None;
+        desc.centre_label =
+            desc.effective_widget_icon() != crate::shell::WidgetIcon::None || desc.dropdown_chevron;
         let (text_rect, align_x) = if desc.left_align {
             let inset_left = if desc.active_selected { 11.0 } else { 9.0 };
             (

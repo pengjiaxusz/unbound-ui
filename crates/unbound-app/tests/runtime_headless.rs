@@ -477,7 +477,10 @@ fn tree_view_keeps_row_highlighted_on_toggle_hover_and_hides_scrollbar_when_idle
     // 1. 内容溢出但指针未悬停且未滚动时，滚动条不强制常显（opacity == 0）
     let sb_key = TREE_KEY ^ 0x5452_4545_0003;
     let (sb_start, sb_end) = rt.scene().node_spans[&sb_key];
-    assert!(sb_end > sb_start, "overflowing tree must emit scrollbar thumb primitive");
+    assert!(
+        sb_end > sb_start,
+        "overflowing tree must emit scrollbar thumb primitive"
+    );
     assert!(
         rt.scene().primitives[sb_start as usize..sb_end as usize]
             .iter()

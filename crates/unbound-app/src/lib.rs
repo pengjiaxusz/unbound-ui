@@ -709,7 +709,10 @@ pub struct TabHitTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TabSubHit {
     /// 标签页主体（附带该标签当前是否允许关闭）。
-    Item { target: TabHitTarget, closable: bool },
+    Item {
+        target: TabHitTarget,
+        closable: bool,
+    },
     /// 标签页关闭按钮 `×`。
     Close(TabHitTarget),
     /// 标签栏末尾 `+` 新建按钮。
@@ -4358,7 +4361,6 @@ pub struct FrameReport {
     pub external_texture_ops: Vec<ExternalTextureOp>,
 }
 
-/// 负责事件归约与场景 diff 的应用运行时。
 /// 单帧已挂载上下文菜单的点击反解条目。
 struct ActiveContextMenu {
     /// 调用 `ViewBuilder::context_menu` 时传入的有效键（经 `scoped_key` 作用域混合）。
@@ -4369,6 +4371,7 @@ struct ActiveContextMenu {
     selectable: Vec<bool>,
 }
 
+/// 负责事件归约与场景 diff 的应用运行时。
 pub struct AppRuntime<A: Application> {
     app: A,
     state: A::State,
@@ -6223,10 +6226,9 @@ impl<A: Application> AppRuntime<A> {
                             |idx| resolve_sub(unbound_widgets::tab_close_node(entry.key, idx)),
                             resolve_sub(unbound_widgets::tab_add_node(entry.key)),
                         )
-                    } else if let Some(addr_desc) =
-                        widget
-                            .as_any()
-                            .downcast_ref::<unbound_widgets::AddressBarDesc>()
+                    } else if let Some(addr_desc) = widget
+                        .as_any()
+                        .downcast_ref::<unbound_widgets::AddressBarDesc>()
                     {
                         if addr_desc.segments.iter().any(|seg| {
                             matches!(
@@ -6255,8 +6257,9 @@ impl<A: Application> AppRuntime<A> {
                                 &mut text_ctx,
                             )
                         }
-                    } else if let Some(btn_desc) =
-                        widget.as_any().downcast_ref::<unbound_widgets::ButtonDesc>()
+                    } else if let Some(btn_desc) = widget
+                        .as_any()
+                        .downcast_ref::<unbound_widgets::ButtonDesc>()
                     {
                         if matches!(
                             btn_desc.widget_icon,
@@ -6614,38 +6617,39 @@ impl<A: Application> AppRuntime<A> {
                     let layout = unbound_widgets::compute_layout(&desc);
                     // 按 `address_bar_sub_node(entry.key, kind)` 自动反解悬停与按压子热区，
                     // 兼顾业务层手动覆写的 `hovered_hit` / `pressed_hit`。
-                    let resolve_sub_hit = |target: Option<u64>| -> Option<unbound_widgets::AddressBarHitKind> {
-                        let key = target?;
-                        use unbound_widgets::{address_bar_sub_node, AddressBarHitKind};
-                        for kind in [
-                            AddressBarHitKind::NavBack,
-                            AddressBarHitKind::NavForward,
-                            AddressBarHitKind::NavUp,
-                            AddressBarHitKind::Refresh,
-                            AddressBarHitKind::RootChevron,
-                            AddressBarHitKind::OverflowButton,
-                            AddressBarHitKind::EditTrigger,
-                            AddressBarHitKind::SearchBox,
-                            AddressBarHitKind::SearchClear,
-                        ] {
-                            if address_bar_sub_node(entry.key, kind) == key {
-                                return Some(kind);
-                            }
-                        }
-                        for seg in &layout.segments {
-                            let seg_kind = AddressBarHitKind::Segment(seg.index);
-                            if address_bar_sub_node(entry.key, seg_kind) == key {
-                                return Some(seg_kind);
-                            }
-                            if seg.chevron_rect.is_some() {
-                                let chev_kind = AddressBarHitKind::SegmentChevron(seg.index);
-                                if address_bar_sub_node(entry.key, chev_kind) == key {
-                                    return Some(chev_kind);
+                    let resolve_sub_hit =
+                        |target: Option<u64>| -> Option<unbound_widgets::AddressBarHitKind> {
+                            let key = target?;
+                            use unbound_widgets::{address_bar_sub_node, AddressBarHitKind};
+                            for kind in [
+                                AddressBarHitKind::NavBack,
+                                AddressBarHitKind::NavForward,
+                                AddressBarHitKind::NavUp,
+                                AddressBarHitKind::Refresh,
+                                AddressBarHitKind::RootChevron,
+                                AddressBarHitKind::OverflowButton,
+                                AddressBarHitKind::EditTrigger,
+                                AddressBarHitKind::SearchBox,
+                                AddressBarHitKind::SearchClear,
+                            ] {
+                                if address_bar_sub_node(entry.key, kind) == key {
+                                    return Some(kind);
                                 }
                             }
-                        }
-                        None
-                    };
+                            for seg in &layout.segments {
+                                let seg_kind = AddressBarHitKind::Segment(seg.index);
+                                if address_bar_sub_node(entry.key, seg_kind) == key {
+                                    return Some(seg_kind);
+                                }
+                                if seg.chevron_rect.is_some() {
+                                    let chev_kind = AddressBarHitKind::SegmentChevron(seg.index);
+                                    if address_bar_sub_node(entry.key, chev_kind) == key {
+                                        return Some(chev_kind);
+                                    }
+                                }
+                            }
+                            None
+                        };
                     let mut effective_state = (**bar_state).clone();
                     if effective_state.hovered_hit.is_none() {
                         effective_state.hovered_hit = resolve_sub_hit(self.ctx.hovered);
@@ -6985,8 +6989,7 @@ impl<A: Application> AppRuntime<A> {
                                 .item_rect(idx)
                                 .translate(Vec2::new(0.0, -scroll_offset.y));
                             let pill_left = row_rect.origin.x + unbound_widgets::MENU_PANEL_PADDING;
-                            let pill_right =
-                                row_rect.max().x - unbound_widgets::MENU_PANEL_PADDING;
+                            let pill_right = row_rect.max().x - unbound_widgets::MENU_PANEL_PADDING;
                             let label_left = if has_icon_col {
                                 pill_left + 10.0 + unbound_widgets::MENU_ICON_SIZE + 8.0
                             } else {
@@ -7065,11 +7068,13 @@ impl<A: Application> AppRuntime<A> {
                         .collect();
                     let render_rows: Vec<unbound_widgets::MenuItemRenderRow<'_>> = shaped_rows
                         .iter()
-                        .map(|(label, shortcut, phase)| unbound_widgets::MenuItemRenderRow {
-                            label_glyphs: label.as_slice(),
-                            shortcut_glyphs: shortcut.as_slice(),
-                            phase: *phase,
-                        })
+                        .map(
+                            |(label, shortcut, phase)| unbound_widgets::MenuItemRenderRow {
+                                label_glyphs: label.as_slice(),
+                                shortcut_glyphs: shortcut.as_slice(),
+                                phase: *phase,
+                            },
+                        )
                         .collect();
                     let (mut out, _) = unbound_widgets::emit_menu_with_rows(
                         entry.key,
@@ -7426,13 +7431,6 @@ impl<A: Application> AppRuntime<A> {
                 };
                 self.last_pointer_down_target = target;
                 self.last_pointer_down_path = down_path;
-                if button == PointerButton::Right {
-                    if let Some(node) = target {
-                        if let Some((tabs_key, hit_target)) = self.resolve_tab_context_target(node) {
-                            self.ctx.record_tab_context_target(tabs_key, hit_target);
-                        }
-                    }
-                }
                 match target {
                     Some(node) => self.dispatch_bubbling("PointerDown", node, |ancestor| {
                         AppEvent::PointerDown {
@@ -7534,12 +7532,13 @@ impl<A: Application> AppRuntime<A> {
                     return dirty;
                 }
                 if button == PointerButton::Middle {
-                    if let Some(node) = target {
-                        if self.router.hover() == Some(node) {
-                            if let Some((tabs_key, hit_target)) =
-                                self.resolve_tab_middle_close_target(node)
-                            {
-                                self.ctx.record_tab_close_request(tabs_key, hit_target);
+                    if let (Some(node), Some(hovered)) = (target, self.router.hover()) {
+                        if let (Some((down_tabs, down_target)), Some((up_tabs, up_target))) = (
+                            self.resolve_tab_middle_close_target(node),
+                            self.resolve_tab_middle_close_target(hovered),
+                        ) {
+                            if down_tabs == up_tabs && down_target == up_target {
+                                self.ctx.record_tab_close_request(down_tabs, down_target);
                             }
                         }
                     }
@@ -7605,9 +7604,7 @@ impl<A: Application> AppRuntime<A> {
                         TabSubHit::Item { .. } => {}
                     }
                 }
-                if let Some((menu_owner_key, item_index)) =
-                    self.resolve_context_menu_item(target)
-                {
+                if let Some((menu_owner_key, item_index)) = self.resolve_context_menu_item(target) {
                     self.ctx
                         .record_context_menu_activated(menu_owner_key, item_index);
                 }
@@ -7852,7 +7849,9 @@ impl<A: Application> AppRuntime<A> {
     fn resolve_tab_sub_hit(&self, node: u64) -> Option<(u64, TabSubHit)> {
         let owner = *self.hit_owners.get(&node)?;
         let (_, widget) = self.mounted_widgets.get(&owner)?;
-        let tabs_desc = widget.as_any().downcast_ref::<unbound_widgets::TabsDesc>()?;
+        let tabs_desc = widget
+            .as_any()
+            .downcast_ref::<unbound_widgets::TabsDesc>()?;
         if node == unbound_widgets::tab_add_node(owner) {
             return Some((owner, TabSubHit::Add));
         }
@@ -7885,7 +7884,13 @@ impl<A: Application> AppRuntime<A> {
     /// 反解鼠标中键点击命中的可关闭标签目标。
     fn resolve_tab_middle_close_target(&self, node: u64) -> Option<(u64, TabHitTarget)> {
         match self.resolve_tab_sub_hit(node)? {
-            (tabs_key, TabSubHit::Item { target, closable: true })
+            (
+                tabs_key,
+                TabSubHit::Item {
+                    target,
+                    closable: true,
+                },
+            )
             | (tabs_key, TabSubHit::Close(target)) => Some((tabs_key, target)),
             _ => None,
         }
@@ -7894,8 +7899,9 @@ impl<A: Application> AppRuntime<A> {
     /// 反解右键上下文菜单命中的标签目标。
     fn resolve_tab_context_target(&self, node: u64) -> Option<(u64, TabHitTarget)> {
         match self.resolve_tab_sub_hit(node)? {
-            (tabs_key, TabSubHit::Item { target, .. })
-            | (tabs_key, TabSubHit::Close(target)) => Some((tabs_key, target)),
+            (tabs_key, TabSubHit::Item { target, .. }) | (tabs_key, TabSubHit::Close(target)) => {
+                Some((tabs_key, target))
+            }
             _ => None,
         }
     }
@@ -7968,21 +7974,21 @@ impl<A: Application> AppRuntime<A> {
                     let skip_non_left_tabs = *button != PointerButton::Left
                         && widget.as_any().is::<unbound_widgets::TabsDesc>();
                     if !skip_non_left_tabs {
-                    let w_evt = unbound_widgets::WidgetInputEvent::PointerDown {
-                        pos: *pos,
-                        click_count: *click_count,
-                    };
-                    let mut store = self.widget_state.borrow_mut();
-                    let changed = widget.reduce_erased(*target_key, rect, &w_evt, &mut store);
-                    drop(store);
-                    if changed {
-                        if self.sync_form_binding(*target_key) {
-                            widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
-                        } else {
-                            widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                        let w_evt = unbound_widgets::WidgetInputEvent::PointerDown {
+                            pos: *pos,
+                            click_count: *click_count,
+                        };
+                        let mut store = self.widget_state.borrow_mut();
+                        let changed = widget.reduce_erased(*target_key, rect, &w_evt, &mut store);
+                        drop(store);
+                        if changed {
+                            if self.sync_form_binding(*target_key) {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                            } else {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            }
+                            widget_consumed = true;
                         }
-                        widget_consumed = true;
-                    }
                     }
                 }
             }
@@ -9294,10 +9300,10 @@ mod tests {
                         11,
                         AddressBarDesc::with_path_segments(
                             Rect::new(0.0, 0.0, 420.0, 32.0),
-                            "C:\Work",
+                            "C:\\Work",
                             vec![
-                                PathSegment::new("C:", "C:\").with_widget_icon(ready_icon),
-                                PathSegment::new("Work", "C:\Work"),
+                                PathSegment::new("C:", "C:\\").with_widget_icon(ready_icon),
+                                PathSegment::new("Work", "C:\\Work"),
                             ],
                         ),
                         &self.address_state,
@@ -9337,9 +9343,10 @@ mod tests {
         }
 
         let mut tree = TreeViewState::new(28.0);
-        tree.rebuild(&[TreeRow::new(501, 0, false), TreeRow::new(502, 0, false)], |_| {
-            Vec::new()
-        });
+        tree.rebuild(
+            &[TreeRow::new(501, 0, false), TreeRow::new(502, 0, false)],
+            |_| Vec::new(),
+        );
         let mut menu_state = ContextMenuState::new();
         menu_state.open_at(Vec2::new(60.0, 60.0), 12, None);
 
@@ -9404,13 +9411,31 @@ mod tests {
             })
         };
 
-        assert!(has_image_slot(501, 63), "tree row ready icon must bind slot 63");
-        assert!(!has_any_image(502), "tree row pending icon must not emit image");
-        assert!(has_image_slot(11, 63), "address bar root icon must bind slot 63");
-        assert!(has_image_slot(12, 63), "ready button icon must bind slot 63");
-        assert!(!has_any_image(13), "pending button icon must not emit image");
+        assert!(
+            has_image_slot(501, 63),
+            "tree row ready icon must bind slot 63"
+        );
+        assert!(
+            !has_any_image(502),
+            "tree row pending icon must not emit image"
+        );
+        assert!(
+            has_image_slot(11, 63),
+            "address bar root icon must bind slot 63"
+        );
+        assert!(
+            has_image_slot(12, 63),
+            "ready button icon must bind slot 63"
+        );
+        assert!(
+            !has_any_image(13),
+            "pending button icon must not emit image"
+        );
         assert!(has_image_slot(14, 63), "tabs ready icon must bind slot 63");
-        assert!(has_image_slot(mix_key(15, 0x4354_584D), 63), "context menu ready icon must bind slot 63");
+        assert!(
+            has_image_slot(mix_key(15, 0x4354_584D), 63),
+            "context menu ready icon must bind slot 63"
+        );
         assert!(
             !scene.primitives.iter().any(|p| {
                 p.prim_type() == PrimType::Image && p.border_token_or_tex == pending_h.0 as u32
@@ -9435,7 +9460,12 @@ mod tests {
         impl Application for TabsInteractionApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
                 if let AppEvent::ContextMenu { .. } = event {
                     self.context_seen = ctx.tab_context_target(TABS_KEY);
                 }
@@ -9629,7 +9659,12 @@ mod tests {
         impl Application for ContextMenuTestApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), _event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                _event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
                 if let Some(idx) = ctx.take_context_menu_activated(MENU_KEY) {
                     self.activated_log.push(idx);
                     return EventOutcome::new(DirtyFlags::PAINT);
@@ -9653,7 +9688,9 @@ mod tests {
                             .with_widget_icon(icon)
                             .with_shortcut("Ctrl+O"),
                         MenuItem::separator(),
-                        MenuItem::action("Disabled").disabled().with_shortcut("Ctrl+D"),
+                        MenuItem::action("Disabled")
+                            .disabled()
+                            .with_shortcut("Ctrl+D"),
                         MenuItem::action("More").with_submenu(vec![MenuItem::action("Sub")]),
                         MenuItem::action("Delete").danger(true),
                     ],
@@ -9670,9 +9707,9 @@ mod tests {
             activated_log: Vec::new(),
         };
         let mut rt = AppRuntime::new(app, Vec2::new(1000.0, 700.0));
-        let ext_h = rt
-            .asset_hub_mut()
-            .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
+        let ext_h =
+            rt.asset_hub_mut()
+                .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
         rt.asset_hub_mut()
             .commit_external_texture_slot(ext_h, Ok(88));
         rt.application_mut().ext_handle = Some(ext_h);
@@ -9714,16 +9751,14 @@ mod tests {
         );
         let dis_center = Vec2::new(
             80.0 + 110.0,
-            60.0
-                + MENU_PANEL_PADDING
+            60.0 + MENU_PANEL_PADDING
                 + CONTEXT_MENU_ITEM_HEIGHT
                 + MENU_SEPARATOR_HEIGHT
                 + CONTEXT_MENU_ITEM_HEIGHT * 0.5,
         );
         let danger_center = Vec2::new(
             80.0 + 110.0,
-            60.0
-                + MENU_PANEL_PADDING
+            60.0 + MENU_PANEL_PADDING
                 + CONTEXT_MENU_ITEM_HEIGHT * 3.0
                 + MENU_SEPARATOR_HEIGHT
                 + CONTEXT_MENU_ITEM_HEIGHT * 0.5,
@@ -9749,14 +9784,26 @@ mod tests {
         rt.pointer_move(row0_center);
         let _ = rt.frame(0.016);
         assert_eq!(rt.scene().primitives.len(), prim_count_idle);
-        assert_eq!(pill_fill_at(&rt, row0_center.y), u32::from(Token::HOVER.raw()));
-        assert_eq!(pill_fill_at(&rt, danger_center.y), u32::from(Token::NONE.raw()));
+        assert_eq!(
+            pill_fill_at(&rt, row0_center.y),
+            u32::from(Token::HOVER.raw())
+        );
+        assert_eq!(
+            pill_fill_at(&rt, danger_center.y),
+            u32::from(Token::NONE.raw())
+        );
 
         rt.pointer_down(row0_center, PointerButton::Left);
         let _ = rt.frame(0.032);
         assert_eq!(rt.scene().primitives.len(), prim_count_idle);
-        assert_eq!(pill_fill_at(&rt, row0_center.y), u32::from(Token::PRESSED.raw()));
-        assert_eq!(pill_fill_at(&rt, danger_center.y), u32::from(Token::NONE.raw()));
+        assert_eq!(
+            pill_fill_at(&rt, row0_center.y),
+            u32::from(Token::PRESSED.raw())
+        );
+        assert_eq!(
+            pill_fill_at(&rt, danger_center.y),
+            u32::from(Token::NONE.raw())
+        );
 
         // 3. 左键释放项 0：触发激活并被应用消费一次，二次读取返回 None。
         rt.pointer_up(row0_center, PointerButton::Left);

@@ -418,12 +418,16 @@ mod tests {
         // 确保 ProductPreset::Win11 与 ProductPreset::Standard 既有基准令牌不被改动
         let win11_default = ThemeSet::for_product(ProductPreset::Win11, AccentBrand::Blue);
         assert_eq!(
-            win11_default.palette(ThemeKind::Dark).color(Token::NAV_SELECTED),
+            win11_default
+                .palette(ThemeKind::Dark)
+                .color(Token::NAV_SELECTED),
             win11_dark.color(Token::NAV_SELECTED)
         );
         let std_default = ThemeSet::for_product(ProductPreset::Standard, AccentBrand::Blue);
         assert_eq!(
-            std_default.palette(ThemeKind::Dark).color(Token::NAV_SELECTED),
+            std_default
+                .palette(ThemeKind::Dark)
+                .color(Token::NAV_SELECTED),
             standard.palette(ThemeKind::Dark).color(Token::NAV_SELECTED)
         );
     }

@@ -1085,6 +1085,14 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                     }
                     _ => {}
                 }
+                if owner_ctx.runtime.dirty() != crate::DirtyFlags::NONE
+                    && !owner_ctx.pacer.is_suspended()
+                {
+                    let now = Instant::now();
+                    owner_ctx.pacer.request_immediate(now);
+                    state.pacer.request_immediate(now);
+                    window.request_redraw();
+                }
             }
             return Flow::Continue;
         }

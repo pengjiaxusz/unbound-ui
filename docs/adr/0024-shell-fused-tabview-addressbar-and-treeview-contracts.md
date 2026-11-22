@@ -40,7 +40,7 @@
 
 5. **Windows 11 中性薄纱交互、统一彩色图标与菜单/标签交互闭环契约**：
    - **Win11 中性薄纱令牌与交互状态机**：
-     - `unbound-theme` 的 Win11 预设将 `Token::HOVER`、`Token::PRESSED`、`Token::NAV_SELECTED`、`Token::SURFACE_ELEVATED`、`Token::OVERLAY_BG` 与 `Token::CARD_BORDER` 对齐为中性半透明薄纱色板（浅色模式中性灰半透、深色模式中性白半透），消除非标偏色；
+     - `unbound-theme` 的 `ProductPreset::AssetManager` 预设将 `Token::NAV_SELECTED`、`Token::NAV_HOVER`、`Token::HOVER` 与 `Token::PRESSED` 对齐至 `win11::dark()` / `win11::light()` 的中性半透明薄纱色板（浅色模式中性灰半透、深色模式中性白半透），消除非标偏色；
      - `TreeView` 将展开箭头子热区（`tree_toggle_node`）归属到所属行，确保单行 `Hovered` / `Pressed` 状态连续无闪烁；`AddressBar` 导航按钮/面包屑分段与 `Button` 微妙变体（Subtle）统一接入逐部件独立 `PointerPhase` 状态机，同时保持 24 态图元数恒定。
    - **统一 `WidgetIcon` 双通道彩色图标与 `PrimType::Image` 原色保真不变量**：
      - `unbound-widgets::shell` 提供统一 `WidgetIcon` 枚举（`None` / `Vector(ShellIcon)` / `ExternalTexture(u64)`）与 `emit_widget_icon_primitives` 发射器，统一服务于 `TreeView`（`TreeRowIcon = WidgetIcon`）、`AddressBar`、`Button`、`TabView` 与 `ContextMenu`；
