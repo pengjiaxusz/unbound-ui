@@ -696,6 +696,26 @@ impl ClipboardProvider for MemoryClipboard {
     }
 }
 
+/// 标签页命中目标（同时携带逻辑索引与稳定 `TabItem::id`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TabHitTarget {
+    /// 标签页在 `TabsDesc::items` 中的逻辑索引。
+    pub index: usize,
+    /// 标签页的稳定标识（对应 `TabItem::id`）。
+    pub id: u64,
+}
+
+/// 标签栏子热区命中解析结果（运行时内部路由使用）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TabSubHit {
+    /// 标签页主体（附带该标签当前是否允许关闭）。
+    Item { target: TabHitTarget, closable: bool },
+    /// 标签页关闭按钮 `×`。
+    Close(TabHitTarget),
+    /// 标签栏末尾 `+` 新建按钮。
+    Add,
+}
+
 /// 运行时在 `reduce` 期间提供的读写世界视图。
 #[derive(Clone)]
 pub struct AppContext {
@@ -771,6 +791,12 @@ pub struct AppContext {
     pub text_settings: Option<unbound_text::TextRenderSettings>,
     /// 应用在 `reduce` 中排入的待执行窗口控制命令队列。
     pending_window_commands: Vec<WindowCommand>,
+    /// 各标签栏待消费的关闭请求（左键点击 `×` 或中键点击可关闭标签页）。
+    tab_close_requests: Rc<RefCell<FxHashMap<u64, TabHitTarget>>>,
+    /// 各标签栏待消费的新建按钮（`+`）点击请求。
+    tab_add_requests: Rc<RefCell<FxHashSet<u64>>>,
+    /// 各标签栏最近一次右键命中的具体标签目标（索引与 ID）。
+    tab_context_targets: Rc<RefCell<FxHashMap<u64, TabHitTarget>>>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -827,6 +853,9 @@ impl AppContext {
             clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
             text_settings: None,
             pending_window_commands: Vec::new(),
+            tab_close_requests: Rc::new(RefCell::new(FxHashMap::default())),
+            tab_add_requests: Rc::new(RefCell::new(FxHashSet::default())),
+            tab_context_targets: Rc::new(RefCell::new(FxHashMap::default())),
         }
     }
 
@@ -1080,6 +1109,39 @@ impl AppContext {
         let mut store = self.widget_state.borrow_mut();
         let st = store.entry::<unbound_widgets::TabsState>(key);
         st.active = active;
+    }
+
+    /// 取出并消费指定标签栏最近一次关闭请求（含左键点击 `×` 与鼠标中键点击标签页）。
+    pub fn take_tab_close_request(&self, key: u64) -> Option<TabHitTarget> {
+        self.tab_close_requests.borrow_mut().remove(&key)
+    }
+
+    /// 取出并消费指定标签栏最近一次 `+` 新建按钮点击请求。
+    pub fn take_tab_add_request(&self, key: u64) -> bool {
+        self.tab_add_requests.borrow_mut().remove(&key)
+    }
+
+    /// 查询指定标签栏最近一次右键上下文菜单命中的具体标签目标（索引与 ID）。
+    #[must_use]
+    pub fn tab_context_target(&self, key: u64) -> Option<TabHitTarget> {
+        self.tab_context_targets.borrow().get(&key).copied()
+    }
+
+    /// 取出并消费指定标签栏最近一次右键命中的标签目标。
+    pub fn take_tab_context_target(&self, key: u64) -> Option<TabHitTarget> {
+        self.tab_context_targets.borrow_mut().remove(&key)
+    }
+
+    pub(crate) fn record_tab_close_request(&self, key: u64, target: TabHitTarget) {
+        self.tab_close_requests.borrow_mut().insert(key, target);
+    }
+
+    pub(crate) fn record_tab_add_request(&self, key: u64) {
+        self.tab_add_requests.borrow_mut().insert(key);
+    }
+
+    pub(crate) fn record_tab_context_target(&self, key: u64, target: TabHitTarget) {
+        self.tab_context_targets.borrow_mut().insert(key, target);
     }
 
     /// 读取指定 `HotkeyInputDesc` 控件键已录制的快捷键字符串。
@@ -6082,30 +6144,55 @@ impl<A: Application> AppRuntime<A> {
                     let raw_output = if let Some(tabs_desc) =
                         widget.as_any().downcast_ref::<unbound_widgets::TabsDesc>()
                     {
-                        if tabs_desc.items.iter().any(|it| {
-                            matches!(it.widget_icon, unbound_widgets::WidgetIcon::ExternalTexture(_))
-                        }) {
-                            let mut resolved = tabs_desc.clone();
-                            for it in &mut resolved.items {
-                                it.widget_icon =
-                                    resolve_widget_icon(&self.asset_hub, it.widget_icon);
-                            }
-                            resolved.emit_laid_out_erased(
-                                entry.key,
-                                rect,
-                                state,
-                                &store,
-                                &mut text_ctx,
-                            )
-                        } else {
-                            widget.emit_laid_out_erased(
-                                entry.key,
-                                rect,
-                                state,
-                                &store,
-                                &mut text_ctx,
-                            )
+                        let mut resolved = tabs_desc.clone();
+                        resolved.rect = rect;
+                        for it in &mut resolved.items {
+                            it.widget_icon = resolve_widget_icon(&self.asset_hub, it.widget_icon);
                         }
+                        let tabs_state = store
+                            .get::<unbound_widgets::TabsState>(entry.key)
+                            .cloned()
+                            .unwrap_or_default();
+                        let focused_key = self.ctx.focused.filter(|_| self.ctx.focus_visible);
+                        let hovered_key = self.ctx.hovered;
+                        let pressed_key = self.ctx.pressed;
+                        let resolve_sub = |sub_key: u64| -> ControlState {
+                            let sub_phase = if pressed_key == Some(sub_key) {
+                                unbound_widgets::PointerPhase::Pressed
+                            } else if hovered_key == Some(sub_key) {
+                                unbound_widgets::PointerPhase::Hovered
+                            } else {
+                                unbound_widgets::PointerPhase::Idle
+                            };
+                            ControlState {
+                                phase: sub_phase,
+                                focused: focused_key == Some(sub_key),
+                                disabled: state.disabled,
+                                selected: false,
+                            }
+                        };
+                        unbound_widgets::emit_tabs_with_control_states(
+                            entry.key,
+                            &resolved,
+                            &tabs_state,
+                            &mut text_ctx,
+                            |idx| {
+                                let item_key = unbound_widgets::tab_item_node(entry.key, idx);
+                                let close_key = unbound_widgets::tab_close_node(entry.key, idx);
+                                let mut ctrl = resolve_sub(item_key);
+                                // 指针悬停或按下所属关闭按钮时，当前标签卡片维持悬停底板，
+                                // 绝不影响其他标签页或关闭按钮的独立状态。
+                                if ctrl.phase == unbound_widgets::PointerPhase::Idle
+                                    && (hovered_key == Some(close_key)
+                                        || pressed_key == Some(close_key))
+                                {
+                                    ctrl.phase = unbound_widgets::PointerPhase::Hovered;
+                                }
+                                ctrl
+                            },
+                            |idx| resolve_sub(unbound_widgets::tab_close_node(entry.key, idx)),
+                            resolve_sub(unbound_widgets::tab_add_node(entry.key)),
+                        )
                     } else if let Some(addr_desc) =
                         widget
                             .as_any()
@@ -7186,6 +7273,13 @@ impl<A: Application> AppRuntime<A> {
                 };
                 self.last_pointer_down_target = target;
                 self.last_pointer_down_path = down_path;
+                if button == PointerButton::Right {
+                    if let Some(node) = target {
+                        if let Some((tabs_key, hit_target)) = self.resolve_tab_context_target(node) {
+                            self.ctx.record_tab_context_target(tabs_key, hit_target);
+                        }
+                    }
+                }
                 match target {
                     Some(node) => self.dispatch_bubbling("PointerDown", node, |ancestor| {
                         AppEvent::PointerDown {
@@ -7286,6 +7380,17 @@ impl<A: Application> AppRuntime<A> {
                     self.mark(dirty);
                     return dirty;
                 }
+                if button == PointerButton::Middle {
+                    if let Some(node) = target {
+                        if self.router.hover() == Some(node) {
+                            if let Some((tabs_key, hit_target)) =
+                                self.resolve_tab_middle_close_target(node)
+                            {
+                                self.ctx.record_tab_close_request(tabs_key, hit_target);
+                            }
+                        }
+                    }
+                }
                 let mut flags = match target {
                     Some(node) => {
                         self.dispatch_bubbling("PointerUp", node, |ancestor| AppEvent::PointerUp {
@@ -7305,6 +7410,11 @@ impl<A: Application> AppRuntime<A> {
                 if button == PointerButton::Right {
                     if let Some(node) = target {
                         if self.router.hover() == Some(node) {
+                            if let Some((tabs_key, hit_target)) =
+                                self.resolve_tab_context_target(node)
+                            {
+                                self.ctx.record_tab_context_target(tabs_key, hit_target);
+                            }
                             flags = flags.merge(self.dispatch_bubbling(
                                 "ContextMenu",
                                 node,
@@ -7330,6 +7440,17 @@ impl<A: Application> AppRuntime<A> {
                 self.last_pointer_down_path.clear();
                 if !down_matches {
                     return DirtyFlags::NONE;
+                }
+                if let Some((tabs_key, sub_hit)) = self.resolve_tab_sub_hit(target) {
+                    match sub_hit {
+                        TabSubHit::Close(hit_target) => {
+                            self.ctx.record_tab_close_request(tabs_key, hit_target);
+                        }
+                        TabSubHit::Add => {
+                            self.ctx.record_tab_add_request(tabs_key);
+                        }
+                        TabSubHit::Item { .. } => {}
+                    }
                 }
                 self.dispatch_bubbling("Click", target, |ancestor| AppEvent::Click {
                     node: ancestor,
@@ -7568,6 +7689,58 @@ impl<A: Application> AppRuntime<A> {
         }
     }
 
+    /// 将命中键反解为所属标签栏键与子热区类型（标签主体、关闭按钮或新建按钮）。
+    fn resolve_tab_sub_hit(&self, node: u64) -> Option<(u64, TabSubHit)> {
+        let owner = *self.hit_owners.get(&node)?;
+        let (_, widget) = self.mounted_widgets.get(&owner)?;
+        let tabs_desc = widget.as_any().downcast_ref::<unbound_widgets::TabsDesc>()?;
+        if node == unbound_widgets::tab_add_node(owner) {
+            return Some((owner, TabSubHit::Add));
+        }
+        for (idx, item) in tabs_desc.items.iter().enumerate() {
+            if node == unbound_widgets::tab_close_node(owner, idx) {
+                return Some((
+                    owner,
+                    TabSubHit::Close(TabHitTarget {
+                        index: idx,
+                        id: item.id,
+                    }),
+                ));
+            }
+            if node == unbound_widgets::tab_item_node(owner, idx) {
+                return Some((
+                    owner,
+                    TabSubHit::Item {
+                        target: TabHitTarget {
+                            index: idx,
+                            id: item.id,
+                        },
+                        closable: tabs_desc.closable && item.closable && !item.pinned,
+                    },
+                ));
+            }
+        }
+        None
+    }
+
+    /// 反解鼠标中键点击命中的可关闭标签目标。
+    fn resolve_tab_middle_close_target(&self, node: u64) -> Option<(u64, TabHitTarget)> {
+        match self.resolve_tab_sub_hit(node)? {
+            (tabs_key, TabSubHit::Item { target, closable: true })
+            | (tabs_key, TabSubHit::Close(target)) => Some((tabs_key, target)),
+            _ => None,
+        }
+    }
+
+    /// 反解右键上下文菜单命中的标签目标。
+    fn resolve_tab_context_target(&self, node: u64) -> Option<(u64, TabHitTarget)> {
+        match self.resolve_tab_sub_hit(node)? {
+            (tabs_key, TabSubHit::Item { target, .. })
+            | (tabs_key, TabSubHit::Close(target)) => Some((tabs_key, target)),
+            _ => None,
+        }
+    }
+
     fn handle_select_option_click(&mut self, target_key: u64) -> bool {
         let mut hit = None;
         for popup in &self.active_select_popups {
@@ -7607,8 +7780,8 @@ impl<A: Application> AppRuntime<A> {
             AppEvent::PointerDown {
                 pos,
                 target: Some(target_key),
+                button,
                 click_count,
-                ..
             } => {
                 if self.handle_select_option_click(*target_key) {
                     widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
@@ -7621,6 +7794,9 @@ impl<A: Application> AppRuntime<A> {
                     widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
                 }
                 if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
+                    let skip_non_left_tabs = *button != PointerButton::Left
+                        && widget.as_any().is::<unbound_widgets::TabsDesc>();
+                    if !skip_non_left_tabs {
                     let w_evt = unbound_widgets::WidgetInputEvent::PointerDown {
                         pos: *pos,
                         click_count: *click_count,
@@ -7635,6 +7811,7 @@ impl<A: Application> AppRuntime<A> {
                             widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
                         }
                         widget_consumed = true;
+                    }
                     }
                 }
             }
@@ -9069,5 +9246,195 @@ mod tests {
             }),
             "uncommitted external handle must never leak into GPU image primitives"
         );
+    }
+
+    #[test]
+    fn tabview_sub_hit_states_are_isolated_and_close_add_context_events_round_trip() {
+        use unbound_gpu::data::PrimType;
+        use unbound_theme::Token;
+        use unbound_widgets::{TabItem, TabViewStyle, TabWidthMode, TabsDesc, TabsTokens};
+
+        const TABS_KEY: u64 = 7100;
+
+        struct TabsInteractionApp {
+            desc: TabsDesc,
+            context_seen: Option<TabHitTarget>,
+        }
+
+        impl Application for TabsInteractionApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+                if let AppEvent::ContextMenu { .. } = event {
+                    self.context_seen = ctx.tab_context_target(TABS_KEY);
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.tabs(TABS_KEY, self.desc.clone());
+            }
+        }
+
+        let desc = TabsDesc::new(Rect::new(0.0, 0.0, 640.0, 40.0), &[])
+            .with_items(vec![
+                TabItem::new(101, "Alpha"),
+                TabItem::new(102, "Beta"),
+                TabItem::new(103, "Gamma"),
+                TabItem::new(104, "Pinned").pinned(),
+            ])
+            .with_addable(true)
+            .with_style(TabViewStyle::ShellChrome)
+            .with_width_mode(TabWidthMode::adaptive_default());
+
+        let app = TabsInteractionApp {
+            desc: desc.clone(),
+            context_seen: None,
+        };
+        let mut rt = AppRuntime::new(app, Vec2::new(800.0, 200.0));
+        let _ = rt.frame(0.0);
+
+        let rect = rt.widget_rect(TABS_KEY).expect("tabs mounted rect");
+        let mut laid_desc = desc.clone();
+        laid_desc.rect = rect;
+
+        let tab0_bg_point = laid_desc.label_rect(0, 0.0).center();
+        let tab1_bg_point = laid_desc.label_rect(1, 0.0).center();
+        let tab2_bg_point = laid_desc.label_rect(2, 0.0).center();
+        let tab3_bg_point = laid_desc.label_rect(3, 0.0).center();
+        let close1_rect = laid_desc.close_rect(1, 0.0).expect("tab 1 close rect");
+        let close1_center = close1_rect.center();
+        let add_rect = laid_desc.add_rect().expect("add button rect");
+        let add_center = add_rect.center();
+
+        let tokens = TabsTokens::standard();
+        let tab_bg_fill = |rt: &AppRuntime<TabsInteractionApp>, idx: usize| -> u32 {
+            let r = laid_desc.tab_rect(idx, 0.0);
+            let scene = rt.scene();
+            let (s, e) = scene.node_spans[&TABS_KEY];
+            scene.primitives[s as usize..e as usize]
+                .iter()
+                .find(|p| {
+                    p.prim_type() == PrimType::RoundedRect
+                        && (p.local_pos[0] - r.origin.x).abs() < 1.0
+                        && (p.size[0] - r.size.x).abs() < 1.0
+                        && (p.size[1] - r.size.y).abs() < 1.0
+                })
+                .expect("tab background rect")
+                .fill_token_or_uv
+        };
+        let close_bg_fill = |rt: &AppRuntime<TabsInteractionApp>, idx: usize| -> u32 {
+            let r = laid_desc.close_rect(idx, 0.0).expect("close rect");
+            let scene = rt.scene();
+            let (s, e) = scene.node_spans[&TABS_KEY];
+            scene.primitives[s as usize..e as usize]
+                .iter()
+                .find(|p| {
+                    p.prim_type() == PrimType::RoundedRect
+                        && (p.local_pos[0] - r.origin.x).abs() < 1.0
+                        && (p.size[0] - r.size.x).abs() < 1.0
+                        && (p.size[1] - r.size.y).abs() < 1.0
+                })
+                .expect("close button background rect")
+                .fill_token_or_uv
+        };
+        let add_bg_fill = |rt: &AppRuntime<TabsInteractionApp>| -> u32 {
+            let scene = rt.scene();
+            let (s, e) = scene.node_spans[&TABS_KEY];
+            scene.primitives[s as usize..e as usize]
+                .iter()
+                .find(|p| {
+                    p.prim_type() == PrimType::RoundedRect
+                        && (p.local_pos[0] - add_rect.origin.x).abs() < 1.0
+                        && (p.size[0] - add_rect.size.x).abs() < 1.0
+                        && (p.size[1] - add_rect.size.y).abs() < 1.0
+                })
+                .expect("add button background rect")
+                .fill_token_or_uv
+        };
+
+        // 1. 悬停标签 1 主体：仅标签 1 呈现悬停底色，标签 2 与所有关闭按钮均保持静息。
+        rt.pointer_move(tab1_bg_point);
+        let _ = rt.frame(0.016);
+        assert_eq!(tab_bg_fill(&rt, 0), u32::from(tokens.tab_active.raw()));
+        assert_eq!(tab_bg_fill(&rt, 1), u32::from(tokens.tab_hover.raw()));
+        assert_eq!(tab_bg_fill(&rt, 2), u32::from(tokens.tab.raw()));
+        assert_eq!(close_bg_fill(&rt, 0), u32::from(Token::NONE.raw()));
+        assert_eq!(close_bg_fill(&rt, 1), u32::from(Token::NONE.raw()));
+        assert_eq!(add_bg_fill(&rt), u32::from(Token::NONE.raw()));
+
+        // 2. 悬停并按下标签 1 的关闭按钮 `×`：仅标签 1 的 `×` 呈现 HOVER / PRESSED，不串扰其他标签。
+        rt.pointer_move(close1_center);
+        let _ = rt.frame(0.032);
+        assert_eq!(close_bg_fill(&rt, 1), u32::from(Token::HOVER.raw()));
+        assert_eq!(close_bg_fill(&rt, 0), u32::from(Token::NONE.raw()));
+        assert_eq!(tab_bg_fill(&rt, 2), u32::from(tokens.tab.raw()));
+
+        rt.pointer_down(close1_center, PointerButton::Left);
+        let _ = rt.frame(0.048);
+        assert_eq!(close_bg_fill(&rt, 1), u32::from(Token::PRESSED.raw()));
+        assert_eq!(close_bg_fill(&rt, 0), u32::from(Token::NONE.raw()));
+
+        // 3. 左键释放标签 1 的 `×`：发出关闭请求且不误切当前激活标签（仍为 0）。
+        rt.pointer_up(close1_center, PointerButton::Left);
+        assert_eq!(
+            rt.context().take_tab_close_request(TABS_KEY),
+            Some(TabHitTarget { index: 1, id: 102 })
+        );
+        assert_eq!(rt.context().take_tab_close_request(TABS_KEY), None);
+        assert_eq!(rt.context().tab_active(TABS_KEY), Some(0));
+
+        // 4. 鼠标中键点击标签 2：发出关闭请求且不误切激活标签；中键点击固定标签 3 不触发关闭。
+        rt.pointer_move(tab2_bg_point);
+        rt.pointer_down(tab2_bg_point, PointerButton::Middle);
+        rt.pointer_up(tab2_bg_point, PointerButton::Middle);
+        assert_eq!(
+            rt.context().take_tab_close_request(TABS_KEY),
+            Some(TabHitTarget { index: 2, id: 103 })
+        );
+        assert_eq!(rt.context().tab_active(TABS_KEY), Some(0));
+
+        rt.pointer_move(tab3_bg_point);
+        rt.pointer_down(tab3_bg_point, PointerButton::Middle);
+        rt.pointer_up(tab3_bg_point, PointerButton::Middle);
+        assert_eq!(rt.context().take_tab_close_request(TABS_KEY), None);
+
+        // 5. 悬停、按下并左键点击 `+` 按钮：仅 `+` 高亮并置位新建请求。
+        rt.pointer_move(add_center);
+        let _ = rt.frame(0.064);
+        assert_eq!(add_bg_fill(&rt), u32::from(Token::HOVER.raw()));
+        rt.pointer_down(add_center, PointerButton::Left);
+        let _ = rt.frame(0.080);
+        assert_eq!(add_bg_fill(&rt), u32::from(Token::PRESSED.raw()));
+        rt.pointer_up(add_center, PointerButton::Left);
+        assert!(rt.context().take_tab_add_request(TABS_KEY));
+        assert!(!rt.context().take_tab_add_request(TABS_KEY));
+
+        // 6. 右键点击标签 1：触发 ContextMenu 时 tab_context_target 精确返回标签 1，且不误切激活标签。
+        rt.pointer_move(tab1_bg_point);
+        rt.pointer_down(tab1_bg_point, PointerButton::Right);
+        rt.pointer_up(tab1_bg_point, PointerButton::Right);
+        assert_eq!(
+            rt.application().context_seen,
+            Some(TabHitTarget { index: 1, id: 102 })
+        );
+        assert_eq!(
+            rt.context().tab_context_target(TABS_KEY),
+            Some(TabHitTarget { index: 1, id: 102 })
+        );
+        assert_eq!(
+            rt.context().take_tab_context_target(TABS_KEY),
+            Some(TabHitTarget { index: 1, id: 102 })
+        );
+        assert_eq!(rt.context().tab_context_target(TABS_KEY), None);
+        assert_eq!(rt.context().tab_active(TABS_KEY), Some(0));
+
+        // 7. 左键点击标签 1 主体：正常切换激活标签至 1；再点回标签 0 验证切换。
+        rt.pointer_down(tab1_bg_point, PointerButton::Left);
+        rt.pointer_up(tab1_bg_point, PointerButton::Left);
+        assert_eq!(rt.context().tab_active(TABS_KEY), Some(1));
+        rt.pointer_move(tab0_bg_point);
+        rt.pointer_down(tab0_bg_point, PointerButton::Left);
+        rt.pointer_up(tab0_bg_point, PointerButton::Left);
+        assert_eq!(rt.context().tab_active(TABS_KEY), Some(0));
     }
 }

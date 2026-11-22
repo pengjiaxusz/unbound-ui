@@ -701,9 +701,10 @@ pub use table::{
     TableState, TableTokens,
 };
 pub use tabs::{
-    emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, reduce_tabs_key, TabItem,
-    TabViewEvent, TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens,
-    TAB_ADD_GAP, TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
+    emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, emit_tabs_with_control_states,
+    reduce_tabs_key, tab_add_node, tab_close_node, tab_item_node, TabItem, TabViewEvent,
+    TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens, TAB_ADD_GAP,
+    TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
     TAB_SHELL_CORNER_RADIUS, TAB_SHELL_TOP_INSET,
 };
 pub use tag_input::{
@@ -1026,6 +1027,36 @@ impl WidgetOutput {
     ) -> Self {
         self.hit = Some(HitRegion::ui(node, z, rect).with_cursor(cursor));
         self
+    }
+
+    /// 判断图元是否引用载荷表（字形、彩色字形、图像、贝塞尔曲线或线性渐变）。
+    #[must_use]
+    pub fn primitive_uses_payload(prim: &GpuPrimitiveInstance) -> bool {
+        let uses_by_type = matches!(
+            prim.prim_type(),
+            unbound_gpu::data::PrimType::Glyph
+                | unbound_gpu::data::PrimType::GlyphColor
+                | unbound_gpu::data::PrimType::Image
+                | unbound_gpu::data::PrimType::Curve
+        );
+        let has_gradient = ((prim.prim_type_and_flags >> 16) as u16
+            & unbound_gpu::data::PrimFlags::GRADIENT_LINEAR.bits())
+            != 0;
+        uses_by_type || has_gradient
+    }
+
+    /// 合并子控件输出的图元与载荷，并在拼接前自动按当前 `self.payloads.len()` 重定位 `extra_payload_idx`。
+    pub fn append_child_primitives(&mut self, mut child: WidgetOutput) {
+        let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
+        if payload_base != 0 {
+            for prim in &mut child.primitives {
+                if Self::primitive_uses_payload(prim) {
+                    prim.extra_payload_idx = prim.extra_payload_idx.saturating_add(payload_base);
+                }
+            }
+        }
+        self.primitives.extend(child.primitives);
+        self.payloads.extend(child.payloads);
     }
 }
 

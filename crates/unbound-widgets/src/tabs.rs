@@ -58,6 +58,24 @@ pub const TAB_ADD_HEIGHT: f32 = 28.0;
 /// 壳层融合态“+”新增按钮与末标签之间的水平间距。
 pub const TAB_ADD_GAP: f32 = 4.0;
 
+/// 派生单个标签页主体的确定性子热区键。
+#[must_use]
+pub const fn tab_item_node(tabs_key: u64, index: usize) -> u64 {
+    tabs_key ^ 0x5441_4249_0000_0000u64 ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15u64) ^ 1
+}
+
+/// 派生单个标签页关闭按钮（`×`）的确定性子热区键。
+#[must_use]
+pub const fn tab_close_node(tabs_key: u64, index: usize) -> u64 {
+    tabs_key ^ 0x5441_4243_0000_0000u64 ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15u64) ^ 2
+}
+
+/// 派生标签栏末尾新建按钮（`+`）的确定性子热区键。
+#[must_use]
+pub const fn tab_add_node(tabs_key: u64) -> u64 {
+    tabs_key ^ 0x5441_4241_0000_0000u64 ^ 0x5441_42FFu64
+}
+
 /// `TabView` 视觉风格变体。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TabViewStyle {
@@ -1124,8 +1142,11 @@ pub fn emit_tab_close(
             )
         }
     };
-    let inset = glyph_rect.size.x * 0.3;
-    let thickness = 1.5;
+    // Win11 标准 `16×16` 图标盒内对角线跨度取 `8.5px`（落在 `8.0..=9.0px` 区间），
+    // 兼顾 100% 与高 DPI 下的锐利度。
+    let span = 8.5f32.min(glyph_rect.size.x - 4.0).max(4.0);
+    let inset = (glyph_rect.size.x - span) * 0.5;
+    let thickness = 1.4;
     for (start, end) in [
         (
             [glyph_rect.origin.x + inset, glyph_rect.origin.y + inset],
@@ -1267,6 +1288,95 @@ pub fn emit_tabs_add(
         focusable: !disabled,
         ..Default::default()
     }
+}
+
+/// 使用调用方提供的独立子部件 [`ControlState`] 解析函数发射完整标签页栏。
+///
+/// 合并各标签页、关闭按钮与新建按钮的输出时统一通过 [`WidgetOutput::append_child_primitives`]
+/// 重定位 `extra_payload_idx`，并为每个可见标签页、关闭按钮（更高 `z` 序）与新建按钮注册独立
+/// `sub_hits` / `sub_a11y` / `sub_focus_order`。
+#[must_use]
+pub fn emit_tabs_with_control_states(
+    node: u64,
+    desc: &TabsDesc,
+    state: &TabsState,
+    text_ctx: &mut crate::ergonomics::TextCtx<'_>,
+    mut resolve_tab_control: impl FnMut(usize) -> ControlState,
+    mut resolve_close_control: impl FnMut(usize) -> ControlState,
+    add_control: ControlState,
+) -> WidgetOutput {
+    let mut st = state.clone();
+    st.snap(desc);
+    let tokens = TabsTokens::standard();
+    let mut out = emit_tabs_strip(desc, &st, tokens);
+    let align_x = match desc.style {
+        TabViewStyle::Standard => crate::ergonomics::AlignX::Center,
+        TabViewStyle::ShellChrome => crate::ergonomics::AlignX::Left,
+    };
+    let active_idx = st.active_index(desc);
+    let base_z = u32::from(desc.z);
+    let close_hit_z = base_z.saturating_add(1);
+
+    for idx in 0..desc.count() {
+        let tab_r = desc.tab_rect(idx, st.scroll_x);
+        if tab_r.width() <= 0.0 {
+            continue;
+        }
+        let label_r = desc.label_rect(idx, st.scroll_x);
+        let title = &desc.items[idx].title;
+        let glyphs = if label_r.width() > 0.0 {
+            text_ctx.shape_line(
+                title,
+                label_r,
+                12.5,
+                if idx == active_idx { 600 } else { 400 },
+                align_x,
+                crate::ergonomics::AlignY::Middle,
+            )
+        } else {
+            Vec::new()
+        };
+        let item_key = tab_item_node(node, idx);
+        let tab_ctrl = resolve_tab_control(idx);
+        let tab_out = emit_tab(desc, &st, idx, tab_ctrl, &glyphs, tokens);
+        if let (Some(mut hit), Some(a11y)) = (tab_out.hit.clone(), tab_out.a11y.clone()) {
+            hit.node = item_key;
+            hit.z = base_z;
+            out.with_sub_control(item_key, hit, a11y, tab_out.focusable);
+        }
+        out.append_child_primitives(tab_out);
+
+        if desc.close_rect(idx, st.scroll_x).is_some() {
+            let close_key = tab_close_node(node, idx);
+            let close_ctrl = resolve_close_control(idx);
+            let close_out = emit_tab_close(close_key, desc, &st, idx, close_ctrl, tokens);
+            if let (Some(mut close_hit), Some(close_a11y)) =
+                (close_out.hit.clone(), close_out.a11y.clone())
+            {
+                close_hit.z = close_hit_z;
+                out.with_sub_control(close_key, close_hit, close_a11y, close_out.focusable);
+            }
+            out.append_child_primitives(close_out);
+        }
+    }
+
+    if desc.addable {
+        let add_key = tab_add_node(node);
+        let add_out = emit_tabs_add(add_key, desc, add_control, tokens);
+        if let (Some(mut add_hit), Some(add_a11y)) = (add_out.hit.clone(), add_out.a11y.clone()) {
+            add_hit.z = base_z;
+            out.with_sub_control(add_key, add_hit, add_a11y, add_out.focusable);
+        }
+        out.append_child_primitives(add_out);
+    }
+
+    // 顶层标签栏兜底热区置于子热区之下（`z - 1`），避免抢占子标签、关闭按钮或新建按钮的命中。
+    out.hit = Some(
+        HitRegion::new(node, CONTROL_LAYER, base_z.saturating_sub(1), desc.rect)
+            .with_cursor(CursorKind::Pointer),
+    );
+    out.a11y = Some(A11yNode::new(Role::TabList, "Tabs", desc.rect));
+    out
 }
 
 /// 两点之间的细描边，打包为线段图元。
@@ -1649,5 +1759,155 @@ mod tests {
         assert_eq!(img.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert_eq!(img.border_token_or_tex, 52);
         assert!((img.opacity() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_sub_node_keys_are_deterministic_and_distinct() {
+        let tabs_key = 0x1234_5678u64;
+        let add = tab_add_node(tabs_key);
+        assert_ne!(add, tabs_key);
+        let mut keys = vec![tabs_key, add];
+        for idx in 0..8 {
+            let item = tab_item_node(tabs_key, idx);
+            let close = tab_close_node(tabs_key, idx);
+            assert_eq!(item, tab_item_node(tabs_key, idx));
+            assert_eq!(close, tab_close_node(tabs_key, idx));
+            assert!(!keys.contains(&item), "duplicate tab item key at {idx}");
+            assert!(!keys.contains(&close), "duplicate tab close key at {idx}");
+            assert_ne!(item, close);
+            keys.push(item);
+            keys.push(close);
+        }
+    }
+
+    #[test]
+    fn close_icon_curve_span_matches_win11_geometry() {
+        let desc = shell_desc(600.0, 2);
+        let state = TabsState::new(0);
+        let tokens = TabsTokens::standard();
+        let out = emit_tab_close(
+            tab_close_node(99, 0),
+            &desc,
+            &state,
+            0,
+            ControlState::default(),
+            tokens,
+        );
+        let curves: Vec<_> = out
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .collect();
+        assert_eq!(curves.len(), 2, "close icon must emit two diagonal curve strokes");
+        for curve in curves {
+            let payload = out
+                .payloads
+                .get(curve.extra_payload_idx as usize)
+                .expect("curve payload in bounds");
+            let dx = (payload.p2[0] - payload.p0[0]).abs();
+            let dy = (payload.p2[1] - payload.p0[1]).abs();
+            assert!(
+                (8.0..=9.0).contains(&dx) && (8.0..=9.0).contains(&dy),
+                "expected 8..=9px close cross span, got dx={dx}, dy={dy}"
+            );
+        }
+    }
+
+    #[test]
+    fn declarative_multi_tab_rebases_payloads_and_registers_sub_hits() {
+        use crate::ergonomics::{TextCtx, UiWidget};
+
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+        let desc = TabsDesc::new(Rect::new(0.0, 0.0, 720.0, TAB_STRIP_HEIGHT), &[])
+            .with_items(vec![
+                TabItem::new(1, "Alpha"),
+                TabItem::new(2, "Beta").with_icon(ShellIcon::Folder),
+                TabItem::new(3, "Gamma").with_widget_icon(WidgetIcon::ExternalTexture(52)),
+            ])
+            .with_addable(true)
+            .with_style(TabViewStyle::ShellChrome)
+            .with_width_mode(TabWidthMode::adaptive_default());
+        let state = TabsState::new(1);
+        let tabs_key = 4242u64;
+        let out = desc.emit_laid_out(tabs_key, desc.rect, ControlState::default(), &state, &mut text_ctx);
+        let close_rects: Vec<Rect> = (0..3)
+            .filter_map(|i| desc.close_rect(i, 0.0))
+            .collect();
+        assert_eq!(close_rects.len(), 3);
+
+        // 校验所有含载荷图元的索引均不越界且无重复覆盖（每个含载荷图元独占自己的载荷槽）。
+        let mut seen_payload_indices = std::collections::HashSet::new();
+        let mut close_curve_count = 0usize;
+        let mut glyph_count = 0usize;
+        let mut image_count = 0usize;
+        for prim in &out.primitives {
+            if WidgetOutput::primitive_uses_payload(prim) {
+                let idx = prim.extra_payload_idx as usize;
+                assert!(
+                    idx < out.payloads.len(),
+                    "payload index {idx} out of bounds ({})",
+                    out.payloads.len()
+                );
+                assert!(
+                    seen_payload_indices.insert(idx),
+                    "duplicate extra_payload_idx {idx} detected across tabs"
+                );
+                if prim.prim_type() == PrimType::Curve {
+                    let center = Vec2::new(
+                        prim.local_pos[0] + prim.size[0] * 0.5,
+                        prim.local_pos[1] + prim.size[1] * 0.5,
+                    );
+                    if close_rects.iter().any(|r| r.contains_point(center)) {
+                        close_curve_count += 1;
+                        let payload = &out.payloads[idx];
+                        let dx = (payload.p2[0] - payload.p0[0]).abs();
+                        let dy = (payload.p2[1] - payload.p0[1]).abs();
+                        assert!(
+                            (8.0..=9.0).contains(&dx) && (8.0..=9.0).contains(&dy),
+                            "close curve payload {idx} collapsed or out of range: dx={dx}, dy={dy}"
+                        );
+                    }
+                } else if matches!(prim.prim_type(), PrimType::Glyph | PrimType::GlyphColor) {
+                    glyph_count += 1;
+                } else if prim.prim_type() == PrimType::Image {
+                    image_count += 1;
+                    assert_eq!(prim.fill_token_or_uv, u32::from(Token::NONE.raw()));
+                    assert_eq!(prim.border_token_or_tex, 52);
+                }
+            }
+        }
+        // 3 个标签页各含 2 条关闭叉号斜线（共 6 条）、多标签字形与 1 个外部纹理图标。
+        assert_eq!(close_curve_count, 6, "expected 6 close curves across 3 tabs");
+        assert!(glyph_count >= 3, "expected title glyphs across 3 tabs, got {glyph_count}");
+        assert_eq!(image_count, 1, "expected 1 external texture icon primitive");
+
+        // 校验子热区注册：3 个标签主体 + 3 个关闭按钮（更高 z 序）+ 1 个新建按钮。
+        let item_hit_0 = out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == tab_item_node(tabs_key, 0))
+            .expect("tab 0 sub_hit");
+        let close_hit_0 = out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == tab_close_node(tabs_key, 0))
+            .expect("tab 0 close sub_hit");
+        assert!(
+            close_hit_0.z > item_hit_0.z,
+            "close button z ({}) must be above tab item z ({})",
+            close_hit_0.z,
+            item_hit_0.z
+        );
+        assert!(
+            out.sub_hits.iter().any(|h| h.node == tab_add_node(tabs_key)),
+            "add button sub_hit must be registered"
+        );
     }
 }

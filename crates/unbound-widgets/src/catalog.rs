@@ -1747,6 +1747,38 @@ where
             let active = variant_idx % 3;
             let tabs_state = TabsState::new(active);
             let interactive_idx = if active == 1 { 0 } else { 1 };
+            if variant_idx == 0 {
+                // 变体 0：统一发射器路径，真实 TextCtx 走完整标签栏绘制。
+                let mut engine = unbound_text::TextEngine::new();
+                let mut cache = unbound_text::GlyphCache::new();
+                let mut text_ctx = crate::TextCtx {
+                    engine: &mut engine,
+                    cache: &mut cache,
+                    atlas_clock: 1,
+                    raster_scale: 1.0,
+                };
+                return crate::tabs::emit_tabs_with_control_states(
+                    node,
+                    &desc,
+                    &tabs_state,
+                    &mut text_ctx,
+                    |idx| {
+                        if idx == interactive_idx {
+                            state
+                        } else {
+                            ControlState::default()
+                        }
+                    },
+                    |idx| {
+                        if idx == interactive_idx {
+                            state
+                        } else {
+                            ControlState::default()
+                        }
+                    },
+                    state,
+                );
+            }
             let mut out = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
             for idx in 0..3 {
                 let tab_state = if idx == interactive_idx {

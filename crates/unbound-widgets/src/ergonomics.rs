@@ -3873,68 +3873,19 @@ impl UiWidget for crate::tabs::TabsDesc {
     ) -> WidgetOutput {
         let mut desc = self.clone();
         desc.rect = rect;
-        let mut st = state.clone();
-        st.snap(&desc);
-        let tokens = crate::tabs::TabsTokens::standard();
-        let mut out = crate::tabs::emit_tabs_strip(&desc, &st, tokens);
-        let align_x = match desc.style {
-            crate::tabs::TabViewStyle::Standard => AlignX::Center,
-            crate::tabs::TabViewStyle::ShellChrome => AlignX::Left,
+        let idle_sub = ControlState {
+            disabled: control.disabled,
+            ..ControlState::default()
         };
-        for idx in 0..desc.count() {
-            let tab_r = desc.tab_rect(idx, st.scroll_x);
-            if tab_r.width() <= 0.0 {
-                continue;
-            }
-            let label_r = desc.label_rect(idx, st.scroll_x);
-            let title = &desc.items[idx].title;
-            let glyphs = if label_r.width() > 0.0 {
-                text_ctx.shape_line(
-                    title,
-                    label_r,
-                    12.5,
-                    if idx == st.active_index(&desc) {
-                        600
-                    } else {
-                        400
-                    },
-                    align_x,
-                    AlignY::Middle,
-                )
-            } else {
-                Vec::new()
-            };
-            let tab_out = crate::tabs::emit_tab(&desc, &st, idx, control, &glyphs, tokens);
-            out.primitives.extend(tab_out.primitives);
-            out.payloads.extend(tab_out.payloads);
-            if desc.close_rect(idx, st.scroll_x).is_some() {
-                let close_out = crate::tabs::emit_tab_close(
-                    node ^ 0x5441_4200 ^ (idx as u64 + 1),
-                    &desc,
-                    &st,
-                    idx,
-                    ControlState::default(),
-                    tokens,
-                );
-                out.primitives.extend(close_out.primitives);
-                out.payloads.extend(close_out.payloads);
-            }
-        }
-        if desc.addable {
-            let add_out = crate::tabs::emit_tabs_add(
-                node ^ 0x5441_42FF,
-                &desc,
-                ControlState::default(),
-                tokens,
-            );
-            out.primitives.extend(add_out.primitives);
-            out.payloads.extend(add_out.payloads);
-        }
-        out.hit = Some(
-            unbound_input::HitRegion::new(node, 1, u32::from(desc.z), rect)
-                .with_cursor(unbound_input::CursorKind::Pointer),
-        );
-        out
+        crate::tabs::emit_tabs_with_control_states(
+            node,
+            &desc,
+            state,
+            text_ctx,
+            |_idx| control,
+            |_idx| idle_sub,
+            idle_sub,
+        )
     }
 }
 

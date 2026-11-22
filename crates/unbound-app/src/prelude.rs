@@ -23,7 +23,8 @@ pub use crate::{
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
     EventOutcome, ExternalTextureHandle, ExternalTextureOp, ExternalTextureState, FrameReport,
     I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale, Modifiers, OverlayManager,
-    PendingWidget, Propagation, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, WindowCommand,
+    PendingWidget, Propagation, TabHitTarget, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
+    WindowCommand,
     ROOT,
 };
 
@@ -56,7 +57,7 @@ pub use unbound_widgets::virtual_masonry::MasonryItem;
 pub use unbound_widgets::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
     emit_shell_icon_primitives, emit_sidebar_item, emit_widget_icon_primitives,
-    schema_form_trailing_action_node,
+    schema_form_trailing_action_node, tab_add_node, tab_close_node, tab_item_node,
     AddressBarDesc, AddressBarEvent, AddressBarHitKind, AddressBarState, AlertDesc,
     AppBrandBadgeDesc, AutoCompleteDesc, AutoCompleteState, BadgeDesc, BadgeVariant, BannerDesc,
     ButtonDesc, ButtonSize, ButtonTokens, ButtonVariant, CalloutDesc, CalloutState, CardDesc,
