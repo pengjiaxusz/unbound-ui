@@ -1414,7 +1414,24 @@ impl ViewContext {
 /// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
 /// 控件本身从不猜测自身几何。
 #[derive(Clone, Debug)]
-pub enum WidgetSpec {
+pub /// 虚拟树形视图单行渲染快照。
+#[derive(Clone, Debug)]
+struct TreeViewRowSnapshot {
+    /// 扁平化树行元数据。
+    row: unbound_world::TreeRow,
+    /// 该行在内容空间中的顺序索引。
+    item: usize,
+    /// 是否处于选中态。
+    selected: bool,
+    /// 行前置图标槽配置。
+    icon: unbound_widgets::TreeRowIcon,
+    /// 可选节点显示标签（未设置时发射阶段回退 `Node <id>`）。
+    label: Option<String>,
+    /// 是否在该行顶部上方绘制水平分区分隔线。
+    divider_before: bool,
+}
+
+enum WidgetSpec {
     /// 实现自动固有尺寸测量与发射的声明式 [`UiWidget`]。
     UiWidget(Arc<dyn ErasedUiWidget>),
     /// 扁平按钮。其描述符矩形会被布局后的矩形替换。
@@ -1489,12 +1506,14 @@ pub enum WidgetSpec {
     TreeView {
         /// 树形视图描述符。
         desc: unbound_widgets::TreeViewDesc,
-        /// 本帧可见行、选中态及行前置图标快照。
-        rows: Vec<(
-            unbound_widgets::TreeViewRow,
-            bool,
-            unbound_widgets::TreeRowIcon,
-        )>,
+        /// 本帧滚动偏移（逻辑像素）。
+        scroll_y: f32,
+        /// 扁平化总内容高度（逻辑像素）。
+        content_height: f32,
+        /// 当前指针悬停的单行出现键。
+        hovered_row: Option<u64>,
+        /// 本帧可见行快照列表（发射阶段将基于最终布局矩形重算每行世界坐标）。
+        rows: Vec<TreeViewRowSnapshot>,
     },
     /// 双模路径地址栏。
     AddressBar {
@@ -2665,25 +2684,68 @@ impl<'a> ViewBuilder<'a> {
         state: &mut unbound_widgets::TreeViewState,
     ) -> NodeId {
         let effective_key = self.scoped_key(key);
+        let prev_rect = self.widget_rect(effective_key);
         if desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
-            desc.rect = self
-                .widget_rect(effective_key)
-                .unwrap_or_else(|| self.viewport_rect());
+            desc.rect = prev_rect.unwrap_or_else(|| self.viewport_rect());
         }
+        // 使用上一帧已知布局高度与描述符高度的较大值采样虚拟窗口，避免首帧容器拉伸后漏行；
+        // 最终绘制坐标将在布局求解完成后基于真实 `rect` 重新计算。
+        let mut query_desc = desc.clone();
+        if let Some(prev) = prev_rect {
+            if prev.width() > 0.0 && prev.height() > 0.0 {
+                query_desc.rect = Rect::new(
+                    prev.origin.x,
+                    prev.origin.y,
+                    prev.width().max(desc.rect.width()),
+                    prev.height().max(desc.rect.height()),
+                );
+            }
+        }
+        // 若滚轮事件已更新运行时滚动状态，将其同步至树状态以便虚拟窗口命中正确区间。
+        if let Some(wheel_offset) = self
+            .widget_state
+            .borrow()
+            .get::<unbound_widgets::ScrollState>(effective_key)
+            .map(|s| s.offset())
+        {
+            if (wheel_offset.y - state.scroll_offset()).abs() > 0.01 {
+                let s_desc = query_desc.scroll_desc(state.row_count());
+                state.scroll.jump_to(&s_desc, Vec2::new(0.0, wheel_offset.y));
+            }
+        }
+        let scroll_y = state.scroll_offset();
+        let content_height = state.row_count() as f32 * desc.row_height;
+        let hovered_row = state.hovered_row();
         let rows = state
-            .rows(&desc)
+            .rows(&query_desc)
             .into_iter()
             .map(|row| {
-                let selected = state.selected.contains(&row.row.id);
-                let icon = state.row_icon(row.row.id);
-                (row, selected, icon)
+                let id = row.row.id;
+                TreeViewRowSnapshot {
+                    row: row.row,
+                    item: row.item,
+                    selected: state.selected.contains(&id),
+                    icon: state.row_icon(id),
+                    label: state.row_label(id).map(str::to_owned),
+                    divider_before: state.has_row_divider_before(id),
+                }
             })
             .collect();
         let mut node_desc = RawNodeDesc::container();
         if desc.rect.width() > 0.0 && desc.rect.height() > 0.0 {
             node_desc = node_desc.size(desc.rect.width(), desc.rect.height());
         }
-        self.widget(key, node_desc, WidgetSpec::TreeView { desc, rows })
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::TreeView {
+                desc,
+                scroll_y,
+                content_height,
+                hovered_row,
+                rows,
+            },
+        )
     }
 
     /// 声明式双模路径地址栏控件。
@@ -6055,22 +6117,85 @@ impl<A: Application> AppRuntime<A> {
                     );
                     self.collector.push(entry.key, out);
                 }
-                WidgetSpec::TreeView { desc, rows } => {
+                WidgetSpec::TreeView {
+                    desc,
+                    scroll_y,
+                    content_height,
+                    hovered_row,
+                    rows,
+                } => {
                     let mut desc = desc.clone();
                     if rect.width() > 0.0 && rect.height() > 0.0 {
                         desc.rect = rect;
                     }
                     desc.z = entry.z_base.saturating_add(desc.z);
-                    let tokens = unbound_widgets::TreeViewTokens::standard();
+                    let tokens = if desc.navigation_pane {
+                        unbound_widgets::TreeViewTokens::navigation_pane()
+                    } else {
+                        unbound_widgets::TreeViewTokens::standard()
+                    };
                     let mut bg = unbound_widgets::emit_tree_background(&desc, tokens);
                     if bg.a11y.is_none() {
                         bg.a11y = Some(A11yNode::new(Role::Tree, "TreeView", desc.rect));
                     }
                     self.collector.push(entry.key, bg);
-                    for (row, selected, icon) in rows {
+
+                    // 计算钳制后的有效滚动偏移，并建立严格对齐最终视口边界的 GPU 裁剪作用域。
+                    let scroll_desc = unbound_widgets::ScrollViewDesc::new(
+                        desc.rect,
+                        Vec2::new(desc.rect.width(), *content_height),
+                    );
+                    let raw_scroll_y = self
+                        .widget_state
+                        .borrow()
+                        .get::<unbound_widgets::ScrollState>(entry.key)
+                        .map(|s| s.offset().y)
+                        .unwrap_or(*scroll_y);
+                    let effective_scroll_y = scroll_desc
+                        .clamp_offset(Vec2::new(0.0, raw_scroll_y))
+                        .y;
+                    let clip_node = GpuClipNode::from_aabb([
+                        desc.rect.min().x,
+                        desc.rect.min().y,
+                        desc.rect.max().x,
+                        desc.rect.max().y,
+                    ]);
+                    self.collector.push_clip(clip_node, desc.rect);
+
+                    let font_size = if desc.density == unbound_widgets::TreeViewDensity::Compact {
+                        12.5
+                    } else {
+                        13.0
+                    };
+                    for snap in rows {
+                        // 基于布局求解后的最终 `desc.rect` 重算每行世界坐标，杜绝 `(0, 0)` 原点烘焙溢出。
+                        let row_y =
+                            desc.rect.origin.y + snap.item as f32 * desc.row_height - effective_scroll_y;
+                        let row_rect = Rect::new(
+                            desc.rect.origin.x,
+                            row_y,
+                            desc.rect.size.x,
+                            desc.row_height,
+                        );
+                        if row_rect.max().y < desc.rect.origin.y
+                            || row_rect.origin.y > desc.rect.max().y
+                        {
+                            continue;
+                        }
+                        let row = unbound_widgets::TreeViewRow {
+                            row: snap.row,
+                            item: snap.item,
+                            rect: row_rect,
+                        };
+                        if snap.divider_before {
+                            let divider_out =
+                                unbound_widgets::emit_tree_row_divider(&desc, &row, tokens);
+                            self.collector
+                                .push(row.row.id ^ 0x5452_4545_0002, divider_out);
+                        }
                         // 将 `TreeRowIcon::ExternalTexture(handle_raw)` 桥接至 `AssetHub` 已上传的外部纹理 GPU 槽位；
                         // 若句柄尚未驻留则退化为 `TreeRowIcon::None`，避免绑定无效纹理槽。
-                        let resolved_icon = match *icon {
+                        let resolved_icon = match snap.icon {
                             unbound_widgets::TreeRowIcon::ExternalTexture(handle_raw) => self
                                 .asset_hub
                                 .external_texture_slot(ExternalTextureHandle(handle_raw))
@@ -6081,39 +6206,94 @@ impl<A: Application> AppRuntime<A> {
                             other => other,
                         };
                         let has_icon = !matches!(resolved_icon, unbound_widgets::TreeRowIcon::None);
-                        let label_text = format!("Node {}", row.row.id);
+                        let raw_label = snap
+                            .label
+                            .clone()
+                            .unwrap_or_else(|| format!("Node {}", row.row.id));
                         let label_x =
                             unbound_widgets::tree_row_label_x(&desc, row.row.depth, has_icon);
+                        let avail_width = (row.rect.max().x - label_x - 8.0).max(0.0);
+                        let elided = unbound_widgets::elide_text_with_measure(
+                            &raw_label,
+                            avail_width,
+                            unbound_widgets::ElideMode::End,
+                            |candidate| text_ctx.measure_line(candidate, font_size, 400).x,
+                        );
                         let label_rect = Rect::new(
                             label_x,
                             row.rect.origin.y,
-                            (row.rect.max().x - label_x - 8.0).max(16.0),
+                            avail_width,
                             row.rect.height(),
                         );
-                        let font_size = if desc.density == unbound_widgets::TreeViewDensity::Compact
-                        {
-                            12.5
+                        let label = if avail_width > 0.0 && !elided.display.is_empty() {
+                            text_ctx.shape_line(
+                                &elided.display,
+                                label_rect,
+                                font_size,
+                                400,
+                                unbound_widgets::AlignX::Left,
+                                unbound_widgets::AlignY::Middle,
+                            )
                         } else {
-                            13.0
+                            Vec::new()
                         };
-                        let label = text_ctx.shape_line(
-                            &label_text,
-                            label_rect,
-                            font_size,
-                            400,
-                            unbound_widgets::AlignX::Left,
-                            unbound_widgets::AlignY::Middle,
+                        // 单行悬停态：优先使用 `TreeViewState::hovered_row`，回退按单行命中键匹配，
+                        // 避免整棵树共享父容器的 `PointerPhase::Hovered`。
+                        let is_row_hovered = hovered_row.map_or_else(
+                            || self.ctx.hovered == Some(row.row.id),
+                            |id| id == row.row.id,
                         );
-                        let row_out = unbound_widgets::emit_tree_row_with_icon(
+                        let row_phase = if self.ctx.pressed == Some(row.row.id) {
+                            unbound_widgets::PointerPhase::Pressed
+                        } else if is_row_hovered {
+                            unbound_widgets::PointerPhase::Hovered
+                        } else {
+                            unbound_widgets::PointerPhase::Idle
+                        };
+                        let row_state = ControlState {
+                            phase: row_phase,
+                            focused: self.ctx.focused == Some(row.row.id)
+                                && self.ctx.focus_visible,
+                            disabled: state.disabled,
+                            selected: snap.selected,
+                        };
+                        let mut row_out = unbound_widgets::emit_tree_row_with_icon(
                             &desc,
-                            row,
+                            &row,
                             resolved_icon,
-                            *selected,
-                            state,
+                            snap.selected,
+                            row_state,
                             &label,
                             tokens,
                         );
+                        if let Some(a11y) = row_out.a11y.as_mut() {
+                            a11y.label = raw_label;
+                        }
                         self.collector.push(row.row.id, row_out);
+                    }
+                    self.collector.pop_clip();
+
+                    // 内容高度超过视口时注册滚轮区域并发射右侧细滚动条。
+                    if *content_height > desc.rect.height() && desc.rect.height() > 0.0 {
+                        self.scroll_regions.push((
+                            entry.key,
+                            desc.rect,
+                            Vec2::new(desc.rect.width(), *content_height),
+                            true,
+                        ));
+                        let mut sb_desc = scroll_desc;
+                        sb_desc.axis = unbound_widgets::ScrollAxis::Vertical;
+                        sb_desc.z = desc.z.saturating_add(5);
+                        let mut sb_state = unbound_widgets::ScrollState::new();
+                        sb_state.jump_to(&sb_desc, Vec2::new(0.0, effective_scroll_y));
+                        sb_state.reveal_scrollbar();
+                        let sb_out = unbound_widgets::emit_scroll_view(
+                            entry.key,
+                            &sb_desc,
+                            &sb_state,
+                            state,
+                        );
+                        sb_out.push_into(&mut self.collector, entry.key ^ 0x5452_4545_0003);
                     }
                 }
                 WidgetSpec::AddressBar {
@@ -7848,5 +8028,144 @@ mod tests {
             }
             other => panic!("expected SyncNativePopup, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tree_view_recomputes_row_rects_under_clip_and_registers_scrollbar() {
+        use unbound_theme::Token;
+        use unbound_widgets::{TreeViewDensity, TreeViewDesc, TreeViewState};
+        use unbound_world::TreeRow;
+
+        struct NavPaneApp {
+            tree_state: RefCell<TreeViewState>,
+        }
+        impl Application for NavPaneApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.column(1, |col| {
+                    // 顶部 80px 占位栏，模拟标题栏与工具栏
+                    col.button(2, ButtonDesc::new(Rect::new(0.0, 0.0, 240.0, 80.0), "TopBar"));
+                    // 刻意传入 (0, 0) 原点描述符，验证发射阶段按布局后的真实原点重算行矩形
+                    col.tree_view(
+                        12,
+                        TreeViewDesc::new(Rect::new(0.0, 0.0, 220.0, 140.0))
+                            .with_density(TreeViewDensity::Compact)
+                            .with_navigation_pane(true),
+                        &mut self.tree_state.borrow_mut(),
+                    );
+                });
+            }
+        }
+
+        let mut tree = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        let roots: Vec<TreeRow> = (1001..=1010).map(|id| TreeRow::new(id, 0, false)).collect();
+        tree.rebuild(&roots, |_| Vec::new());
+        tree.set_row_label(1001, "Quick Access");
+        tree.set_row_label(
+            1002,
+            "VeryLongNavigationPaneDirectoryNameThatMustElideBeforeSidebarRightEdge",
+        );
+        tree.set_row_divider_before(1002, true);
+        tree.select(1001, false);
+        tree.hovered = Some(1002);
+
+        let mut rt = AppRuntime::new(
+            NavPaneApp {
+                tree_state: RefCell::new(tree),
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        let _ = rt.frame(0.0);
+
+        let tree_rect = rt.widget_rect(12).expect("tree view laid out");
+        assert!(
+            tree_rect.origin.y >= 80.0,
+            "tree view must be placed below top bar, got y={}",
+            tree_rect.origin.y
+        );
+
+        let scene = rt.scene();
+        // 验证存在对齐 tree_rect 的 GPU 裁剪节点
+        assert!(
+            scene.clips.iter().any(|c| {
+                (c.aabb_clip[0] - tree_rect.min().x).abs() < 0.5
+                    && (c.aabb_clip[1] - tree_rect.min().y).abs() < 0.5
+                    && (c.aabb_clip[2] - tree_rect.max().x).abs() < 0.5
+                    && (c.aabb_clip[3] - tree_rect.max().y).abs() < 0.5
+            }),
+            "tree view must push a clip node matching its laid out bounds"
+        );
+
+        // 验证第一行与第二行均严格落在 tree_rect 内部且受 clip 约束，未溢出到顶部 y = 0
+        for row_id in [1001u64, 1002u64] {
+            let (start, end) = scene
+                .node_spans
+                .get(&row_id)
+                .copied()
+                .expect("tree row primitives emitted");
+            assert!(end > start);
+            for prim in &scene.primitives[start as usize..end as usize] {
+                assert_ne!(prim.clip_idx, CLIP_NONE, "tree row must be clipped");
+                assert!(
+                    prim.local_pos[1] >= tree_rect.origin.y - 2.0,
+                    "row {row_id} primitive overflowed above tree rect: y={} < {}",
+                    prim.local_pos[1],
+                    tree_rect.origin.y
+                );
+                assert!(
+                    prim.local_pos[0] + prim.size[0] <= tree_rect.max().x + 2.0,
+                    "row {row_id} primitive overflowed right edge"
+                );
+            }
+        }
+
+        // 验证第 1002 行的前置分隔线与悬停填充
+        let (div_start, div_end) = scene
+            .node_spans
+            .get(&(1002u64 ^ 0x5452_4545_0002))
+            .copied()
+            .expect("row divider emitted");
+        assert_eq!(div_end - div_start, 1);
+        assert_eq!(
+            scene.primitives[div_start as usize].fill_token_or_uv,
+            Token::DIVIDER.raw() as u32
+        );
+
+        let (r1_start, _) = scene.node_spans[&1001];
+        let (r2_start, _) = scene.node_spans[&1002];
+        let (r3_start, _) = scene.node_spans[&1003];
+        assert_eq!(
+            scene.primitives[r1_start as usize].fill_token_or_uv,
+            Token::NAV_SELECTED.raw() as u32
+        );
+        assert_eq!(
+            scene.primitives[r2_start as usize].fill_token_or_uv,
+            Token::NAV_HOVER.raw() as u32
+        );
+        assert_eq!(
+            scene.primitives[r3_start as usize].fill_token_or_uv,
+            Token::NONE.raw() as u32
+        );
+
+        // 验证 10 行 × 28px = 280px > 140px 时注册滚轮区域并发射滚动条
+        assert!(
+            rt.scroll_regions()
+                .iter()
+                .any(|&(k, r, content, vertical)| {
+                    k == 12
+                        && vertical
+                        && (r.origin.y - tree_rect.origin.y).abs() < 0.5
+                        && content.y > r.height()
+                }),
+            "overflowing tree view must register a vertical scroll region"
+        );
+        assert!(
+            scene.node_spans.contains_key(&(12u64 ^ 0x5452_4545_0003)),
+            "overflowing tree view must emit scrollbar thumb primitives"
+        );
     }
 }

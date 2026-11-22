@@ -12,7 +12,7 @@ use unbound_a11y::A11yNode;
 use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
 use unbound_gpu::GpuPrimitiveInstance;
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
@@ -127,6 +127,12 @@ pub struct TreeViewDesc {
     pub indent: f32,
     /// 绘制顺序键。
     pub z: u16,
+    /// 是否启用 Windows 11 资源管理器导航窗格预设风格（默认 `false`）。
+    pub navigation_pane: bool,
+    /// 是否绘制 1px 竖向缩进参考线（标准模式默认 `true`，导航窗格模式自动关闭）。
+    pub indent_guides: bool,
+    /// 是否绘制左侧 3px 蓝色选中强调指示条（标准模式默认 `true`，导航窗格模式自动关闭）。
+    pub selection_indicator: bool,
 }
 
 impl TreeViewDesc {
@@ -139,6 +145,9 @@ impl TreeViewDesc {
             density: TreeViewDensity::Standard,
             indent: TREE_INDENT,
             z: 450,
+            navigation_pane: false,
+            indent_guides: true,
+            selection_indicator: true,
         }
     }
 
@@ -147,6 +156,37 @@ impl TreeViewDesc {
     pub fn with_density(mut self, density: TreeViewDensity) -> Self {
         self.density = density;
         self.row_height = density.row_height();
+        self
+    }
+
+    /// 启用或关闭 Windows 11 导航窗格预设风格。
+    ///
+    /// 开启时自动采用 [`TreeViewTokens::navigation_pane`] 配色，并关闭缩进参考线与左侧选中强调条；
+    /// 关闭时恢复标准 `TreeView` 的默认视觉配置。
+    #[must_use]
+    pub fn with_navigation_pane(mut self, enabled: bool) -> Self {
+        self.navigation_pane = enabled;
+        if enabled {
+            self.indent_guides = false;
+            self.selection_indicator = false;
+        } else {
+            self.indent_guides = true;
+            self.selection_indicator = true;
+        }
+        self
+    }
+
+    /// 显式开关 1px 竖向缩进参考线。
+    #[must_use]
+    pub fn with_indent_guides(mut self, enabled: bool) -> Self {
+        self.indent_guides = enabled;
+        self
+    }
+
+    /// 显式开关左侧 3px 蓝色选中强调指示条。
+    #[must_use]
+    pub fn with_selection_indicator(mut self, enabled: bool) -> Self {
+        self.selection_indicator = enabled;
         self
     }
 
@@ -177,12 +217,18 @@ pub struct TreeViewState {
     pub selected: FxHashSet<u64>,
     /// 拥有键盘焦点的行（`occurrence_key`）。
     pub focused: Option<u64>,
+    /// 当前指针悬停的单行（`occurrence_key`），避免整棵树共享悬停态。
+    pub hovered: Option<u64>,
     /// 当前正在重命名的行及其编辑器。
     pub renaming: Option<(u64, TextEditState)>,
     /// 待宿主消费的离散交互事件队列。
     pub pending_events: Vec<TreeViewEvent>,
     /// 按 `occurrence_key` 索引的行前置图标表。
     pub row_icons: FxHashMap<u64, TreeRowIcon>,
+    /// 按 `occurrence_key` 索引的节点显示标签表。
+    row_labels: FxHashMap<u64, String>,
+    /// 需要在行顶部上方绘制水平分区分隔线的出现键集合。
+    row_dividers_before: FxHashSet<u64>,
     /// 已发射过 `ExpandRequested` 且尚未完成加载的出现键集合（用于防重入）。
     requested_loads: FxHashSet<u64>,
     /// 所有扁平化行（用于键盘导航）。
@@ -204,9 +250,12 @@ impl TreeViewState {
             scroll: ScrollState::new(),
             selected: FxHashSet::default(),
             focused: None,
+            hovered: None,
             renaming: None,
             pending_events: Vec::new(),
             row_icons: FxHashMap::default(),
+            row_labels: FxHashMap::default(),
+            row_dividers_before: FxHashSet::default(),
             requested_loads: FxHashSet::default(),
             order: Vec::new(),
             parent: FxHashMap::default(),
@@ -242,6 +291,68 @@ impl TreeViewState {
             .get(&occurrence_key)
             .copied()
             .unwrap_or(TreeRowIcon::None)
+    }
+
+    /// 为指定行设置显示标签文本。
+    pub fn set_row_label(&mut self, id: u64, label: impl Into<String>) {
+        self.row_labels.insert(id, label.into());
+    }
+
+    /// 查询指定行的显示标签文本。
+    #[must_use]
+    pub fn row_label(&self, id: u64) -> Option<&str> {
+        self.row_labels.get(&id).map(String::as_str)
+    }
+
+    /// 清空全部已注册的行显示标签。
+    pub fn clear_row_labels(&mut self) {
+        self.row_labels.clear();
+    }
+
+    /// 配置是否在指定行顶部上方绘制柔和水平分区分隔线。
+    pub fn set_row_divider_before(&mut self, id: u64, enabled: bool) {
+        if enabled {
+            self.row_dividers_before.insert(id);
+        } else {
+            self.row_dividers_before.remove(&id);
+        }
+    }
+
+    /// 查询指定行顶部上方是否启用了水平分区分隔线。
+    #[must_use]
+    pub fn has_row_divider_before(&self, id: u64) -> bool {
+        self.row_dividers_before.contains(&id)
+    }
+
+    /// 清空全部行前置分隔线标记。
+    pub fn clear_row_dividers(&mut self) {
+        self.row_dividers_before.clear();
+    }
+
+    /// 返回当前指针悬停的单行出现键。
+    #[must_use]
+    pub fn hovered_row(&self) -> Option<u64> {
+        self.hovered
+    }
+
+    /// 根据指针坐标执行视口内单行悬停命中测试，并更新 `hovered` 状态。
+    pub fn hover_at(&mut self, desc: &TreeViewDesc, point: Vec2) -> Option<u64> {
+        if !desc.rect.contains_point(point) {
+            self.hovered = None;
+            return None;
+        }
+        let hit = self
+            .rows(desc)
+            .into_iter()
+            .find(|row| row.rect.contains_point(point))
+            .map(|row| row.row.id);
+        self.hovered = hit;
+        hit
+    }
+
+    /// 清除当前单行悬停状态。
+    pub fn clear_hover(&mut self) {
+        self.hovered = None;
     }
 
     /// 替换数据模型。
@@ -577,14 +688,19 @@ impl TreeViewState {
     /// 仅返回视口内（及紧邻周围）的槽位，这是虚拟化器恒定实体数量的保证。
     pub fn rows(&mut self, desc: &TreeViewDesc) -> Vec<TreeViewRow> {
         self.set_viewport_height(desc.rect.size.y);
-        self.last_window = self.tree.update(self.scroll_offset(), desc.rect.size.y);
+        if desc.rect.size.x <= 0.0 || desc.rect.size.y <= 0.0 {
+            return Vec::new();
+        }
+        let scroll_desc = desc.scroll_desc(self.order.len());
+        let clamped_scroll_y = scroll_desc.clamp_offset(self.scroll.offset()).y;
+        self.last_window = self.tree.update(clamped_scroll_y, desc.rect.size.y);
         let mut out = Vec::with_capacity(self.tree.slot_count());
         for slot in 0..self.tree.slot_count() {
             let (Some(row), Some(item)) = (self.tree.row_at(slot), self.tree.slot_item(slot))
             else {
                 continue;
             };
-            let y = desc.rect.origin.y + self.tree.item_y(item) - self.scroll_offset();
+            let y = desc.rect.origin.y + self.tree.item_y(item) - clamped_scroll_y;
             let rect = Rect::new(desc.rect.origin.x, y, desc.rect.size.x, desc.row_height);
             if rect.max().y < desc.rect.origin.y || rect.origin.y > desc.rect.max().y {
                 continue;
@@ -738,38 +854,42 @@ pub fn emit_tree_row_with_icon(
         desc.z,
     ));
 
-    // 左侧选中强调指示条（未选中时透明度为 0，保持图元数恒定）
-    // 对齐 WinUI 3 关键规范：3×16px 垂直居中、圆角 1.5px 的选中胶囊条，使用 Token::PRIMARY
-    let pill_h = (rect.size.y - 12.0).clamp(12.0, 16.0);
-    let indicator = Rect::new(
-        rect.origin.x + 4.0,
-        rect.origin.y + (rect.size.y - pill_h) * 0.5,
-        3.0,
-        pill_h,
-    );
-    let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, desc.z + 1);
-    if !selected {
-        indicator_inst.z_and_opacity =
-            GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
+    if desc.selection_indicator {
+        // 左侧选中强调指示条（未选中时透明度为 0，保持图元数恒定）
+        // 对齐 WinUI 3 关键规范：3×16px 垂直居中、圆角 1.5px 的选中胶囊条，使用 Token::PRIMARY
+        let pill_h = (rect.size.y - 12.0).clamp(12.0, 16.0);
+        let indicator = Rect::new(
+            rect.origin.x + 4.0,
+            rect.origin.y + (rect.size.y - pill_h) * 0.5,
+            3.0,
+            pill_h,
+        );
+        let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, desc.z + 1);
+        if !selected {
+            indicator_inst.z_and_opacity =
+                GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
+        }
+        primitives.push(indicator_inst);
     }
-    primitives.push(indicator_inst);
 
-    // 每个深度层级一条参考线，停在箭头列之前。
+    // 每个深度层级一条参考线，停在箭头列之前（导航窗格模式下默认关闭）。
     let indent = desc.indent;
-    for level in 0..row.row.depth as usize {
-        let x = rect.origin.x + level as f32 * indent + indent * 0.5;
-        let guide = Rect::new(x, rect.origin.y, 1.0, rect.size.y);
-        primitives.push(instance(
-            guide,
-            [0.0; 4],
-            tokens.guide,
-            Token::NONE,
-            0.0,
-            0.0,
-            PrimType::Line,
-            SubElement::Content,
-            desc.z,
-        ));
+    if desc.indent_guides {
+        for level in 0..row.row.depth as usize {
+            let x = rect.origin.x + level as f32 * indent + indent * 0.5;
+            let guide = Rect::new(x, rect.origin.y, 1.0, rect.size.y);
+            primitives.push(instance(
+                guide,
+                [0.0; 4],
+                tokens.guide,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Content,
+                desc.z,
+            ));
+        }
     }
 
     // ExpandCollapseChevron 左侧 Padding = 14，字形 12 × 12，独立热区 20 × 20。
@@ -943,6 +1063,31 @@ pub fn emit_tree_row_with_icon(
 #[must_use]
 pub const fn tree_toggle_node(row_id: u64) -> u64 {
     row_id ^ 0x5452_4545_0001
+}
+
+/// 输出位于树行顶部上方的柔和 1px 水平分区分隔线（左右各留白 `12px`）。
+#[must_use]
+pub fn emit_tree_row_divider(
+    desc: &TreeViewDesc,
+    row: &TreeViewRow,
+    tokens: TreeViewTokens,
+) -> WidgetOutput {
+    let inset = 12.0;
+    let width = (row.rect.size.x - inset * 2.0).max(0.0);
+    let primitives = if width > 0.0 {
+        let line_rect = Rect::new(row.rect.origin.x + inset, row.rect.origin.y, width, 1.0);
+        vec![surface(line_rect, 0.0, tokens.guide, desc.z)]
+    } else {
+        Vec::new()
+    };
+    WidgetOutput {
+        primitives,
+        payloads: Vec::new(),
+        hit: None,
+        a11y: None,
+        focusable: false,
+        ..Default::default()
+    }
 }
 
 /// 输出视口背景。
@@ -1345,5 +1490,136 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn navigation_pane_hides_indent_guides_and_selection_indicator() {
+        let std_desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 140.0))
+            .with_density(TreeViewDensity::Compact);
+        let nav_desc = std_desc.clone().with_navigation_pane(true);
+        assert!(nav_desc.navigation_pane);
+        assert!(!nav_desc.indent_guides);
+        assert!(!nav_desc.selection_indicator);
+
+        let row = TreeViewRow {
+            row: TreeRow::new(11, 2, false),
+            item: 0,
+            rect: Rect::new(0.0, 0.0, 260.0, TREE_ROW_COMPACT),
+        };
+        let tokens = TreeViewTokens::navigation_pane();
+        let std_out = emit_tree_row_with_icon(
+            &std_desc,
+            &row,
+            TreeRowIcon::None,
+            true,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
+        let nav_out = emit_tree_row_with_icon(
+            &nav_desc,
+            &row,
+            TreeRowIcon::None,
+            true,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
+        // 导航窗格模式关闭了 1 条蓝色左强调条与 2 条深度缩进参考线
+        assert_eq!(nav_out.primitives.len() + 3, std_out.primitives.len());
+        assert!(
+            !nav_out
+                .primitives
+                .iter()
+                .any(|p| p.prim_type() == PrimType::Line),
+            "navigation pane must not emit vertical indent guide lines"
+        );
+        assert!(
+            !nav_out
+                .primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == Token::PRIMARY.raw() as u32),
+            "navigation pane must not emit primary selection indicator pill"
+        );
+        assert_eq!(
+            nav_out.primitives[0].fill_token_or_uv,
+            tokens.row_selected.raw() as u32
+        );
+        assert_eq!(tokens.background, Token::NAV_BG);
+        assert_eq!(tokens.row_selected, Token::NAV_SELECTED);
+
+        // 显式开关可覆盖导航窗格默认值
+        let custom_desc = nav_desc
+            .with_indent_guides(true)
+            .with_selection_indicator(true);
+        assert!(custom_desc.indent_guides);
+        assert!(custom_desc.selection_indicator);
+    }
+
+    #[test]
+    fn row_labels_and_dividers_can_be_stored_and_emitted() {
+        let mut state = state();
+        assert_eq!(state.row_label(1), None);
+        state.set_row_label(1, "Quick Access");
+        state.set_row_label(2, "This PC");
+        assert_eq!(state.row_label(1), Some("Quick Access"));
+        assert_eq!(state.row_label(2), Some("This PC"));
+
+        assert!(!state.has_row_divider_before(2));
+        state.set_row_divider_before(2, true);
+        assert!(state.has_row_divider_before(2));
+
+        let desc = TreeViewDesc::new(Rect::new(16.0, 80.0, 240.0, 160.0))
+            .with_navigation_pane(true);
+        let rows = state.rows(&desc);
+        let row2 = rows.iter().find(|r| r.row.id == 2).expect("row 2 visible");
+        let div_out = emit_tree_row_divider(&desc, row2, TreeViewTokens::navigation_pane());
+        assert_eq!(div_out.primitives.len(), 1);
+        let prim = &div_out.primitives[0];
+        assert_eq!(prim.fill_token_or_uv, Token::DIVIDER.raw() as u32);
+        assert!((prim.local_pos[0] - (row2.rect.origin.x + 12.0)).abs() < 0.01);
+        assert!((prim.local_pos[1] - row2.rect.origin.y).abs() < 0.01);
+        assert!((prim.size[0] - (row2.rect.size.x - 24.0)).abs() < 0.01);
+        assert!((prim.size[1] - 1.0).abs() < 0.01);
+
+        state.set_row_divider_before(2, false);
+        assert!(!state.has_row_divider_before(2));
+        state.set_row_divider_before(2, true);
+        state.clear_row_dividers();
+        assert!(!state.has_row_divider_before(2));
+        state.clear_row_labels();
+        assert_eq!(state.row_label(1), None);
+    }
+
+    #[test]
+    fn hover_at_tracks_single_row_and_respects_nonzero_origin() {
+        let mut state = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        state.rebuild(&[root(1), root(2)], children);
+        let desc = TreeViewDesc::new(Rect::new(24.0, 100.0, 220.0, 140.0))
+            .with_density(TreeViewDensity::Compact)
+            .with_navigation_pane(true);
+
+        let rows = state.rows(&desc);
+        assert_eq!(rows.len(), 2);
+        assert!((rows[0].rect.origin.x - 24.0).abs() < f32::EPSILON);
+        assert!((rows[0].rect.origin.y - 100.0).abs() < f32::EPSILON);
+        assert!((rows[1].rect.origin.y - 128.0).abs() < f32::EPSILON);
+
+        // 命中第一行
+        assert_eq!(state.hover_at(&desc, Vec2::new(60.0, 110.0)), Some(1));
+        assert_eq!(state.hovered_row(), Some(1));
+
+        // 命中第二行
+        assert_eq!(state.hover_at(&desc, Vec2::new(60.0, 136.0)), Some(2));
+        assert_eq!(state.hovered_row(), Some(2));
+
+        // 指针移出视口上方或右侧时清空悬停
+        assert_eq!(state.hover_at(&desc, Vec2::new(60.0, 50.0)), None);
+        assert_eq!(state.hovered_row(), None);
+
+        // 手动 clear_hover
+        assert_eq!(state.hover_at(&desc, Vec2::new(60.0, 110.0)), Some(1));
+        state.clear_hover();
+        assert_eq!(state.hovered_row(), None);
     }
 }

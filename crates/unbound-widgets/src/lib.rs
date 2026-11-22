@@ -747,9 +747,9 @@ pub use tree_table::{
     TREE_TABLE_HEADER_HEIGHT, TREE_TABLE_ROW_HEIGHT,
 };
 pub use tree_view::{
-    emit_tree_background, emit_tree_row, emit_tree_row_with_icon, tree_row_label_x, TreeRowIcon,
-    TreeViewDensity, TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens,
-    TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT,
+    emit_tree_background, emit_tree_row, emit_tree_row_divider, emit_tree_row_with_icon,
+    tree_row_label_x, TreeRowIcon, TreeViewDensity, TreeViewDesc, TreeViewEvent, TreeViewRow,
+    TreeViewState, TreeViewTokens, TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT,
 };
 pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 pub use virtual_views::{
