@@ -571,7 +571,17 @@ impl UiWidget for ButtonDesc {
         } else {
             0.0
         };
-        let w = (measured.x + icon_extra + pad_x)
+        let chevron_extra = if self.dropdown_chevron {
+            if self.label.is_empty() && self.shell_icon.is_none() && self.icon.is_none() {
+                crate::button::BUTTON_DROPDOWN_CHEVRON_SIZE
+            } else {
+                crate::button::BUTTON_DROPDOWN_CHEVRON_SIZE
+                    + crate::button::BUTTON_DROPDOWN_CHEVRON_GAP
+            }
+        } else {
+            0.0
+        };
+        let w = (measured.x + icon_extra + chevron_extra + pad_x)
             .max(self.rect.width())
             .max(min_w);
         let h = self.size.height().max(self.rect.height());

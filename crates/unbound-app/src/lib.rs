@@ -5297,6 +5297,30 @@ impl<A: Application> AppRuntime<A> {
                 self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
             }
         }
+        if step > 0.0 && !self.scroll_regions.is_empty() {
+            let scrollbar_changed = {
+                let mut store = self.widget_state.borrow_mut();
+                let mut changed = false;
+                for &(scroll_key, viewport_rect, _, _) in &self.scroll_regions {
+                    if let Some(st) = store.get_mut::<unbound_widgets::ScrollState>(scroll_key) {
+                        let hovering = (self.ctx.hovered == Some(scroll_key)
+                            || self.ctx.hovered == Some(scroll_key ^ (1 << 63))
+                            || self.ctx.hovered == Some(scroll_key ^ (1 << 62))
+                            || (self.ctx.hovered.is_some()
+                                && viewport_rect.contains_point(self.ctx.pointer)))
+                            && viewport_rect.contains_point(self.ctx.pointer);
+                        if st.tick_scrollbar(step, hovering) {
+                            changed = true;
+                        }
+                    }
+                }
+                changed
+            };
+            if scrollbar_changed {
+                self.force_rebuild = true;
+                self.mark(DirtyFlags::PAINT);
+            }
+        }
     }
 
     /// 从资产中心与字形缓存排空待上传任务。
@@ -6227,6 +6251,7 @@ impl<A: Application> AppRuntime<A> {
                     } else {
                         13.0
                     };
+                    let mut any_row_hovered = false;
                     for snap in rows {
                         // 基于布局求解后的最终 `desc.rect` 重算每行世界坐标，杜绝 `(0, 0)` 原点烘焙溢出。
                         let row_y = desc.rect.origin.y + snap.item as f32 * desc.row_height
@@ -6289,13 +6314,18 @@ impl<A: Application> AppRuntime<A> {
                         } else {
                             Vec::new()
                         };
-                        // 单行悬停态：优先使用 `TreeViewState::hovered_row`，回退按单行命中键匹配，
-                        // 避免整棵树共享父容器的 `PointerPhase::Hovered`。
-                        let is_row_hovered = hovered_row.map_or_else(
-                            || self.ctx.hovered == Some(row.row.id),
-                            |id| id == row.row.id,
-                        );
-                        let row_phase = if self.ctx.pressed == Some(row.row.id) {
+                        let toggle_key = unbound_widgets::tree_toggle_node(row.row.id);
+                        // 单行悬停与按压态：将展开箭头子热区 `tree_toggle_node(row.row.id)` 归属到所属行，
+                        // 避免鼠标移入展开箭头时整行高亮闪烁消失，同时兼容业务层手动设置的 `hovered_row`。
+                        let is_row_hovered = self.ctx.hovered == Some(row.row.id)
+                            || self.ctx.hovered == Some(toggle_key)
+                            || *hovered_row == Some(row.row.id);
+                        if is_row_hovered {
+                            any_row_hovered = true;
+                        }
+                        let is_row_pressed = self.ctx.pressed == Some(row.row.id)
+                            || self.ctx.pressed == Some(toggle_key);
+                        let row_phase = if is_row_pressed {
                             unbound_widgets::PointerPhase::Pressed
                         } else if is_row_hovered {
                             unbound_widgets::PointerPhase::Hovered
@@ -6324,7 +6354,7 @@ impl<A: Application> AppRuntime<A> {
                     }
                     self.collector.pop_clip();
 
-                    // 内容高度超过视口时注册滚轮区域并发射右侧细滚动条。
+                    // 内容高度超过视口时注册滚轮区域并复用持久化 `ScrollState` 按需显隐右侧细滚动条。
                     if *content_height > desc.rect.height() && desc.rect.height() > 0.0 {
                         self.scroll_regions.push((
                             entry.key,
@@ -6335,11 +6365,36 @@ impl<A: Application> AppRuntime<A> {
                         let mut sb_desc = scroll_desc;
                         sb_desc.axis = unbound_widgets::ScrollAxis::Vertical;
                         sb_desc.z = desc.z.saturating_add(5);
-                        let mut sb_state = unbound_widgets::ScrollState::new();
-                        sb_state.jump_to(&sb_desc, Vec2::new(0.0, effective_scroll_y));
-                        sb_state.reveal_scrollbar();
+                        let thumb_key = entry.key ^ (1 << 63);
+                        let tree_hovered = any_row_hovered
+                            || self.ctx.hovered == Some(entry.key)
+                            || self.ctx.hovered == Some(thumb_key)
+                            || self.ctx.pressed == Some(thumb_key);
+                        let sb_state = {
+                            let mut store = self.widget_state.borrow_mut();
+                            let st = store.use_state_or_init::<unbound_widgets::ScrollState>(
+                                entry.key,
+                                unbound_widgets::ScrollState::new,
+                            );
+                            if tree_hovered || st.is_animating() || st.dragging().is_some() {
+                                st.reveal_scrollbar();
+                            }
+                            st.clone()
+                        };
+                        let sb_control = ControlState {
+                            phase: if self.ctx.pressed == Some(thumb_key) {
+                                unbound_widgets::PointerPhase::Pressed
+                            } else if tree_hovered {
+                                unbound_widgets::PointerPhase::Hovered
+                            } else {
+                                unbound_widgets::PointerPhase::Idle
+                            },
+                            focused: state.focused,
+                            disabled: state.disabled,
+                            selected: state.selected,
+                        };
                         let sb_out = unbound_widgets::emit_scroll_view(
-                            entry.key, &sb_desc, &sb_state, state,
+                            entry.key, &sb_desc, &sb_state, sb_control,
                         );
                         sb_out.push_into(&mut self.collector, entry.key ^ 0x5452_4545_0003);
                     }
@@ -6354,10 +6409,54 @@ impl<A: Application> AppRuntime<A> {
                     }
                     desc.z = entry.z_base.saturating_add(desc.z);
                     let layout = unbound_widgets::compute_layout(&desc);
+                    // 按 `address_bar_sub_node(entry.key, kind)` 自动反解悬停与按压子热区，
+                    // 兼顾业务层手动覆写的 `hovered_hit` / `pressed_hit`。
+                    let resolve_sub_hit = |target: Option<u64>| -> Option<unbound_widgets::AddressBarHitKind> {
+                        let key = target?;
+                        use unbound_widgets::{address_bar_sub_node, AddressBarHitKind};
+                        for kind in [
+                            AddressBarHitKind::NavBack,
+                            AddressBarHitKind::NavForward,
+                            AddressBarHitKind::NavUp,
+                            AddressBarHitKind::Refresh,
+                            AddressBarHitKind::RootChevron,
+                            AddressBarHitKind::OverflowButton,
+                            AddressBarHitKind::EditTrigger,
+                            AddressBarHitKind::SearchBox,
+                            AddressBarHitKind::SearchClear,
+                        ] {
+                            if address_bar_sub_node(entry.key, kind) == key {
+                                return Some(kind);
+                            }
+                        }
+                        for seg in &layout.segments {
+                            let seg_kind = AddressBarHitKind::Segment(seg.index);
+                            if address_bar_sub_node(entry.key, seg_kind) == key {
+                                return Some(seg_kind);
+                            }
+                            if seg.chevron_rect.is_some() {
+                                let chev_kind = AddressBarHitKind::SegmentChevron(seg.index);
+                                if address_bar_sub_node(entry.key, chev_kind) == key {
+                                    return Some(chev_kind);
+                                }
+                            }
+                        }
+                        None
+                    };
+                    let mut effective_state = (**bar_state).clone();
+                    if effective_state.hovered_hit.is_none() {
+                        effective_state.hovered_hit = resolve_sub_hit(self.ctx.hovered);
+                    }
+                    if effective_state.pressed_hit.is_none() {
+                        effective_state.pressed_hit = resolve_sub_hit(self.ctx.pressed);
+                    }
 
                     // 先发射地址栏外框、导航按钮、图标、子热区与无障碍节点（文本与光标/选区/IME 层在独立裁剪作用域内绘制，避免重复占位图元）
                     let chrome_out = unbound_widgets::emit_address_bar_chrome(
-                        entry.key, &desc, bar_state, state,
+                        entry.key,
+                        &desc,
+                        &effective_state,
+                        state,
                     );
                     self.collector.push(entry.key, chrome_out);
 

@@ -256,6 +256,25 @@ impl ThemeSet {
                     Token::CANVAS_BACKDROP,
                     Color::from_srgb8(15, 15, 17, 255),
                 );
+                // 暗色与亮色交互薄纱令牌对齐 Win11 中性层次，彻底消除 Material `#223454` 亮蓝选中底
+                let win11_dark = crate::win11::dark();
+                for token in [
+                    Token::NAV_SELECTED,
+                    Token::NAV_HOVER,
+                    Token::HOVER,
+                    Token::PRESSED,
+                ] {
+                    set_tok(&mut dark_entries, token, win11_dark.color(token));
+                }
+                let win11_light = crate::win11::light();
+                for token in [
+                    Token::NAV_SELECTED,
+                    Token::NAV_HOVER,
+                    Token::HOVER,
+                    Token::PRESSED,
+                ] {
+                    set_tok(&mut light_entries, token, win11_light.color(token));
+                }
             }
             ProductPreset::RenderWorkbench => {
                 // RenderDebugger Launcher 对齐 Showcase Gallery 的深邃石板层次配色体系
@@ -359,5 +378,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn asset_manager_interaction_tokens_match_win11_neutral_veils() {
+        let win11_dark = crate::win11::dark();
+        let win11_light = crate::win11::light();
+        let standard = ThemeSet::standard();
+        let interaction_tokens = [
+            Token::NAV_SELECTED,
+            Token::NAV_HOVER,
+            Token::HOVER,
+            Token::PRESSED,
+        ];
+
+        for accent in AccentBrand::ALL {
+            let asset_set = ThemeSet::for_product(ProductPreset::AssetManager, accent);
+            let dark = asset_set.palette(ThemeKind::Dark);
+            let light = asset_set.palette(ThemeKind::Light);
+            for token in interaction_tokens {
+                assert_eq!(
+                    dark.color(token),
+                    win11_dark.color(token),
+                    "AssetManager dark {token:?} must match win11::dark() for accent {accent:?}"
+                );
+                assert_eq!(
+                    light.color(token),
+                    win11_light.color(token),
+                    "AssetManager light {token:?} must match win11::light() for accent {accent:?}"
+                );
+            }
+            // 确保 AssetManager 暗色选中底不再沿用 Material 亮蓝 `#223454`
+            assert_ne!(
+                dark.color(Token::NAV_SELECTED),
+                Color::from_srgb8(34, 52, 84, 255)
+            );
+        }
+
+        // 确保 ProductPreset::Win11 与 ProductPreset::Standard 既有基准令牌不被改动
+        let win11_default = ThemeSet::for_product(ProductPreset::Win11, AccentBrand::Blue);
+        assert_eq!(
+            win11_default.palette(ThemeKind::Dark).color(Token::NAV_SELECTED),
+            win11_dark.color(Token::NAV_SELECTED)
+        );
+        let std_default = ThemeSet::for_product(ProductPreset::Standard, AccentBrand::Blue);
+        assert_eq!(
+            std_default.palette(ThemeKind::Dark).color(Token::NAV_SELECTED),
+            standard.palette(ThemeKind::Dark).color(Token::NAV_SELECTED)
+        );
     }
 }

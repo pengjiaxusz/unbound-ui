@@ -113,6 +113,8 @@ pub enum AddressBarEvent {
     NavigateUp,
     /// 点击外部刷新按钮（`↻`）。
     Refresh,
+    /// 点击根图标右侧分隔箭头（`›`），请求在指定锚点矩形弹出顶级目录菜单。
+    RootChevronDropdown { anchor_rect: [i32; 4] },
     /// 点击指定面包屑分段，跳转到对应路径。
     SegmentClicked { index: usize, path: String },
     /// 点击面包屑 `›` 箭头或 `«` 溢出按钮，请求在指定锚点矩形弹出菜单。
@@ -142,6 +144,8 @@ pub enum AddressBarHitKind {
     NavUp,
     /// 外部刷新按钮（`↻`）。
     Refresh,
+    /// 根图标右侧分隔箭头（`›`）。
+    RootChevron,
     /// 面包屑前段溢出折叠按钮（`«`）。
     OverflowButton,
     /// 第 `index` 个面包屑分段标签热区。
@@ -587,6 +591,8 @@ pub struct AddressBarState {
     pub can_go_up: bool,
     /// 当前指针悬停的子热区（用于高亮对应按钮或分段）。
     pub hovered_hit: Option<AddressBarHitKind>,
+    /// 当前指针按下的子热区（用于高亮对应按钮或分段的按压态）。
+    pub pressed_hit: Option<AddressBarHitKind>,
 }
 
 impl AddressBarState {
@@ -685,6 +691,12 @@ impl AddressBarState {
             if self.editing {
                 return Some(AddressBarHitKind::EditTrigger);
             }
+            if layout
+                .root_chevron_rect
+                .is_some_and(|r| r.contains_point(point))
+            {
+                return Some(AddressBarHitKind::RootChevron);
+            }
             if layout.overflow_rect.is_some_and(|r| r.contains_point(point)) {
                 return Some(AddressBarHitKind::OverflowButton);
             }
@@ -734,6 +746,16 @@ impl AddressBarState {
             Some(AddressBarHitKind::Refresh) => {
                 self.pending_events.push(AddressBarEvent::Refresh);
                 true
+            }
+            Some(AddressBarHitKind::RootChevron) => {
+                if let Some(rc_r) = layout.root_chevron_rect {
+                    self.pending_events
+                        .push(AddressBarEvent::RootChevronDropdown {
+                            anchor_rect: rect_to_i32(rc_r),
+                        });
+                    return true;
+                }
+                false
             }
             Some(AddressBarHitKind::OverflowButton) => {
                 if let (Some(ov_r), Some(first)) = (layout.overflow_rect, desc.segments.first()) {
@@ -891,6 +913,7 @@ pub const fn address_bar_sub_node(node: u64, kind: AddressBarHitKind) -> u64 {
         AddressBarHitKind::NavForward => 0x4142_0002,
         AddressBarHitKind::NavUp => 0x4142_0003,
         AddressBarHitKind::Refresh => 0x4142_0004,
+        AddressBarHitKind::RootChevron => 0x4142_0009,
         AddressBarHitKind::OverflowButton => 0x4142_0005,
         AddressBarHitKind::EditTrigger => 0x4142_0006,
         AddressBarHitKind::SearchBox => 0x4142_0007,
@@ -1381,14 +1404,15 @@ fn emit_address_bar_inner(
             continue;
         };
         let active = !control.disabled && enabled;
-        // 仅在 `hovered_hit` 精确命中对应按钮时才高亮，避免空白悬停误高亮后退按钮
+        // 仅在 `pressed_hit` / `hovered_hit` 精确命中对应按钮时才高亮，避免空白悬停误高亮后退按钮
+        let is_pressed = active
+            && (state.pressed_hit == Some(kind)
+                || (state.hovered_hit == Some(kind) && control.phase == PointerPhase::Pressed));
         let is_hovered = active && state.hovered_hit == Some(kind);
-        let fill = if is_hovered {
-            if control.phase == PointerPhase::Pressed {
-                Token::PRESSED
-            } else {
-                Token::HOVER
-            }
+        let fill = if is_pressed {
+            Token::PRESSED
+        } else if is_hovered {
+            Token::HOVER
         } else {
             Token::NONE
         };
@@ -1438,9 +1462,29 @@ fn emit_address_bar_inner(
     } else {
         Token::CONTROL_FILL
     };
+    // 悬停或按压地址框内部任意子热区时，外框描边保持悬停高亮不闪烁
+    let addr_sub_active = matches!(
+        state.hovered_hit,
+        Some(
+            AddressBarHitKind::RootChevron
+                | AddressBarHitKind::OverflowButton
+                | AddressBarHitKind::Segment(_)
+                | AddressBarHitKind::SegmentChevron(_)
+                | AddressBarHitKind::EditTrigger
+        )
+    ) || matches!(
+        state.pressed_hit,
+        Some(
+            AddressBarHitKind::RootChevron
+                | AddressBarHitKind::OverflowButton
+                | AddressBarHitKind::Segment(_)
+                | AddressBarHitKind::SegmentChevron(_)
+                | AddressBarHitKind::EditTrigger
+        )
+    );
     let border = if control.disabled {
         Token::CONTROL_DISABLED_BORDER
-    } else if control.phase == PointerPhase::Hovered || state.editing {
+    } else if control.phase == PointerPhase::Hovered || addr_sub_active || state.editing {
         Token::OUTLINE_STRONG
     } else {
         Token::CONTROL_STROKE
@@ -1480,8 +1524,20 @@ fn emit_address_bar_inner(
         &mut payloads,
     );
 
-    // 根图标后置 `›` 分隔箭头（编辑态置透明以保持图元数恒定）
+    // 根图标后置 `›` 分隔箭头（支持独立悬停/按压反馈；编辑态置透明以保持图元数恒定）
     if let Some(rc_r) = layout.root_chevron_rect {
+        let rc_fill = if state.editing || control.disabled {
+            Token::NONE
+        } else if state.pressed_hit == Some(AddressBarHitKind::RootChevron)
+            || (state.hovered_hit == Some(AddressBarHitKind::RootChevron)
+                && control.phase == PointerPhase::Pressed)
+        {
+            Token::PRESSED
+        } else if state.hovered_hit == Some(AddressBarHitKind::RootChevron) {
+            Token::HOVER
+        } else {
+            Token::NONE
+        };
         let rc_color = if state.editing {
             Token::NONE
         } else if control.disabled {
@@ -1489,6 +1545,7 @@ fn emit_address_bar_inner(
         } else {
             Token::TEXT_SECONDARY
         };
+        primitives.push(surface(rc_r, INNER_RADIUS, rc_fill, z + 1));
         emit_segment_chevron(rc_r, rc_color, z + 2, &mut primitives, &mut payloads);
     }
 
@@ -1496,12 +1553,13 @@ fn emit_address_bar_inner(
     if let Some(ov_r) = layout.overflow_rect {
         let ov_fill = if state.editing || control.disabled {
             Token::NONE
+        } else if state.pressed_hit == Some(AddressBarHitKind::OverflowButton)
+            || (state.hovered_hit == Some(AddressBarHitKind::OverflowButton)
+                && control.phase == PointerPhase::Pressed)
+        {
+            Token::PRESSED
         } else if state.hovered_hit == Some(AddressBarHitKind::OverflowButton) {
-            if control.phase == PointerPhase::Pressed {
-                Token::PRESSED
-            } else {
-                Token::HOVER
-            }
+            Token::HOVER
         } else {
             Token::NONE
         };
@@ -1518,28 +1576,30 @@ fn emit_address_bar_inner(
 
     // 面包屑分段胶囊与条件性 `›` 展开箭头（常态透明，悬停/按下呈现圆角高亮；编辑态隐藏但保持图元数恒定）
     for seg in &layout.segments {
+        let seg_kind = AddressBarHitKind::Segment(seg.index);
         let seg_fill = if state.editing || control.disabled {
             Token::NONE
-        } else if state.hovered_hit == Some(AddressBarHitKind::Segment(seg.index)) {
-            if control.phase == PointerPhase::Pressed {
-                Token::PRESSED
-            } else {
-                Token::HOVER
-            }
+        } else if state.pressed_hit == Some(seg_kind)
+            || (state.hovered_hit == Some(seg_kind) && control.phase == PointerPhase::Pressed)
+        {
+            Token::PRESSED
+        } else if state.hovered_hit == Some(seg_kind) {
+            Token::HOVER
         } else {
             Token::NONE
         };
         primitives.push(surface(seg.label_rect, INNER_RADIUS, seg_fill, z + 1));
 
         if let Some(chev_r) = seg.chevron_rect {
+            let chev_kind = AddressBarHitKind::SegmentChevron(seg.index);
             let chev_fill = if state.editing || control.disabled {
                 Token::NONE
-            } else if state.hovered_hit == Some(AddressBarHitKind::SegmentChevron(seg.index)) {
-                if control.phase == PointerPhase::Pressed {
-                    Token::PRESSED
-                } else {
-                    Token::HOVER
-                }
+            } else if state.pressed_hit == Some(chev_kind)
+                || (state.hovered_hit == Some(chev_kind) && control.phase == PointerPhase::Pressed)
+            {
+                Token::PRESSED
+            } else if state.hovered_hit == Some(chev_kind) {
+                Token::HOVER
             } else {
                 Token::NONE
             };
@@ -1557,11 +1617,16 @@ fn emit_address_bar_inner(
 
     // 3. 右段：可选可折叠内联搜索框
     if let Some(sr) = layout.search_rect {
+        let search_sub_active = matches!(
+            state.hovered_hit,
+            Some(AddressBarHitKind::SearchBox | AddressBarHitKind::SearchClear)
+        ) || matches!(
+            state.pressed_hit,
+            Some(AddressBarHitKind::SearchBox | AddressBarHitKind::SearchClear)
+        );
         let search_border = if control.disabled {
             Token::CONTROL_DISABLED_BORDER
-        } else if state.search_focused
-            || state.hovered_hit == Some(AddressBarHitKind::SearchBox)
-        {
+        } else if state.search_focused || search_sub_active {
             Token::OUTLINE_STRONG
         } else {
             Token::CONTROL_STROKE
@@ -1594,9 +1659,14 @@ fn emit_address_bar_inner(
         }
         if let Some(clear_r) = layout.search_clear_rect {
             let show_clear = !control.disabled && !state.search_core.text().is_empty();
-            let clear_fill = if show_clear
-                && state.hovered_hit == Some(AddressBarHitKind::SearchClear)
+            let clear_fill = if !show_clear {
+                Token::NONE
+            } else if state.pressed_hit == Some(AddressBarHitKind::SearchClear)
+                || (state.hovered_hit == Some(AddressBarHitKind::SearchClear)
+                    && control.phase == PointerPhase::Pressed)
             {
+                Token::PRESSED
+            } else if state.hovered_hit == Some(AddressBarHitKind::SearchClear) {
                 Token::HOVER
             } else {
                 Token::NONE
@@ -1758,6 +1828,16 @@ fn emit_address_bar_inner(
         }
 
         if !state.editing {
+            if let Some(rc_r) = layout.root_chevron_rect {
+                let rc_sub = address_bar_sub_node(node, AddressBarHitKind::RootChevron);
+                out.with_sub_control(
+                    rc_sub,
+                    HitRegion::new(rc_sub, LAYER, u32::from(z) + 2, rc_r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, "Root folders", rc_r).clickable(),
+                    true,
+                );
+            }
             if let Some(ov_r) = layout.overflow_rect {
                 let sub = address_bar_sub_node(node, AddressBarHitKind::OverflowButton);
                 out.with_sub_control(
@@ -2367,5 +2447,115 @@ mod tests {
             "chrome output must omit the 6 redundant text overlay placeholder primitives"
         );
         assert_eq!(chrome.sub_hits.len(), full.sub_hits.len());
+    }
+
+    #[test]
+    fn root_chevron_supports_hit_test_click_sub_control_and_hover_pressed_states() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let rc_r = layout.root_chevron_rect.expect("root chevron rect");
+        let mut state = AddressBarState::new();
+
+        assert_eq!(
+            state.hit_test(&desc, rc_r.center()),
+            Some(AddressBarHitKind::RootChevron)
+        );
+        assert!(state.handle_click(&desc, rc_r.center()));
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::RootChevronDropdown {
+                anchor_rect: rect_to_i32(rc_r),
+            }]
+        );
+
+        let expected_sub = address_bar_sub_node(1, AddressBarHitKind::RootChevron);
+        let out_idle = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        assert!(
+            out_idle.sub_hits.iter().any(|h| h.node == expected_sub),
+            "RootChevron must register a deterministic sub HitRegion"
+        );
+
+        state.hovered_hit = Some(AddressBarHitKind::RootChevron);
+        let out_hover = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        let rc_hover = out_hover
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - rc_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - rc_r.origin.y).abs() < 0.5
+                    && (p.size[0] - rc_r.size.x).abs() < 0.5
+            })
+            .expect("root chevron hover surface");
+        assert_eq!(rc_hover.fill_token_or_uv, u32::from(Token::HOVER.raw()));
+
+        // 悬停子热区时地址框外边框保持 OUTLINE_STRONG 不闪烁
+        let addr_border = out_hover
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - layout.address_rect.origin.x).abs() < 0.5
+                    && (p.size[0] - layout.address_rect.size.x).abs() < 0.5
+                    && p.border_token_or_tex != u32::from(Token::NONE.raw())
+            })
+            .expect("address box border");
+        assert_eq!(
+            addr_border.border_token_or_tex,
+            u32::from(Token::OUTLINE_STRONG.raw())
+        );
+
+        state.pressed_hit = Some(AddressBarHitKind::RootChevron);
+        let out_pressed = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        let rc_pressed = out_pressed
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - rc_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - rc_r.origin.y).abs() < 0.5
+                    && (p.size[0] - rc_r.size.x).abs() < 0.5
+            })
+            .expect("root chevron pressed surface");
+        assert_eq!(rc_pressed.fill_token_or_uv, u32::from(Token::PRESSED.raw()));
+    }
+
+    #[test]
+    fn search_clear_renders_pressed_token_and_keeps_search_border_hovered() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let sr = layout.search_rect.expect("search rect");
+        let clear_r = layout.search_clear_rect.expect("search clear rect");
+
+        let mut state = AddressBarState::new();
+        state.search_core.set_text("shader");
+        state.hovered_hit = Some(AddressBarHitKind::SearchClear);
+        state.pressed_hit = Some(AddressBarHitKind::SearchClear);
+
+        let out = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        let clear_surface = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - clear_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - clear_r.origin.y).abs() < 0.5
+                    && (p.size[0] - clear_r.size.x).abs() < 0.5
+            })
+            .expect("search clear surface");
+        assert_eq!(
+            clear_surface.fill_token_or_uv,
+            u32::from(Token::PRESSED.raw())
+        );
+
+        let search_box = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - sr.origin.x).abs() < 0.5
+                    && (p.size[0] - sr.size.x).abs() < 0.5
+                    && p.border_token_or_tex != u32::from(Token::NONE.raw())
+            })
+            .expect("search box border");
+        assert_eq!(
+            search_box.border_token_or_tex,
+            u32::from(Token::OUTLINE_STRONG.raw())
+        );
     }
 }

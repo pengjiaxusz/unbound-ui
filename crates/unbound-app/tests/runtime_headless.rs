@@ -424,3 +424,198 @@ fn clipboard_and_file_drop_events_flow_through_runtime() {
     runtime.file_hover_cancelled();
     assert!(runtime.state().hover_cancelled);
 }
+
+/// 用于验证 `TreeView` 展开箭头悬停保活与滚动条按需显隐的无头测试应用。
+#[derive(Default)]
+struct TreeInteractionApp;
+
+struct TreeInteractionState {
+    tree: std::cell::RefCell<unbound_widgets::TreeViewState>,
+}
+
+const TREE_KEY: u64 = 9001;
+
+impl Application for TreeInteractionApp {
+    type State = TreeInteractionState;
+
+    fn init(&mut self, _ctx: &mut unbound_app::AppContext) -> Self::State {
+        let mut tree = unbound_widgets::TreeViewState::new_with_density(
+            unbound_widgets::TreeViewDensity::Compact,
+        );
+        let roots: Vec<unbound_world::virtualize::TreeRow> = (1..=10)
+            .map(|id| unbound_world::virtualize::TreeRow::new(id, 0, id == 1))
+            .collect();
+        tree.rebuild(&roots, |_| Vec::new());
+        TreeInteractionState {
+            tree: std::cell::RefCell::new(tree),
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
+        let desc = unbound_widgets::TreeViewDesc::new(Rect::new(20.0, 20.0, 240.0, 120.0))
+            .with_density(unbound_widgets::TreeViewDensity::Compact)
+            .with_navigation_pane(true);
+        let mut tree = state.tree.borrow_mut();
+        view.tree_view(TREE_KEY, desc, &mut tree);
+    }
+}
+
+#[test]
+fn tree_view_keeps_row_highlighted_on_toggle_hover_and_hides_scrollbar_when_idle() {
+    let mut rt = AppRuntime::new(TreeInteractionApp, Vec2::new(800.0, 600.0));
+    rt.frame(0.0);
+
+    // 1. 内容溢出但指针未悬停且未滚动时，滚动条不强制常显（opacity == 0）
+    let sb_key = TREE_KEY ^ 0x5452_4545_0003;
+    let (sb_start, sb_end) = rt.scene().node_spans[&sb_key];
+    assert!(sb_end > sb_start, "overflowing tree must emit scrollbar thumb primitive");
+    assert!(
+        rt.scene().primitives[sb_start as usize..sb_end as usize]
+            .iter()
+            .all(|p| p.opacity() <= 0.01),
+        "idle unhovered tree scrollbar must remain hidden"
+    );
+
+    // 2. 将指针移至第 1 行的展开箭头热区 `tree_toggle_node(1)`，验证整行仍保持 NAV_HOVER 高亮且滚动条显露
+    let toggle_key = unbound_widgets::tree_toggle_node(1);
+    let toggle_region = rt
+        .router()
+        .regions()
+        .iter()
+        .find(|h| h.node == toggle_key)
+        .expect("row 1 toggle hit region")
+        .bounds;
+    rt.pointer_move(toggle_region.center());
+    rt.frame(1.0 / 60.0);
+
+    let (row_start, row_end) = rt.scene().node_spans[&1];
+    assert_eq!(
+        rt.scene().primitives[row_start as usize].fill_token_or_uv,
+        u32::from(unbound_theme::Token::NAV_HOVER.raw()),
+        "hovering tree_toggle_node must keep the parent tree row highlighted"
+    );
+    assert!(row_end > row_start);
+
+    let (sb_start, sb_end) = rt.scene().node_spans[&sb_key];
+    assert!(
+        rt.scene().primitives[sb_start as usize..sb_end as usize]
+            .iter()
+            .any(|p| p.opacity() > 0.5),
+        "hovering the tree viewport must reveal the scrollbar"
+    );
+}
+
+/// 用于验证 `AddressBar` 在无头运行时自动追踪子热区悬停/按压态的测试应用。
+#[derive(Default)]
+struct AddressBarAutoTrackApp;
+
+struct AddressBarAutoTrackState {
+    bar: unbound_widgets::AddressBarState,
+}
+
+const ADDR_BAR_KEY: u64 = 9002;
+
+impl Application for AddressBarAutoTrackApp {
+    type State = AddressBarAutoTrackState;
+
+    fn init(&mut self, _ctx: &mut unbound_app::AppContext) -> Self::State {
+        AddressBarAutoTrackState {
+            bar: unbound_widgets::AddressBarState::new(),
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut unbound_app::AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut unbound_app::ViewBuilder) {
+        let desc = unbound_widgets::AddressBarDesc::with_path_segments(
+            Rect::new(20.0, 20.0, 720.0, unbound_widgets::ADDRESS_BAR_HEIGHT),
+            "C:/Workspace/Assets",
+            vec![
+                unbound_widgets::PathSegment::new("C:", "C:/"),
+                unbound_widgets::PathSegment::new("Workspace", "C:/Workspace"),
+                unbound_widgets::PathSegment::new("Assets", "C:/Workspace/Assets")
+                    .with_subfolders(false),
+            ],
+        )
+        .with_nav_state(true, false, true)
+        .with_search("Search");
+        view.address_bar(ADDR_BAR_KEY, desc, &state.bar);
+    }
+}
+
+#[test]
+fn address_bar_automatically_tracks_sub_hit_hover_press_and_outer_border() {
+    let mut rt = AppRuntime::new(AddressBarAutoTrackApp, Vec2::new(800.0, 600.0));
+    rt.frame(0.0);
+
+    let root_chevron_key = unbound_widgets::address_bar_sub_node(
+        ADDR_BAR_KEY,
+        unbound_widgets::AddressBarHitKind::RootChevron,
+    );
+    let rc_bounds = rt
+        .router()
+        .regions()
+        .iter()
+        .find(|h| h.node == root_chevron_key)
+        .expect("RootChevron sub hit region")
+        .bounds;
+
+    // 悬停 RootChevron：业务层未手动写 hovered_hit，但运行时应自动高亮 RootChevron 且地址框外边框保持 OUTLINE_STRONG
+    rt.pointer_move(rc_bounds.center());
+    rt.frame(1.0 / 60.0);
+
+    let (start, end) = rt.scene().node_spans[&ADDR_BAR_KEY];
+    let slice = &rt.scene().primitives[start as usize..end as usize];
+    let rc_hover = slice
+        .iter()
+        .find(|p| {
+            (p.local_pos[0] - rc_bounds.origin.x).abs() < 0.5
+                && (p.local_pos[1] - rc_bounds.origin.y).abs() < 0.5
+                && (p.size[0] - rc_bounds.size.x).abs() < 0.5
+        })
+        .expect("RootChevron surface primitive");
+    assert_eq!(
+        rc_hover.fill_token_or_uv,
+        u32::from(unbound_theme::Token::HOVER.raw())
+    );
+    assert!(
+        slice
+            .iter()
+            .any(|p| p.border_token_or_tex == u32::from(unbound_theme::Token::OUTLINE_STRONG.raw())),
+        "address box outer border must remain OUTLINE_STRONG while hovering RootChevron"
+    );
+
+    // 按下 RootChevron：运行时自动派生 pressed_hit 并切换为 Token::PRESSED
+    rt.pointer_down(rc_bounds.center(), PointerButton::Left);
+    rt.frame(1.0 / 60.0);
+
+    let (start, end) = rt.scene().node_spans[&ADDR_BAR_KEY];
+    let rc_pressed = rt.scene().primitives[start as usize..end as usize]
+        .iter()
+        .find(|p| {
+            (p.local_pos[0] - rc_bounds.origin.x).abs() < 0.5
+                && (p.local_pos[1] - rc_bounds.origin.y).abs() < 0.5
+                && (p.size[0] - rc_bounds.size.x).abs() < 0.5
+        })
+        .expect("RootChevron pressed surface primitive");
+    assert_eq!(
+        rc_pressed.fill_token_or_uv,
+        u32::from(unbound_theme::Token::PRESSED.raw())
+    );
+}

@@ -830,7 +830,9 @@ pub fn emit_tree_row_with_icon(
     let mut payloads = Vec::with_capacity(label.len() + 4);
     let rect = row.rect;
 
-    let fill = if selected {
+    let fill = if !disabled && control.phase == PointerPhase::Pressed {
+        Token::PRESSED
+    } else if selected {
         tokens.row_selected
     } else if !disabled && control.phase == PointerPhase::Hovered {
         tokens.row_hover
@@ -1621,5 +1623,73 @@ mod tests {
         assert_eq!(state.hover_at(&desc, Vec2::new(60.0, 110.0)), Some(1));
         state.clear_hover();
         assert_eq!(state.hovered_row(), None);
+    }
+
+    #[test]
+    fn pressed_tree_row_uses_pressed_token_for_both_unselected_and_selected() {
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 140.0))
+            .with_density(TreeViewDensity::Compact)
+            .with_navigation_pane(true);
+        let row = TreeViewRow {
+            row: TreeRow::new(1, 0, true),
+            item: 0,
+            rect: Rect::new(0.0, 0.0, 260.0, TREE_ROW_COMPACT),
+        };
+        let tokens = TreeViewTokens::navigation_pane();
+        let pressed_ctrl = ControlState {
+            phase: PointerPhase::Pressed,
+            ..ControlState::default()
+        };
+
+        // 未选中行按下时呈现 Token::PRESSED，不再回退透明闪烁
+        let unselected_pressed = emit_tree_row_with_icon(
+            &desc,
+            &row,
+            TreeRowIcon::None,
+            false,
+            pressed_ctrl,
+            &[],
+            tokens,
+        );
+        assert_eq!(
+            unselected_pressed.primitives[0].fill_token_or_uv,
+            u32::from(Token::PRESSED.raw())
+        );
+
+        // 选中行按下时呈现柔和按压态 Token::PRESSED
+        let selected_pressed = emit_tree_row_with_icon(
+            &desc,
+            &row,
+            TreeRowIcon::None,
+            true,
+            ControlState {
+                selected: true,
+                ..pressed_ctrl
+            },
+            &[],
+            tokens,
+        );
+        assert_eq!(
+            selected_pressed.primitives[0].fill_token_or_uv,
+            u32::from(Token::PRESSED.raw())
+        );
+
+        // 禁用行按下时不进入按压反馈，保持既有静息/选中底色
+        let disabled_pressed = emit_tree_row_with_icon(
+            &desc,
+            &row,
+            TreeRowIcon::None,
+            false,
+            ControlState {
+                disabled: true,
+                ..pressed_ctrl
+            },
+            &[],
+            tokens,
+        );
+        assert_eq!(
+            disabled_pressed.primitives[0].fill_token_or_uv,
+            u32::from(tokens.row.raw())
+        );
     }
 }

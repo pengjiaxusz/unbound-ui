@@ -995,6 +995,10 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             if self.drain_runtime_commands(state, window) == Flow::Exit {
                 return Flow::Exit;
             }
+            if self.runtime.dirty() != crate::DirtyFlags::NONE && !state.pacer.is_suspended() {
+                state.pacer.request_immediate(Instant::now());
+                window.request_redraw();
+            }
             return Flow::Continue;
         }
         let os_scale = self.sync_os_scale(window);
@@ -1034,6 +1038,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 }
             }
             PlatformEvent::MouseWheel { delta_x, delta_y } => {
+                state.pacer.note_activity(Instant::now());
                 if self.modifiers.control {
                     let step = if delta_y > 0.0 {
                         1
@@ -1563,5 +1568,24 @@ mod tests {
         // (900 - 100 + 40) / 2.0 = 420.0, (300 - 200 + 20) / 2.0 = 60.0
         assert!((logical.x - 420.0).abs() < 1e-4);
         assert!((logical.y - 60.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn pointer_activity_wakes_pacer_from_idle_state() {
+        let config = WindowConfig::default();
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(800, 600),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        state
+            .pacer
+            .set_throttle_policy(RenderThrottlePolicy::default());
+        let now = Instant::now();
+        state.pacer.note_activity(now);
+        assert_eq!(
+            state.pacer.throttle_state(now),
+            unbound_platform::RenderThrottleState::Active
+        );
     }
 }

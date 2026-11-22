@@ -54,6 +54,12 @@ pub const BUTTON_LOADING_SIZE: f32 = 12.0;
 /// 按钮内原生矢量图标（[`ShellIcon`]）的标准占位边长（逻辑像素）。
 pub const BUTTON_SHELL_ICON_SIZE: f32 = 16.0;
 
+/// 按钮后置下拉箭头（[`ShellIcon::ChevronDown`]）的标准占位边长（逻辑像素）。
+pub const BUTTON_DROPDOWN_CHEVRON_SIZE: f32 = 12.0;
+
+/// 按钮内容与后置下拉箭头之间的紧凑水平间距（逻辑像素）。
+pub const BUTTON_DROPDOWN_CHEVRON_GAP: f32 = 4.0;
+
 /// 按钮高度（逻辑像素）。
 ///
 /// 尺寸属于元数据：已完成布局的调用方保留自身矩形，但工具栏可请求标准高度而非硬编码数值。
@@ -222,6 +228,8 @@ pub struct ButtonDesc {
     pub shell_icon: Option<ShellIcon>,
     /// 将图标绘制在标签之后而非之前。
     pub icon_trailing: bool,
+    /// 是否在按钮右侧独立绘制 `12px` 下拉箭头（[`ShellIcon::ChevronDown`]）。
+    pub dropdown_chevron: bool,
     /// 显示加载指示器并禁用交互。
     pub loading: bool,
     /// 解析投影模糊半径。`0.0` 表示不绘制阴影。
@@ -260,6 +268,7 @@ impl ButtonDesc {
             icon: None,
             shell_icon: None,
             icon_trailing: false,
+            dropdown_chevron: false,
             loading: false,
             shadow: BUTTON_SHADOW,
             centre_label: true,
@@ -505,6 +514,13 @@ impl ButtonDesc {
         self
     }
 
+    /// 控制是否在按钮右侧独立绘制 `12px` 下拉箭头（[`ShellIcon::ChevronDown`]）。
+    #[must_use]
+    pub fn with_dropdown_chevron(mut self, enabled: bool) -> Self {
+        self.dropdown_chevron = enabled;
+        self
+    }
+
     /// 处于加载状态的同款按钮：不可点击，左侧显示指示器。
     #[must_use]
     pub fn with_loading(mut self, loading: bool) -> Self {
@@ -540,11 +556,24 @@ impl ButtonDesc {
             return override_tokens;
         }
         let mut t = self.variant.tokens();
-        if self.active_selected && self.variant != ButtonVariant::Primary {
-            t.fill = Token::NAV_SELECTED;
-            t.fill_hover = Token::CONTROL_HOVER;
-            t.border = Token::PRIMARY;
-            t.label = Token::TEXT_PRIMARY;
+        if self.active_selected {
+            match self.variant {
+                ButtonVariant::Primary => {}
+                // Win11 工具栏幽灵切换态：中性薄纱填充且不强加亮蓝 `PRIMARY` 边框
+                ButtonVariant::Subtle | ButtonVariant::Icon => {
+                    t.fill = Token::NAV_SELECTED;
+                    t.fill_hover = Token::CONTROL_HOVER;
+                    t.fill_pressed = Token::PRESSED;
+                    t.border = Token::NONE;
+                    t.label = Token::TEXT_PRIMARY;
+                }
+                ButtonVariant::Secondary | ButtonVariant::OnHero => {
+                    t.fill = Token::NAV_SELECTED;
+                    t.fill_hover = Token::CONTROL_HOVER;
+                    t.border = Token::PRIMARY;
+                    t.label = Token::TEXT_PRIMARY;
+                }
+            }
         }
         t
     }
@@ -661,10 +690,12 @@ pub fn emit_button_with_tokens(
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let z = desc.z;
-    let mut primitives =
-        Vec::with_capacity(8 + label.len() + if desc.shell_icon.is_some() { 6 } else { 0 });
-    let mut payloads =
-        Vec::with_capacity(label.len() + if desc.shell_icon.is_some() { 4 } else { 1 });
+    let extra_icon_prims =
+        usize::from(desc.shell_icon.is_some()) * 6 + usize::from(desc.dropdown_chevron) * 4;
+    let extra_icon_payloads =
+        usize::from(desc.shell_icon.is_some()) * 4 + usize::from(desc.dropdown_chevron) * 2;
+    let mut primitives = Vec::with_capacity(8 + label.len() + extra_icon_prims);
+    let mut payloads = Vec::with_capacity(label.len() + extra_icon_payloads.max(1));
 
     // 加载中的按钮不是交互目标，也不显示焦点环：旋转指示器表示“请等待”，此时不应再接受第二次激活。
     let blocked = state.disabled || desc.loading;
@@ -738,6 +769,20 @@ pub fn emit_button_with_tokens(
         content_width += BUTTON_SHELL_ICON_SIZE + shell_gap;
     } else if trailing_icon {
         content_width += desc.font_size + BUTTON_CONTENT_GAP;
+    }
+    let has_preceding_content = desc.loading
+        || leading_shell_icon
+        || leading_icon
+        || has_label
+        || trailing_shell_icon
+        || trailing_icon;
+    let chevron_gap = if has_preceding_content {
+        BUTTON_DROPDOWN_CHEVRON_GAP
+    } else {
+        0.0
+    };
+    if desc.dropdown_chevron {
+        content_width += BUTTON_DROPDOWN_CHEVRON_SIZE + chevron_gap;
     }
     let mut cursor = if desc.left_align {
         rect.origin.x + desc.label_inset
@@ -851,6 +896,7 @@ pub fn emit_button_with_tokens(
                 &mut primitives,
                 &mut payloads,
             );
+            cursor += shell_gap + BUTTON_SHELL_ICON_SIZE;
         }
     } else if trailing_icon {
         if let Some(icon) = &desc.icon {
@@ -863,7 +909,28 @@ pub fn emit_button_with_tokens(
                 &mut primitives,
                 &mut payloads,
             );
+            cursor += BUTTON_CONTENT_GAP + desc.font_size;
         }
+    }
+
+    if desc.dropdown_chevron {
+        let chevron_x = if desc.left_align {
+            (rect.max().x - desc.label_inset - BUTTON_DROPDOWN_CHEVRON_SIZE)
+                .max(cursor + chevron_gap)
+        } else {
+            cursor + chevron_gap
+        };
+        shell_icon_at(
+            ShellIcon::ChevronDown,
+            chevron_x,
+            rect.center().y,
+            BUTTON_DROPDOWN_CHEVRON_SIZE,
+            fg_token,
+            bg_token,
+            z,
+            &mut primitives,
+            &mut payloads,
+        );
     }
 
     // 4. 边框：空心圆角矩形，属于独立子元素。
@@ -1258,5 +1325,82 @@ mod tests {
             "left_align button should place label at rect.origin.x + 12.0, got {}",
             glyphs[0].rect.origin.x
         );
+    }
+
+    #[test]
+    fn subtle_and_icon_selected_use_win11_ghost_toggle_without_primary_border() {
+        for variant in [ButtonVariant::Subtle, ButtonVariant::Icon] {
+            let tokens = desc().with_variant(variant).selected(true).tokens();
+            assert_eq!(tokens.fill, Token::NAV_SELECTED);
+            assert_eq!(tokens.fill_hover, Token::CONTROL_HOVER);
+            assert_eq!(tokens.fill_pressed, Token::PRESSED);
+            assert_eq!(tokens.border, Token::NONE);
+            assert_eq!(tokens.label, Token::TEXT_PRIMARY);
+        }
+
+        // Secondary 选中态仍保留既有兼容语义
+        let secondary = desc()
+            .with_variant(ButtonVariant::Secondary)
+            .selected(true)
+            .tokens();
+        assert_eq!(secondary.border, Token::PRIMARY);
+        assert_eq!(secondary.fill, Token::NAV_SELECTED);
+    }
+
+    #[test]
+    fn dropdown_chevron_coexists_with_leading_shell_icon_and_keeps_24_state_count_constant() {
+        let base_desc = desc()
+            .with_variant(ButtonVariant::Subtle)
+            .with_shell_icon(ShellIcon::Folder);
+        let dropdown_desc = base_desc.clone().with_dropdown_chevron(true);
+        assert!(!base_desc.dropdown_chevron);
+        assert!(dropdown_desc.dropdown_chevron);
+
+        let make_glyph = || {
+            vec![GlyphQuad {
+                rect: Rect::new(0.0, 0.0, 28.0, 14.0),
+                uv: [0.0, 0.0, 1.0, 1.0],
+                layer: 0,
+                color: false,
+                msdf: false,
+                phase: 0,
+            }]
+        };
+
+        let base_out = emit_button(1, &base_desc, ControlState::default(), &mut make_glyph());
+        let drop_out = emit_button(
+            1,
+            &dropdown_desc,
+            ControlState::default(),
+            &mut make_glyph(),
+        );
+        // `ShellIcon::ChevronDown` 额外发射 2 条折线图元，不覆盖前置图标
+        assert_eq!(drop_out.primitives.len(), base_out.primitives.len() + 2);
+
+        let expected_count = drop_out.primitives.len();
+        for phase in [
+            PointerPhase::Idle,
+            PointerPhase::Hovered,
+            PointerPhase::Pressed,
+        ] {
+            for focused in [false, true] {
+                for disabled in [false, true] {
+                    for selected in [false, true] {
+                        let st = ControlState {
+                            phase,
+                            focused,
+                            disabled,
+                            selected,
+                        };
+                        let out = emit_button(1, &dropdown_desc, st, &mut make_glyph());
+                        assert_eq!(
+                            out.primitives.len(),
+                            expected_count,
+                            "dropdown_chevron button primitive count drifted for {st:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
