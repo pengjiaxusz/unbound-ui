@@ -1,23 +1,24 @@
 //! 下拉菜单与上下文菜单（Menu）。
 //!
-//! 菜单即数据：包含菜单项、禁用状态与快捷键。状态机（[`MenuState`]）仅持有当前高亮索引；
+//! 菜单即数据：包含菜单项、禁用状态、危险操作标记与快捷键。状态机（[`MenuState`]）仅持有当前高亮索引；
 //! `Up`/`Down` 会跳过分隔符与禁用项，`Enter` 上报选中的菜单项。
-//! 发射器绘制一个背景、每个菜单项一个高亮槽位以及每条分隔符一条线——
+//! 发射器绘制背景阴影、表面、每个菜单项的高亮胶囊、图标/标签/快捷键或子菜单箭头以及每条分隔符横线——
 //! 同样为固定描述符保持恒定的图元数量。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
-use unbound_input::{HitRegion, PORTAL_LAYER};
+use unbound_input::{CursorKind, HitRegion, PORTAL_LAYER};
 use unbound_math::Rect;
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::image::IconDesc;
 use crate::overlay::OverlayEntry;
-use crate::primitive::{instance, surface};
+use crate::primitive::{glyphs, instance, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
-use crate::shell::{emit_widget_icon_primitives, WidgetIcon};
-use crate::{ControlState, WidgetDesc, WidgetOutput};
+use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
+use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// 菜单的命中测试层级。
 pub const MENU_LAYER: u8 = PORTAL_LAYER;
@@ -26,6 +27,16 @@ pub const MENU_LAYER: u8 = PORTAL_LAYER;
 /// WinUI `MenuFlyoutItemThemePadding = 11,8,11,9` 叠加 20px 行高即 37px，
 /// 与下拉框选中项行高 [`crate::select::SELECT_ROW_HEIGHT`] 保持一致。
 pub const MENU_ITEM_HEIGHT: f32 = 37.0;
+/// Win11 上下文菜单默认项高（`32px`）。
+pub const CONTEXT_MENU_ITEM_HEIGHT: f32 = 32.0;
+/// 菜单面板四边内边距（`4px`）。
+pub const MENU_PANEL_PADDING: f32 = 4.0;
+/// 菜单项高亮胶囊圆角（`4px`）。
+pub const MENU_ITEM_RADIUS: f32 = 4.0;
+/// 菜单项前置图标槽尺寸（`16×16px`）。
+pub const MENU_ICON_SIZE: f32 = 16.0;
+/// 菜单分隔线行高度（`9px`，居中绘制 `1px` `Token::DIVIDER`）。
+pub const MENU_SEPARATOR_HEIGHT: f32 = 9.0;
 /// 菜单浮层海拔阴影模糊半径。对齐 WinUI 3 `FlyoutElevation` / `MenuFlyout`（18px 解析阴影）。
 pub const MENU_SHADOW: f32 = 18.0;
 /// 菜单浮层圆角半径。对齐 WinUI `OverlayCornerRadius = 8`（MenuFlyoutPresenter 标准圆角）。
@@ -34,6 +45,25 @@ pub const MENU_RADIUS: f32 = 8.0;
 pub const MENU_BORDER_WIDTH: f32 = 1.0;
 /// 下拉框选中项左侧强调条的宽度。
 const MENU_ACCENT_BAR_WIDTH: f32 = 3.0;
+/// 子菜单指示箭头尺寸（`12×12px`）。
+const MENU_SUBMENU_ARROW_SIZE: f32 = 12.0;
+
+/// 为菜单项生成确定性子热区节点键。
+#[must_use]
+pub const fn menu_item_node(menu_key: u64, index: usize) -> u64 {
+    menu_key ^ 0x4D45_4E55_0000_0000u64 ^ (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15u64) ^ 3
+}
+
+/// 单个菜单项的预塑形字形与交互状态。
+#[derive(Clone, Debug, Default)]
+pub struct MenuItemRenderRow<'a> {
+    /// 左对齐主标签字形。
+    pub label_glyphs: &'a [GlyphQuad],
+    /// 右对齐快捷键提示字形。
+    pub shortcut_glyphs: &'a [GlyphQuad],
+    /// 该菜单项独立的指针交互阶段。
+    pub phase: PointerPhase,
+}
 
 /// 菜单中的单行条目。
 #[derive(Clone, Debug, PartialEq)]
@@ -51,6 +81,8 @@ pub struct MenuItem {
     /// 与键盘/指针高亮不同：下拉框重新打开时，选中项即使不再被高亮也要保留
     /// 左侧 3px 强调条，表明「当前选的是这一项」。
     pub selected: bool,
+    /// 该行是否为危险操作项（使用 `Token::ERROR` 前景色）。
+    pub danger: bool,
     /// 前置图标（若有）。
     pub icon: Option<IconDesc>,
     /// 统一前置图标槽（支持内置矢量与外部彩色纹理）。
@@ -71,6 +103,7 @@ impl MenuItem {
             disabled: false,
             separator: false,
             selected: false,
+            danger: false,
             icon: None,
             widget_icon: WidgetIcon::None,
             checked: None,
@@ -87,6 +120,7 @@ impl MenuItem {
             disabled: true,
             separator: true,
             selected: false,
+            danger: false,
             icon: None,
             widget_icon: WidgetIcon::None,
             checked: None,
@@ -98,6 +132,13 @@ impl MenuItem {
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// 标记该菜单项为危险操作项（使用 `Token::ERROR` 前景色）。
+    #[must_use]
+    pub fn danger(mut self, danger: bool) -> Self {
+        self.danger = danger;
         self
     }
 
@@ -171,6 +212,10 @@ pub struct MenuDesc {
     pub z: u16,
     /// 已知时菜单必须保持在内的视口。
     pub viewport: Option<Rect>,
+    /// 面板上下内边距（`MenuDesc::new` 保持 `0.0` 向后兼容，`MenuDesc::context_menu` 默认 `MENU_PANEL_PADDING`）。
+    panel_padding: f32,
+    /// 是否为分隔线行启用紧凑高度（`MENU_SEPARATOR_HEIGHT`）。
+    compact_separators: bool,
 }
 
 impl MenuDesc {
@@ -184,13 +229,60 @@ impl MenuDesc {
             radius: MENU_RADIUS,
             z: 905,
             viewport: None,
+            panel_padding: 0.0,
+            compact_separators: false,
         }
     }
 
-    /// 所有行所需的总高度。
+    /// 创建符合 Win11 上下文菜单密度的描述符（无标题头、`item_height = CONTEXT_MENU_ITEM_HEIGHT (32.0)`、
+    /// 上下 `MENU_PANEL_PADDING (4.0)` 内边距与 `MENU_SEPARATOR_HEIGHT (9.0)` 分隔线）。
+    #[must_use]
+    pub fn context_menu(rect: Rect, items: Vec<MenuItem>) -> Self {
+        Self {
+            rect,
+            items,
+            item_height: CONTEXT_MENU_ITEM_HEIGHT,
+            radius: MENU_RADIUS,
+            z: 905,
+            viewport: None,
+            panel_padding: MENU_PANEL_PADDING,
+            compact_separators: true,
+        }
+    }
+
+    /// 覆写菜单项行高。
+    #[must_use]
+    pub fn with_item_height(mut self, height: f32) -> Self {
+        self.item_height = height.max(1.0);
+        self
+    }
+
+    /// 返回单行的实际高度（分隔线在上下文菜单模式下采用 `MENU_SEPARATOR_HEIGHT`）。
+    #[must_use]
+    fn row_height(&self, item: &MenuItem) -> f32 {
+        if item.separator && self.compact_separators {
+            MENU_SEPARATOR_HEIGHT
+        } else {
+            self.item_height
+        }
+    }
+
+    /// 判断当前菜单是否需要为左侧图标列保留统一对齐宽度。
+    #[must_use]
+    pub fn has_icon_column(&self) -> bool {
+        self.items.iter().any(|item| {
+            !item.separator
+                && (item.widget_icon != WidgetIcon::None
+                    || item.icon.is_some()
+                    || item.checked.is_some())
+        })
+    }
+
+    /// 所有行所需的总高度（含上下内边距与分隔线行高）。
     #[must_use]
     pub fn content_height(&self) -> f32 {
-        self.items.len() as f32 * self.item_height
+        let rows_h: f32 = self.items.iter().map(|item| self.row_height(item)).sum();
+        self.panel_padding * 2.0 + rows_h
     }
 
     /// 将菜单高度约束到视口范围内。
@@ -230,12 +322,15 @@ impl MenuDesc {
     /// 单行的矩形。
     #[must_use]
     pub fn item_rect(&self, index: usize) -> Rect {
-        Rect::new(
-            self.rect.origin.x,
-            self.rect.origin.y + index as f32 * self.item_height,
-            self.rect.width(),
-            self.item_height,
-        )
+        let mut y = self.rect.origin.y + self.panel_padding;
+        for item in self.items.iter().take(index) {
+            y += self.row_height(item);
+        }
+        let h = self
+            .items
+            .get(index)
+            .map_or(self.item_height, |item| self.row_height(item));
+        Rect::new(self.rect.origin.x, y, self.rect.width(), h)
     }
 
     /// 获取指定坐标点下的行（若有）。
@@ -254,12 +349,19 @@ impl MenuDesc {
         if !self.rect.contains_point(point) {
             return None;
         }
-        let index = ((point.y - self.rect.origin.y + offset.y) / self.item_height).floor();
-        if index < 0.0 {
+        let local_y = point.y - self.rect.origin.y + offset.y - self.panel_padding;
+        if local_y < 0.0 {
             return None;
         }
-        let index = index as usize;
-        (index < self.items.len()).then_some(index)
+        let mut cursor_y = 0.0;
+        for (index, item) in self.items.iter().enumerate() {
+            let h = self.row_height(item);
+            if local_y < cursor_y + h {
+                return Some(index);
+            }
+            cursor_y += h;
+        }
+        None
     }
 
     /// 为持有 `Semantics` 的调用方构造单行的无障碍节点。
@@ -487,7 +589,7 @@ impl WidgetDesc for MenuWidget {
     }
 }
 
-/// 发射菜单、其命中区域与浮层栈条目。
+/// 发射菜单、其命中区域与浮层栈条目（兼容入口，委托至 [`emit_menu_with_rows`]）。
 #[must_use]
 pub fn emit_menu(
     node: u64,
@@ -496,11 +598,25 @@ pub fn emit_menu(
     state: &MenuState,
     control: ControlState,
 ) -> (WidgetOutput, OverlayEntry) {
+    emit_menu_with_rows(node, anchor_node, desc, state, control, &[])
+}
+
+/// 发射完整的 Win11 `MenuFlyout` / `ContextMenu`（含图标、标签、快捷键、子菜单箭头与独立子热区）。
+#[must_use]
+pub fn emit_menu_with_rows(
+    node: u64,
+    anchor_node: u64,
+    desc: &MenuDesc,
+    state: &MenuState,
+    control: ControlState,
+    rows: &[MenuItemRenderRow<'_>],
+) -> (WidgetOutput, OverlayEntry) {
     let rect = desc.rect;
     let radii = [desc.radius; 4];
     let offset = state.scroll_offset();
-    let mut primitives: Vec<GpuPrimitiveInstance> = Vec::with_capacity(3 + desc.items.len() * 2);
+    let mut primitives: Vec<GpuPrimitiveInstance> = Vec::with_capacity(3 + desc.items.len() * 3);
     let mut payloads = Vec::new();
+    let mut out = WidgetOutput::default();
 
     primitives.push(instance(
         rect,
@@ -529,7 +645,13 @@ pub fn emit_menu(
             .item_rect(index)
             .translate(unbound_math::Vec2::new(0.0, -offset.y));
         if item.separator {
-            let line = Rect::new(row.origin.x + 8.0, row.center().y, row.width() - 16.0, 1.0);
+            let inset_x = MENU_PANEL_PADDING + 8.0;
+            let line = Rect::new(
+                row.origin.x + inset_x,
+                row.center().y - 0.5,
+                (row.width() - inset_x * 2.0).max(0.0),
+                1.0,
+            );
             primitives.push(surface(line, 0.0, Token::DIVIDER, desc.z));
             // 保持行数恒定：为高亮保留一个不可见槽位。
             let mut placeholder = surface(Rect::ZERO, 0.0, Token::NONE, desc.z);
@@ -537,76 +659,142 @@ pub fn emit_menu(
             primitives.push(placeholder);
             continue;
         }
+
+        let render_row = rows.get(index);
+        let row_phase = render_row.map_or(PointerPhase::Idle, |r| r.phase);
+        let item_disabled = control.disabled || item.disabled;
+        let selectable = !item_disabled && item.selectable();
+
         let active_row = if state.open_path.is_empty() {
             state.highlighted == Some(index)
         } else {
             state.open_path.first() == Some(&index)
         };
-        let highlighted = active_row && item.selectable();
+        let (pill_fill, pill_visible) = if !selectable {
+            (Token::NONE, false)
+        } else if row_phase == PointerPhase::Pressed {
+            (Token::PRESSED, true)
+        } else if row_phase == PointerPhase::Hovered || active_row {
+            if item.danger {
+                (Token::ERROR_SOFT, true)
+            } else {
+                (Token::HOVER, true)
+            }
+        } else {
+            (Token::NONE, false)
+        };
+
         // `MenuFlyoutItemMargin = 4,2,4,2`：高亮胶囊与菜单边缘留 4 / 2。
         let pill = Rect::new(
-            row.origin.x + 4.0,
+            row.origin.x + MENU_PANEL_PADDING,
             row.origin.y + 2.0,
-            (row.size.x - 8.0).max(0.0),
+            (row.size.x - MENU_PANEL_PADDING * 2.0).max(0.0),
             (row.size.y - 4.0).max(0.0),
         );
-        let mut slot = surface(
-            pill,
-            // `MenuFlyoutItem` 的 `CornerRadius = ControlCornerRadius = 4`。
-            4.0,
-            // `MenuFlyoutItemBackgroundPointerOver` = SubtleFillColorSecondary。
-            if highlighted {
-                Token::HOVER
-            } else {
-                Token::NONE
-            },
-            desc.z,
-        );
-        if !highlighted {
+        let mut slot = surface(pill, MENU_ITEM_RADIUS, pill_fill, desc.z);
+        if !pill_visible {
             slot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, 0.0);
         }
         primitives.push(slot);
-        primitives.push(instance(
-            row,
-            [0.0; 4],
-            Token::NONE,
-            Token::NONE,
-            0.0,
-            0.0,
-            PrimType::Line,
-            SubElement::Content,
-            desc.z,
-        ));
-        // 统一前置图标（`16×16`，位于胶囊左侧内缩 10px 处垂直居中）
-        if item.widget_icon != WidgetIcon::None {
+
+        let fg_color = if item_disabled {
+            Token::TEXT_DISABLED
+        } else if item.danger {
+            Token::ERROR
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        let row_bg = if pill_visible {
+            pill_fill
+        } else {
+            Token::OVERLAY_BG
+        };
+
+        let label_glyphs = render_row.map_or(&[][..], |r| r.label_glyphs);
+        let shortcut_glyphs = render_row.map_or(&[][..], |r| r.shortcut_glyphs);
+
+        if label_glyphs.is_empty() {
+            // 兼容无字形调用方（如旧版 `emit_menu`）：保留固定内容槽占位图元。
+            primitives.push(instance(
+                row,
+                [0.0; 4],
+                Token::NONE,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::Line,
+                SubElement::Content,
+                desc.z,
+            ));
+        } else {
+            glyphs(label_glyphs, fg_color, desc.z, &mut primitives, &mut payloads);
+        }
+
+        // 统一前置图标（`16×16`，位于胶囊左侧内缩 10px 处垂直居中）；
+        // 若未设自定义图标且已勾选，则绘制 `ShellIcon::Check`。
+        let effective_icon = if item.widget_icon != WidgetIcon::None {
+            item.widget_icon
+        } else if item.checked == Some(true) {
+            WidgetIcon::Vector(ShellIcon::Check)
+        } else {
+            WidgetIcon::None
+        };
+        if effective_icon != WidgetIcon::None {
             let icon_rect = Rect::new(
                 pill.origin.x + 10.0,
-                row.origin.y + (row.size.y - 16.0) * 0.5,
-                16.0,
-                16.0,
+                row.origin.y + (row.size.y - MENU_ICON_SIZE) * 0.5,
+                MENU_ICON_SIZE,
+                MENU_ICON_SIZE,
             );
-            let item_disabled = control.disabled || item.disabled;
-            let icon_color = if item_disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_PRIMARY
-            };
-            let icon_bg = if highlighted {
-                Token::HOVER
-            } else {
-                Token::OVERLAY_BG
-            };
             emit_widget_icon_primitives(
-                item.widget_icon,
+                effective_icon,
                 icon_rect,
-                icon_color,
-                icon_bg,
+                fg_color,
+                row_bg,
                 item_disabled,
                 desc.z,
                 &mut primitives,
                 &mut payloads,
             );
         }
+
+        // 右侧列：有子菜单时绘制 `›` 箭头，否则发射右对齐次级色快捷键字形。
+        if item.has_submenu() {
+            let chevron_rect = Rect::new(
+                pill.max().x - 10.0 - MENU_SUBMENU_ARROW_SIZE,
+                row.origin.y + (row.size.y - MENU_SUBMENU_ARROW_SIZE) * 0.5,
+                MENU_SUBMENU_ARROW_SIZE,
+                MENU_SUBMENU_ARROW_SIZE,
+            );
+            let arrow_color = if item_disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::SUBMENU_ARROW
+            };
+            emit_shell_icon_primitives(
+                ShellIcon::ChevronRight,
+                chevron_rect,
+                arrow_color,
+                row_bg,
+                desc.z,
+                &mut primitives,
+                &mut payloads,
+            );
+        } else if !shortcut_glyphs.is_empty() {
+            let shortcut_color = if item_disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_SECONDARY
+            };
+            glyphs(
+                shortcut_glyphs,
+                shortcut_color,
+                desc.z,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
+
         // 「当前值」标记：与高亮分开，键盘移到别的行时仍指示已选中的项。
         if item.selected {
             let bar_height = (row.size.y * 0.52).clamp(10.0, 16.0);
@@ -627,6 +815,22 @@ pub fn emit_menu(
                 desc.z,
             ));
         }
+
+        // 为每个可用非分隔线项注册独立子热区与无障碍节点。
+        if selectable {
+            let item_key = menu_item_node(node, index);
+            let item_hit = HitRegion::new(
+                item_key,
+                MENU_LAYER,
+                u32::from(desc.z).saturating_add(1),
+                pill,
+            )
+            .with_cursor(CursorKind::Pointer);
+            let item_a11y = A11yNode::new(Role::MenuItem, item.label.clone(), pill)
+                .clickable()
+                .disabled(false);
+            out.with_sub_control(item_key, item_hit, item_a11y, true);
+        }
     }
 
     primitives.push(instance(
@@ -642,20 +846,13 @@ pub fn emit_menu(
         desc.z,
     ));
 
-    let hit = Some(HitRegion::new(node, MENU_LAYER, u32::from(desc.z), rect));
-    let a11y = A11yNode::new(Role::Menu, "", rect).disabled(control.disabled);
+    out.primitives = primitives;
+    out.payloads = payloads;
+    out.hit = Some(HitRegion::new(node, MENU_LAYER, u32::from(desc.z), rect));
+    out.a11y = Some(A11yNode::new(Role::Menu, "", rect).disabled(control.disabled));
+    out.focusable = false;
 
-    (
-        WidgetOutput {
-            primitives,
-            payloads,
-            hit,
-            a11y: Some(a11y),
-            focusable: false,
-            ..Default::default()
-        },
-        OverlayEntry::menu(node, anchor_node, rect),
-    )
+    (out, OverlayEntry::menu(node, anchor_node, rect))
 }
 
 /// 菜单中的分隔符行。
@@ -682,6 +879,17 @@ mod tests {
                 MenuItem::action("Quit"),
             ],
         )
+    }
+
+    fn dummy_quad(x: f32, y: f32) -> GlyphQuad {
+        GlyphQuad {
+            rect: Rect::new(x, y, 8.0, 12.0),
+            uv: [0.0, 0.0, 1.0, 1.0],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        }
     }
 
     #[test]
@@ -782,5 +990,179 @@ mod tests {
             .expect("disabled menu item external icon");
         assert_eq!(img_disabled.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert!((img_disabled.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+    }
+
+    #[test]
+    fn context_menu_desc_uses_win11_geometry_padding_and_separator_height() {
+        let items = vec![
+            MenuItem::action("Open").with_shortcut("Ctrl+O"),
+            MenuItem::separator(),
+            MenuItem::action("Delete").danger(true),
+        ];
+        let desc = MenuDesc::context_menu(Rect::new(20.0, 30.0, 220.0, 0.0), items);
+        assert_eq!(desc.item_height, CONTEXT_MENU_ITEM_HEIGHT);
+        assert_eq!(desc.radius, MENU_RADIUS);
+        let expected_h =
+            MENU_PANEL_PADDING * 2.0 + CONTEXT_MENU_ITEM_HEIGHT * 2.0 + MENU_SEPARATOR_HEIGHT;
+        assert_eq!(desc.content_height(), expected_h);
+
+        let r0 = desc.item_rect(0);
+        let r1 = desc.item_rect(1);
+        let r2 = desc.item_rect(2);
+        assert_eq!(r0.origin.y, 30.0 + MENU_PANEL_PADDING);
+        assert_eq!(r0.height(), CONTEXT_MENU_ITEM_HEIGHT);
+        assert_eq!(r1.origin.y, r0.max().y);
+        assert_eq!(r1.height(), MENU_SEPARATOR_HEIGHT);
+        assert_eq!(r2.origin.y, r1.max().y);
+        assert_eq!(r2.height(), CONTEXT_MENU_ITEM_HEIGHT);
+
+        let sized = MenuDesc::context_menu(
+            Rect::new(20.0, 30.0, 220.0, expected_h),
+            desc.items.clone(),
+        );
+        assert_eq!(
+            sized.item_at(unbound_math::Vec2::new(40.0, r0.center().y)),
+            Some(0)
+        );
+        assert_eq!(
+            sized.item_at(unbound_math::Vec2::new(40.0, r1.center().y)),
+            Some(1)
+        );
+        assert_eq!(
+            sized.item_at(unbound_math::Vec2::new(40.0, r2.center().y)),
+            Some(2)
+        );
+        // 顶部内边距区不命中任何菜单项。
+        assert_eq!(sized.item_at(unbound_math::Vec2::new(40.0, 31.0)), None);
+
+        let custom = sized.with_item_height(36.0);
+        assert_eq!(custom.item_height, 36.0);
+        assert_eq!(
+            custom.content_height(),
+            MENU_PANEL_PADDING * 2.0 + 36.0 * 2.0 + MENU_SEPARATOR_HEIGHT
+        );
+    }
+
+    #[test]
+    fn emit_menu_with_rows_renders_win11_elements_sub_hits_and_constant_count() {
+        let items = vec![
+            MenuItem::action("Open")
+                .with_widget_icon(WidgetIcon::ExternalTexture(71))
+                .with_shortcut("Ctrl+O"),
+            MenuItem::separator(),
+            MenuItem::action("Disabled")
+                .disabled()
+                .with_shortcut("Ctrl+D"),
+            MenuItem::action("More").with_submenu(vec![MenuItem::action("Sub")]),
+            MenuItem::action("Delete").danger(true),
+        ];
+        let mut desc = MenuDesc::context_menu(Rect::new(40.0, 50.0, 240.0, 0.0), items);
+        desc.rect = Rect::new(40.0, 50.0, 240.0, desc.content_height());
+
+        let q_open = [dummy_quad(80.0, 62.0)];
+        let q_open_sc = [dummy_quad(220.0, 62.0)];
+        let q_dis = [dummy_quad(80.0, 103.0)];
+        let q_dis_sc = [dummy_quad(220.0, 103.0)];
+        let q_more = [dummy_quad(80.0, 135.0)];
+        let q_del = [dummy_quad(80.0, 167.0)];
+
+        let make_rows = |p0: PointerPhase, p4: PointerPhase| {
+            vec![
+                MenuItemRenderRow {
+                    label_glyphs: &q_open,
+                    shortcut_glyphs: &q_open_sc,
+                    phase: p0,
+                },
+                MenuItemRenderRow::default(),
+                MenuItemRenderRow {
+                    label_glyphs: &q_dis,
+                    shortcut_glyphs: &q_dis_sc,
+                    phase: PointerPhase::Hovered,
+                },
+                MenuItemRenderRow {
+                    label_glyphs: &q_more,
+                    shortcut_glyphs: &[],
+                    phase: PointerPhase::Idle,
+                },
+                MenuItemRenderRow {
+                    label_glyphs: &q_del,
+                    shortcut_glyphs: &[],
+                    phase: p4,
+                },
+            ]
+        };
+
+        let menu_key = 9001u64;
+        let state = MenuState::new();
+        let idle_rows = make_rows(PointerPhase::Idle, PointerPhase::Idle);
+        let hover_rows = make_rows(PointerPhase::Hovered, PointerPhase::Hovered);
+        let press_rows = make_rows(PointerPhase::Pressed, PointerPhase::Pressed);
+
+        let idle_out =
+            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &idle_rows).0;
+        let hover_out =
+            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &hover_rows).0;
+        let press_out =
+            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &press_rows).0;
+
+        assert_eq!(idle_out.primitives.len(), hover_out.primitives.len());
+        assert_eq!(idle_out.primitives.len(), press_out.primitives.len());
+
+        // 仅可选非分隔线项（0、3、4）注册子热区，分隔线（1）与禁用项（2）不得注册。
+        let sub_nodes: Vec<u64> = idle_out.sub_hits.iter().map(|h| h.node).collect();
+        assert_eq!(
+            sub_nodes,
+            vec![
+                menu_item_node(menu_key, 0),
+                menu_item_node(menu_key, 3),
+                menu_item_node(menu_key, 4),
+            ]
+        );
+        assert!(idle_out.sub_hits.iter().all(|h| h.layer == MENU_LAYER));
+
+        // 悬停与按压胶囊填充令牌正确切换。
+        assert!(hover_out
+            .primitives
+            .iter()
+            .any(|p| p.prim_type() == PrimType::RoundedRect
+                && p.fill_token_or_uv == u32::from(Token::HOVER.raw())
+                && p.opacity() > 0.9));
+        assert!(hover_out
+            .primitives
+            .iter()
+            .any(|p| p.prim_type() == PrimType::RoundedRect
+                && p.fill_token_or_uv == u32::from(Token::ERROR_SOFT.raw())
+                && p.opacity() > 0.9));
+        assert!(press_out
+            .primitives
+            .iter()
+            .any(|p| p.prim_type() == PrimType::RoundedRect
+                && p.fill_token_or_uv == u32::from(Token::PRESSED.raw())
+                && p.opacity() > 0.9));
+
+        // 危险项字形使用 Token::ERROR，禁用项字形使用 Token::TEXT_DISABLED，快捷键使用 Token::TEXT_SECONDARY。
+        assert!(idle_out.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::Glyph
+                && p.fill_token_or_uv == u32::from(Token::ERROR.raw())
+        }));
+        assert!(idle_out.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::Glyph
+                && p.fill_token_or_uv == u32::from(Token::TEXT_DISABLED.raw())
+        }));
+        assert!(idle_out.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::Glyph
+                && p.fill_token_or_uv == u32::from(Token::TEXT_SECONDARY.raw())
+        }));
+        // 分隔线使用 Token::DIVIDER，外部彩色图标保持 Token::NONE 填充。
+        assert!(idle_out.primitives.iter().any(|p| {
+            p.prim_type() == PrimType::RoundedRect
+                && p.fill_token_or_uv == u32::from(Token::DIVIDER.raw())
+        }));
+        let ext_img = idle_out
+            .primitives
+            .iter()
+            .find(|p| p.prim_type() == PrimType::Image && p.border_token_or_tex == 71)
+            .expect("external icon image primitive");
+        assert_eq!(ext_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
     }
 }

@@ -91,7 +91,9 @@ pub use unbound_widgets::{
 pub use unbound_widgets::{
     Command, CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens, ContextClose,
     ContextKey, ContextMenuState, DockNode, DockPane, DockState, DockTab, DockTokens, DockTree,
-    DockZone, ImageDesc, ImageSource, MenuDesc, MenuItem, MenuState, MinimapDesc, MinimapItem,
+    emit_menu, emit_menu_with_rows, menu_item_node, DockZone, ImageDesc, ImageSource, MenuDesc,
+    MenuItem, MenuItemRenderRow, MenuState, MinimapDesc, MinimapItem, CONTEXT_MENU_ITEM_HEIGHT,
+    MENU_ICON_SIZE, MENU_ITEM_RADIUS, MENU_PANEL_PADDING, MENU_SEPARATOR_HEIGHT,
     MinimapState, ObjectFit, PopoverDesc, PopoverOutput, TreeViewRow, TreeViewTokens,
     VariableVirtualList, VariableWindow,
 };

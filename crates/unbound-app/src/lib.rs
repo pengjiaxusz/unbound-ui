@@ -797,6 +797,8 @@ pub struct AppContext {
     tab_add_requests: Rc<RefCell<FxHashSet<u64>>>,
     /// 各标签栏最近一次右键命中的具体标签目标（索引与 ID）。
     tab_context_targets: Rc<RefCell<FxHashMap<u64, TabHitTarget>>>,
+    /// 各上下文菜单待消费的最近一次左键点击激活项索引（按 `ViewBuilder::context_menu` 的 `key` 索引）。
+    context_menu_activated: Rc<RefCell<FxHashMap<u64, usize>>>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -856,6 +858,7 @@ impl AppContext {
             tab_close_requests: Rc::new(RefCell::new(FxHashMap::default())),
             tab_add_requests: Rc::new(RefCell::new(FxHashSet::default())),
             tab_context_targets: Rc::new(RefCell::new(FxHashMap::default())),
+            context_menu_activated: Rc::new(RefCell::new(FxHashMap::default())),
         }
     }
 
@@ -1142,6 +1145,16 @@ impl AppContext {
 
     pub(crate) fn record_tab_context_target(&self, key: u64, target: TabHitTarget) {
         self.tab_context_targets.borrow_mut().insert(key, target);
+    }
+
+    /// 取出并消费指定上下文菜单（按传给 `ViewBuilder::context_menu` 的 `key` 索引）
+    /// 最近一次被用户左键点击激活的菜单项索引。
+    pub fn take_context_menu_activated(&self, key: u64) -> Option<usize> {
+        self.context_menu_activated.borrow_mut().remove(&key)
+    }
+
+    pub(crate) fn record_context_menu_activated(&self, key: u64, index: usize) {
+        self.context_menu_activated.borrow_mut().insert(key, index);
     }
 
     /// 读取指定 `HotkeyInputDesc` 控件键已录制的快捷键字符串。
@@ -1623,6 +1636,8 @@ pub enum WidgetSpec {
     },
     /// 右键上下文菜单。
     ContextMenu {
+        /// 调用 `ViewBuilder::context_menu` 时传入的有效菜单键（用于回传点击激活项索引）。
+        owner_key: u64,
         /// 触发菜单的锚点节点键。
         anchor_key: u64,
         /// 菜单描述符。
@@ -3056,6 +3071,7 @@ impl<'a> ViewBuilder<'a> {
                 menu_key,
                 menu_node_desc,
                 WidgetSpec::ContextMenu {
+                    owner_key: effective_key,
                     anchor_key,
                     desc: placed_desc,
                     menu_state,
@@ -4343,6 +4359,16 @@ pub struct FrameReport {
 }
 
 /// 负责事件归约与场景 diff 的应用运行时。
+/// 单帧已挂载上下文菜单的点击反解条目。
+struct ActiveContextMenu {
+    /// 调用 `ViewBuilder::context_menu` 时传入的有效键（经 `scoped_key` 作用域混合）。
+    owner_key: u64,
+    /// 实际发射菜单控件的节点键（`entry.key`）。
+    widget_key: u64,
+    /// 每项是否可选（非分隔线且非禁用）。
+    selectable: Vec<bool>,
+}
+
 pub struct AppRuntime<A: Application> {
     app: A,
     state: A::State,
@@ -4415,6 +4441,8 @@ pub struct AppRuntime<A: Application> {
     form_bindings: FormBindingStore,
     registered_selects: Vec<(u64, unbound_widgets::SelectDesc)>,
     active_select_popups: Vec<ActiveSelectPopup>,
+    /// 本帧已挂载的上下文菜单项可选表，用于将 `menu_item_node` 点击回传至宿主菜单键。
+    active_context_menus: Vec<ActiveContextMenu>,
     /// 主窗口客户区左上角在屏幕物理坐标系中的位置，用于换算越界原生弹出窗矩形。
     window_screen_origin: (i32, i32),
     /// 归属的平台窗口标识（用于构造 `PopupWindowConfig::owner`）。
@@ -4487,6 +4515,7 @@ impl<A: Application> AppRuntime<A> {
             form_bindings: FormBindingStore::new(),
             registered_selects: Vec::new(),
             active_select_popups: Vec::new(),
+            active_context_menus: Vec::new(),
             window_screen_origin: (0, 0),
             window_owner_id: unbound_platform::WindowId(0),
             active_native_popups: FxHashMap::default(),
@@ -6090,6 +6119,7 @@ impl<A: Application> AppRuntime<A> {
 
         self.mounted_widgets.clear();
         self.scroll_regions.clear();
+        self.active_context_menus.clear();
         let pending = core::mem::take(&mut self.pending);
         for entry in &pending {
             let rect = self
@@ -6916,6 +6946,7 @@ impl<A: Application> AppRuntime<A> {
                     self.collector.push(entry.key, pop.output);
                 }
                 WidgetSpec::ContextMenu {
+                    owner_key,
                     anchor_key,
                     desc,
                     menu_state,
@@ -6923,12 +6954,130 @@ impl<A: Application> AppRuntime<A> {
                     let mut desc = desc.clone();
                     desc.z = entry.z_base.saturating_add(desc.z.min(100));
                     resolve_menu_item_icons(&self.asset_hub, &mut desc.items);
-                    let (mut out, _) = unbound_widgets::emit_menu(
+                    self.active_context_menus.push(ActiveContextMenu {
+                        owner_key: *owner_key,
+                        widget_key: entry.key,
+                        selectable: desc
+                            .items
+                            .iter()
+                            .map(|item| !state.disabled && item.selectable())
+                            .collect(),
+                    });
+                    let has_icon_col = desc.has_icon_column();
+                    let scroll_offset = menu_state.scroll_offset();
+                    let shaped_rows: Vec<(
+                        Vec<unbound_text::GlyphQuad>,
+                        Vec<unbound_text::GlyphQuad>,
+                        unbound_widgets::PointerPhase,
+                    )> = desc
+                        .items
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, item)| {
+                            if item.separator {
+                                return (
+                                    Vec::new(),
+                                    Vec::new(),
+                                    unbound_widgets::PointerPhase::Idle,
+                                );
+                            }
+                            let row_rect = desc
+                                .item_rect(idx)
+                                .translate(Vec2::new(0.0, -scroll_offset.y));
+                            let pill_left = row_rect.origin.x + unbound_widgets::MENU_PANEL_PADDING;
+                            let pill_right =
+                                row_rect.max().x - unbound_widgets::MENU_PANEL_PADDING;
+                            let label_left = if has_icon_col {
+                                pill_left + 10.0 + unbound_widgets::MENU_ICON_SIZE + 8.0
+                            } else {
+                                pill_left + 10.0
+                            };
+                            let (shortcut_glyphs, right_reserved) = if item.has_submenu() {
+                                (Vec::new(), 30.0)
+                            } else if !item.shortcut.is_empty() {
+                                let sc_size = 11.5;
+                                let sc_w = text_ctx.measure_line(&item.shortcut, sc_size, 400).x;
+                                let max_sc_w = (pill_right - 10.0 - label_left).max(0.0);
+                                let sc_box_w = (sc_w + 4.0).min(max_sc_w);
+                                let sc_rect = Rect::new(
+                                    pill_right - 10.0 - sc_box_w,
+                                    row_rect.origin.y,
+                                    sc_box_w,
+                                    row_rect.size.y,
+                                );
+                                let quads = if sc_box_w > 0.0 {
+                                    text_ctx.shape_line(
+                                        &item.shortcut,
+                                        sc_rect,
+                                        sc_size,
+                                        400,
+                                        unbound_widgets::AlignX::Right,
+                                        unbound_widgets::AlignY::Middle,
+                                    )
+                                } else {
+                                    Vec::new()
+                                };
+                                (quads, 10.0 + sc_box_w + 10.0)
+                            } else {
+                                (Vec::new(), 10.0)
+                            };
+                            let label_avail_w = (pill_right - right_reserved - label_left).max(0.0);
+                            let label_glyphs = if label_avail_w > 0.0 && !item.label.is_empty() {
+                                let elided = unbound_widgets::elide_text_with_measure(
+                                    &item.label,
+                                    label_avail_w,
+                                    unbound_widgets::ElideMode::End,
+                                    |cand| text_ctx.measure_line(cand, 13.0, 400).x,
+                                );
+                                if !elided.display.is_empty() {
+                                    let label_rect = Rect::new(
+                                        label_left,
+                                        row_rect.origin.y,
+                                        label_avail_w,
+                                        row_rect.size.y,
+                                    );
+                                    text_ctx.shape_line(
+                                        &elided.display,
+                                        label_rect,
+                                        13.0,
+                                        400,
+                                        unbound_widgets::AlignX::Left,
+                                        unbound_widgets::AlignY::Middle,
+                                    )
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
+                            let item_key = unbound_widgets::menu_item_node(entry.key, idx);
+                            let item_phase = if state.disabled || item.disabled {
+                                unbound_widgets::PointerPhase::Idle
+                            } else if self.ctx.pressed == Some(item_key) {
+                                unbound_widgets::PointerPhase::Pressed
+                            } else if self.ctx.hovered == Some(item_key) {
+                                unbound_widgets::PointerPhase::Hovered
+                            } else {
+                                unbound_widgets::PointerPhase::Idle
+                            };
+                            (label_glyphs, shortcut_glyphs, item_phase)
+                        })
+                        .collect();
+                    let render_rows: Vec<unbound_widgets::MenuItemRenderRow<'_>> = shaped_rows
+                        .iter()
+                        .map(|(label, shortcut, phase)| unbound_widgets::MenuItemRenderRow {
+                            label_glyphs: label.as_slice(),
+                            shortcut_glyphs: shortcut.as_slice(),
+                            phase: *phase,
+                        })
+                        .collect();
+                    let (mut out, _) = unbound_widgets::emit_menu_with_rows(
                         entry.key,
                         *anchor_key,
                         &desc,
                         menu_state,
                         state,
+                        &render_rows,
                     );
                     if out.a11y.is_none() {
                         out.a11y = Some(A11yNode::new(Role::Menu, "ContextMenu", desc.rect));
@@ -6936,6 +7085,10 @@ impl<A: Application> AppRuntime<A> {
                     if let Some(hit) = out.hit.as_mut() {
                         hit.layer = unbound_input::PORTAL_LAYER;
                         hit.z = hit.z.saturating_add(u32::from(entry.z_base));
+                    }
+                    for sub_hit in &mut out.sub_hits {
+                        sub_hit.layer = unbound_input::PORTAL_LAYER;
+                        sub_hit.z = sub_hit.z.saturating_add(u32::from(entry.z_base));
                     }
                     self.collector.push(entry.key, out);
                 }
@@ -7452,6 +7605,12 @@ impl<A: Application> AppRuntime<A> {
                         TabSubHit::Item { .. } => {}
                     }
                 }
+                if let Some((menu_owner_key, item_index)) =
+                    self.resolve_context_menu_item(target)
+                {
+                    self.ctx
+                        .record_context_menu_activated(menu_owner_key, item_index);
+                }
                 self.dispatch_bubbling("Click", target, |ancestor| AppEvent::Click {
                     node: ancestor,
                     pos: position,
@@ -7739,6 +7898,18 @@ impl<A: Application> AppRuntime<A> {
             | (tabs_key, TabSubHit::Close(target)) => Some((tabs_key, target)),
             _ => None,
         }
+    }
+
+    /// 将命中的子热区键反解为所属上下文菜单的用户键与可选菜单项索引。
+    fn resolve_context_menu_item(&self, target: u64) -> Option<(u64, usize)> {
+        for menu in self.active_context_menus.iter().rev() {
+            for (idx, &selectable) in menu.selectable.iter().enumerate() {
+                if selectable && target == unbound_widgets::menu_item_node(menu.widget_key, idx) {
+                    return Some((menu.owner_key, idx));
+                }
+            }
+        }
+        None
     }
 
     fn handle_select_option_click(&mut self, target_key: u64) -> bool {
@@ -9436,5 +9607,180 @@ mod tests {
         rt.pointer_down(tab0_bg_point, PointerButton::Left);
         rt.pointer_up(tab0_bg_point, PointerButton::Left);
         assert_eq!(rt.context().tab_active(TABS_KEY), Some(0));
+    }
+
+    #[test]
+    fn context_menu_win11_render_sub_hits_and_click_activation_round_trip() {
+        use unbound_gpu::data::PrimType;
+        use unbound_theme::Token;
+        use unbound_widgets::{
+            ContextMenuState, MenuDesc, MenuItem, WidgetIcon, CONTEXT_MENU_ITEM_HEIGHT,
+            MENU_PANEL_PADDING, MENU_SEPARATOR_HEIGHT,
+        };
+
+        const MENU_KEY: u64 = 7200;
+
+        struct ContextMenuTestApp {
+            menu_state: ContextMenuState,
+            ext_handle: Option<ExternalTextureHandle>,
+            activated_log: Vec<usize>,
+        }
+
+        impl Application for ContextMenuTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+                if let Some(idx) = ctx.take_context_menu_activated(MENU_KEY) {
+                    self.activated_log.push(idx);
+                    return EventOutcome::new(DirtyFlags::PAINT);
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                // 声明菜单锚点节点：ContextMenu 浮层按锚点存活，锚点缺失会被 prune_anchors 裁掉。
+                // 注意键不能取 1（语义根保留键），这里用 100。
+                v.button(
+                    100,
+                    unbound_widgets::ButtonDesc::new(Rect::new(0.0, 0.0, 80.0, 30.0), "Target"),
+                );
+                let icon = self
+                    .ext_handle
+                    .map_or(WidgetIcon::None, |h| WidgetIcon::ExternalTexture(h.0));
+                let desc = MenuDesc::context_menu(
+                    Rect::new(0.0, 0.0, 220.0, 0.0),
+                    vec![
+                        MenuItem::action("Open")
+                            .with_widget_icon(icon)
+                            .with_shortcut("Ctrl+O"),
+                        MenuItem::separator(),
+                        MenuItem::action("Disabled").disabled().with_shortcut("Ctrl+D"),
+                        MenuItem::action("More").with_submenu(vec![MenuItem::action("Sub")]),
+                        MenuItem::action("Delete").danger(true),
+                    ],
+                );
+                v.context_menu(MENU_KEY, desc, &self.menu_state);
+            }
+        }
+
+        let mut menu_state = ContextMenuState::new();
+        menu_state.open_at(Vec2::new(80.0, 60.0), 100, None);
+        let app = ContextMenuTestApp {
+            menu_state,
+            ext_handle: None,
+            activated_log: Vec::new(),
+        };
+        let mut rt = AppRuntime::new(app, Vec2::new(1000.0, 700.0));
+        let ext_h = rt
+            .asset_hub_mut()
+            .upload_external_rgba8(16, 16, true, vec![255u8; 16 * 16 * 4]);
+        rt.asset_hub_mut()
+            .commit_external_texture_slot(ext_h, Ok(88));
+        rt.application_mut().ext_handle = Some(ext_h);
+        rt.invalidate();
+        let _ = rt.frame(0.0);
+        // 浮层（portal 层）在首帧挂载后次帧才进入图元收集，需再跑一帧才能断言 span。
+        let _ = rt.frame(0.0);
+
+        let widget_key = mix_key(MENU_KEY, 0x4354_584D);
+        let prim_count_idle = rt.scene().primitives.len();
+        let span = *rt
+            .scene()
+            .node_spans
+            .get(&widget_key)
+            .expect("context menu primitive span");
+        let menu_prims = &rt.scene().primitives[span.0 as usize..span.1 as usize];
+
+        // 1. 校验标签字形、快捷键字形、危险项前景色、禁用项前景色与外部彩色图标槽位。
+        assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Glyph
+            && p.fill_token_or_uv == u32::from(Token::TEXT_PRIMARY.raw())));
+        assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Glyph
+            && p.fill_token_or_uv == u32::from(Token::TEXT_SECONDARY.raw())));
+        assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Glyph
+            && p.fill_token_or_uv == u32::from(Token::ERROR.raw())));
+        assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Glyph
+            && p.fill_token_or_uv == u32::from(Token::TEXT_DISABLED.raw())));
+        assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Image
+            && p.border_token_or_tex == 88
+            && p.fill_token_or_uv == u32::from(Token::NONE.raw())));
+
+        // 精确计算各行中心点（与 Win11 4px 内边距、32px 项高与 9px 分隔线对齐）。
+        let row0_center = Vec2::new(
+            80.0 + 110.0,
+            60.0 + MENU_PANEL_PADDING + CONTEXT_MENU_ITEM_HEIGHT * 0.5,
+        );
+        let sep_center = Vec2::new(
+            80.0 + 110.0,
+            60.0 + MENU_PANEL_PADDING + CONTEXT_MENU_ITEM_HEIGHT + MENU_SEPARATOR_HEIGHT * 0.5,
+        );
+        let dis_center = Vec2::new(
+            80.0 + 110.0,
+            60.0
+                + MENU_PANEL_PADDING
+                + CONTEXT_MENU_ITEM_HEIGHT
+                + MENU_SEPARATOR_HEIGHT
+                + CONTEXT_MENU_ITEM_HEIGHT * 0.5,
+        );
+        let danger_center = Vec2::new(
+            80.0 + 110.0,
+            60.0
+                + MENU_PANEL_PADDING
+                + CONTEXT_MENU_ITEM_HEIGHT * 3.0
+                + MENU_SEPARATOR_HEIGHT
+                + CONTEXT_MENU_ITEM_HEIGHT * 0.5,
+        );
+
+        let pill_fill_at = |rt: &AppRuntime<ContextMenuTestApp>, row_y: f32| -> u32 {
+            let s = rt.scene();
+            let sp = s.node_spans[&widget_key];
+            s.primitives[sp.0 as usize..sp.1 as usize]
+                .iter()
+                .find(|p| {
+                    p.prim_type() == PrimType::RoundedRect
+                        && p.size[0] > 180.0
+                        && p.size[1] < CONTEXT_MENU_ITEM_HEIGHT
+                        && (p.local_pos[1] - (row_y - (CONTEXT_MENU_ITEM_HEIGHT - 4.0) * 0.5)).abs()
+                            < 2.0
+                })
+                .expect("menu item pill primitive")
+                .fill_token_or_uv
+        };
+
+        // 2. 悬停与按下项 0：仅项 0 切换为 HOVER / PRESSED，危险项保持透明，且图元总数恒定。
+        rt.pointer_move(row0_center);
+        let _ = rt.frame(0.016);
+        assert_eq!(rt.scene().primitives.len(), prim_count_idle);
+        assert_eq!(pill_fill_at(&rt, row0_center.y), u32::from(Token::HOVER.raw()));
+        assert_eq!(pill_fill_at(&rt, danger_center.y), u32::from(Token::NONE.raw()));
+
+        rt.pointer_down(row0_center, PointerButton::Left);
+        let _ = rt.frame(0.032);
+        assert_eq!(rt.scene().primitives.len(), prim_count_idle);
+        assert_eq!(pill_fill_at(&rt, row0_center.y), u32::from(Token::PRESSED.raw()));
+        assert_eq!(pill_fill_at(&rt, danger_center.y), u32::from(Token::NONE.raw()));
+
+        // 3. 左键释放项 0：触发激活并被应用消费一次，二次读取返回 None。
+        rt.pointer_up(row0_center, PointerButton::Left);
+        assert_eq!(rt.application().activated_log, vec![0]);
+        assert_eq!(rt.context().take_context_menu_activated(MENU_KEY), None);
+
+        // 4. 点击分隔线与禁用项：不触发激活。
+        rt.pointer_move(sep_center);
+        rt.pointer_down(sep_center, PointerButton::Left);
+        rt.pointer_up(sep_center, PointerButton::Left);
+        assert_eq!(rt.application().activated_log, vec![0]);
+        assert_eq!(rt.context().take_context_menu_activated(MENU_KEY), None);
+
+        rt.pointer_move(dis_center);
+        rt.pointer_down(dis_center, PointerButton::Left);
+        rt.pointer_up(dis_center, PointerButton::Left);
+        assert_eq!(rt.application().activated_log, vec![0]);
+        assert_eq!(rt.context().take_context_menu_activated(MENU_KEY), None);
+
+        // 5. 点击危险项（索引 4）：精确回传 Some(4)。
+        rt.pointer_move(danger_center);
+        rt.pointer_down(danger_center, PointerButton::Left);
+        rt.pointer_up(danger_center, PointerButton::Left);
+        assert_eq!(rt.application().activated_log, vec![0, 4]);
+        assert_eq!(rt.context().take_context_menu_activated(MENU_KEY), None);
     }
 }

@@ -1179,7 +1179,8 @@ where
             );
             let mut menu_state = MenuState::new();
             menu_state.highlighted = Some(variant_idx % 3);
-            let mut out = crate::menu::emit_menu(node, 2, &desc, &menu_state, state).0;
+            let mut out =
+                crate::menu::emit_menu_with_rows(node, 2, &desc, &menu_state, state, &[]).0;
             let r0 = desc.item_rect(0);
             let r2 = desc.item_rect(2);
             let g0 = shape_centered_y(&mut shape, "Open", r0, menu_r.origin.x + 14.0, 13.0);

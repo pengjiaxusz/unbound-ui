@@ -607,7 +607,11 @@ pub use image::{
     ResolvedImage,
 };
 pub use masonry::{emit_masonry, AspectRatioBoxDesc, MasonryDesc, MasonryItem};
-pub use menu::{emit_menu, MenuDesc, MenuItem, MenuState, MenuWidget};
+pub use menu::{
+    emit_menu, emit_menu_with_rows, menu_item_node, MenuDesc, MenuItem, MenuItemRenderRow,
+    MenuState, MenuWidget, CONTEXT_MENU_ITEM_HEIGHT, MENU_ICON_SIZE, MENU_ITEM_HEIGHT,
+    MENU_ITEM_RADIUS, MENU_PANEL_PADDING, MENU_SEPARATOR_HEIGHT,
+};
 pub use menubar::{
     emit_menubar, emit_menubar_item, reduce_menubar_key, MenuBarDesc, MenuBarItem, MenuBarKey,
     MenuBarState, MenuBarTokens,

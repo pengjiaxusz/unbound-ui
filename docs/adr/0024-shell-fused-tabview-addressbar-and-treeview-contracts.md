@@ -38,8 +38,27 @@
      - 未悬停面包屑分段常态为透明（仅悬停绘制 `Token::HOVER`、按下绘制 `Token::PRESSED`），且仅当 `hovered_hit` 精确命中对应导航按钮时才高亮，修复 `hovered_hit == None` 误高亮 `NavBack` 的缺陷；
      - 发射阶段对路径区与搜索区分别施加 GPU `push_clip` / `pop_clip` 与尾部省略，通过 `emit_address_bar_with_visual` / `emit_address_bar_text_layer` 区分主文本与 `Token::TEXT_SECONDARY` 次级占位文本，并在编辑态与搜索聚焦态绘制选区高亮、光标竖线与 IME 预编辑下划线（保持 24 态图元数恒定）。
 
+5. **Windows 11 中性薄纱交互、统一彩色图标与菜单/标签交互闭环契约**：
+   - **Win11 中性薄纱令牌与交互状态机**：
+     - `unbound-theme` 的 Win11 预设将 `Token::HOVER`、`Token::PRESSED`、`Token::NAV_SELECTED`、`Token::SURFACE_ELEVATED`、`Token::OVERLAY_BG` 与 `Token::CARD_BORDER` 对齐为中性半透明薄纱色板（浅色模式中性灰半透、深色模式中性白半透），消除非标偏色；
+     - `TreeView` 将展开箭头子热区（`tree_toggle_node`）归属到所属行，确保单行 `Hovered` / `Pressed` 状态连续无闪烁；`AddressBar` 导航按钮/面包屑分段与 `Button` 微妙变体（Subtle）统一接入逐部件独立 `PointerPhase` 状态机，同时保持 24 态图元数恒定。
+   - **统一 `WidgetIcon` 双通道彩色图标与 `PrimType::Image` 原色保真不变量**：
+     - `unbound-widgets::shell` 提供统一 `WidgetIcon` 枚举（`None` / `Vector(ShellIcon)` / `ExternalTexture(u64)`）与 `emit_widget_icon_primitives` 发射器，统一服务于 `TreeView`（`TreeRowIcon = WidgetIcon`）、`AddressBar`、`Button`、`TabView` 与 `ContextMenu`；
+     - 发射外部彩色纹理 `PrimType::Image` 时必须固定 `fill = Token::NONE`，禁止片元着色器将彩色纹理像素与前景色令牌相乘（避免浅色模式下发黑）；禁用态统一通过 `z_and_opacity` 降低不透明度为 `WINUI_DISABLED_OPACITY`；
+     - `unbound-app` 发射阶段经 `AssetHub::external_texture_slot` 统一解析外部纹理句柄，尚未驻留 GPU 槽位的句柄安全退化为 `WidgetIcon::None`，绝不泄露原始句柄号至 GPU 图元。
+   - **`TabView` 载荷重定位、关闭按钮与独立子热区事件闭环**：
+     - `WidgetOutput::append_child_primitives` 在合并子控件输出前自动按当前 `payloads.len()` 重定位 `extra_payload_idx`，消除标签图标、关闭叉号 `×` 与字形载荷索引偏移；
+     - 冻结确定性子热区键 `tab_item_node(tabs_key, index)`、`tab_close_node(tabs_key, index)` 与 `tab_add_node(tabs_key)`，实现每个标签页主体、关闭按钮与 `+` 新建按钮独立派生 `Hovered` / `Pressed` 态而互不串扰；
+     - `AppContext` 提供 `take_tab_close_request`（左键点击 `×` 与中键点击可关闭标签，且不误切激活标签）、`take_tab_add_request`（`+` 新建按钮）与 `tab_context_target` / `take_tab_context_target`（右键命中具体标签，不误切激活标签）。
+   - **`ContextMenu` / `MenuFlyout` Win11 完整渲染与点击回传闭环**：
+     - 冻结 Win11 几何常量：`CONTEXT_MENU_ITEM_HEIGHT = 32.0`、`MENU_PANEL_PADDING = 4.0`、`MENU_ITEM_RADIUS = 4.0`、`MENU_ICON_SIZE = 16.0`、`MENU_SEPARATOR_HEIGHT = 9.0`，同时保留既有 `MENU_ITEM_HEIGHT (37.0)`、`MenuDesc::new` 与 `emit_menu` 签名向后兼容；
+     - `MenuDesc::context_menu` 无标题头，渲染 `8px` 圆角（`MENU_RADIUS`）`Token::OVERLAY_BG` 面板、`1px` `Token::CARD_BORDER` 描边 + `MENU_SHADOW` 解析阴影、四边 `4px` 内边距与 `9px` 居中 `1px` `Token::DIVIDER` 分隔线；`content_height()`、`item_rect(index)`、`item_at_offset` 与 `ContextMenuState::desc_at` 共享同一累计高度公式；
+     - `emit_menu_with_rows` 实现三列对齐布局：左侧 `16×16` `WidgetIcon` 图标列（支持彩色 `ExternalTexture` 与勾选态 `ShellIcon::Check`，同级任一项含图标或勾选态则整列对齐）+ 左对齐主标签（`Token::TEXT_PRIMARY`、禁用态 `Token::TEXT_DISABLED`、危险项 `Token::ERROR`）+ 右对齐次级色快捷键（`Token::TEXT_SECONDARY`）或子菜单 `›` 箭头（`ShellIcon::ChevronRight` / `Token::SUBMENU_ARROW`）；
+     - 每个可选非分隔线项在 `PORTAL_LAYER` 注册独立子热区 `menu_item_node(node, index)`，悬停填充 `Token::HOVER`（危险项叠加柔和错误底色 `Token::ERROR_SOFT`）、按压填充 `Token::PRESSED`，且固定菜单在不同交互阶段保持图元数恒定；分隔线与禁用项不注册可点击热区；
+     - `unbound-app` 在 `WidgetSpec::ContextMenu` 发射阶段自动完成 `text_ctx.shape_line` + `elide_text_with_measure` 排版、`resolve_menu_item_icons` 外部纹理槽解析与逐项 `PointerPhase` 派生；左键点击可选菜单项时写入一次性激活记录，由 `AppContext::take_context_menu_activated(key)` 向宿主回传命中项索引。
+
 ## 后果
 
-- 任何使用 `unbound-ui` 的桌面文件管理器或多标签工作台均可直接通过标准 `ViewBuilder` API 组装出与 Windows 11 资源管理器视觉及交互一致的三层壳层（融合标签标题栏 → 双模地址/搜索栏 → 紧凑 `CommandBar` + 虚拟化导航树），无需在应用层自建绕行控件。
-- `TreeRowIcon` 预留 `ExternalTexture(ExternalTextureHandle)` 变体，使应用在初期使用框架矢量图标时，未来可零破坏切换至平台原生系统图标纹理。
-- `TabView`、`TreeView` 与 `AddressBar` 的默认构造与 24 态图元恒定门禁保持向后兼容，不影响现有批量像素差分基线。
+- 任何使用 `unbound-ui` 的桌面文件管理器或多标签工作台均可直接通过标准 `ViewBuilder` API 组装出与 Windows 11 资源管理器视觉及交互一致的三层壳层（融合标签标题栏 → 双模地址/搜索栏 → 紧凑 `CommandBar` + 虚拟化导航树）与原生密度上下文菜单，无需在应用层自建绕行控件。
+- `WidgetIcon` 统一抽象使矢量图标与平台原生彩色纹理图标可在 `TreeView`、`AddressBar`、`Button`、`TabView` 与 `ContextMenu` 之间零破坏切换并保证原色保真。
+- `TabView`、`TreeView`、`AddressBar` 与 `MenuFlyout` 的默认构造与图元数恒定门禁保持向后兼容，不影响现有批量像素差分基线。
