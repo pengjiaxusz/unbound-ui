@@ -1415,15 +1415,21 @@ internal static class Catalog
                 return true;
 
             case "DatePicker":
+                // 非打包宿主上 `DatePicker.Language` 对列序与格式化语言**无效**（实测 en-US / fr-FR
+                // 均渲染成宿主的 zh-CN：列序年-月-日、`{month.full}` 输出「4月」），因此这里：
+                // 1) 显式声明 zh-CN，与宿主实际渲染保持一致；
+                // 2) 月/日改用数字格式，把文案钉死为与语言无关的 `2024 / 04 / 15`；
+                // 3) 宽度取 360：240 时 zh-CN 列宽会把「日」列压到 24px，文字被裁成空白列，
+                //    参考图会退化成一个无意义的形态（旧图即如此）。
                 element = new DatePicker
                 {
-                    Language = "en-US",
+                    Language = "zh-CN",
                     CalendarIdentifier = "GregorianCalendar",
-                    MonthFormat = "{month.full}",
-                    DayFormat = "{day.integer}",
+                    MonthFormat = "{month.integer(2)}",
+                    DayFormat = "{day.integer(2)}",
                     YearFormat = "{year.full}",
                     SelectedDate = new DateTimeOffset(new DateTime(2024, 4, 15)),
-                    Width = 240,
+                    Width = 360,
                     Height = 32,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
