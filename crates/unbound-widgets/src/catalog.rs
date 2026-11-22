@@ -21,23 +21,24 @@ use unbound_theme::Token;
 use unbound_world::virtualize::TreeRow;
 
 use crate::{
-    emit_address_bar, emit_generic_data_table, emit_pipeline_view, emit_query_builder,
-    emit_schema_form, emit_shortcut_bar, emit_task_hud, layout_form, layout_tags, parse_markdown,
-    AccordionDesc, AccordionSection, AccordionState, AccordionTokens, AddressBarDesc,
-    AddressBarState, AlertDesc, AlertDialogDesc, AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc,
-    BadgeDesc, BreadcrumbDesc, BreadcrumbState, BreadcrumbTokens, ButtonDesc, CalendarState,
-    CanvasToolbarDesc, CanvasToolbarState, CardDesc, CardTokens, ChartDesc, ChartSeries,
-    ChartState, CheckboxDesc, CheckboxTokens, ChipDesc, CodeBlockDesc, CodeBlockState,
-    ColorPickerDesc, ColorPickerState, ColorSwatchDesc, ColumnSpec, ComboItem, ComboboxDesc,
-    ComboboxState, Command, CommandPaletteDesc, CommandPaletteState, CommandPaletteTokens,
-    ContextMenuState, ControlState, Crumb, CurveEditorDesc, CurveEditorState, DataColumnSpec,
-    DatePickerDesc, DividerDesc, DividerTokens, DockTab, DockTokens, DockTree, DrawerDesc,
-    DrawerSide, DrawerState, EmptyStateDesc, FileDropDesc, FileDropState, FormDesc, FormField,
-    FormFieldDesc, GenericDataTableDesc, GenericDataTableState, GizmoDesc, GradientEditorState,
-    GraphNodeDesc, GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver, ImageDesc,
-    LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc, MenuItem,
-    MenuState, MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate, NinePatchDesc,
-    NodeGraphState, NumberInputDesc, NumberInputState, PinSpec, PipelineStageItem,
+    emit_address_bar, emit_address_bar_chrome, emit_address_bar_text_layer,
+    emit_address_bar_with_visual, emit_generic_data_table, emit_pipeline_view, emit_query_builder,
+    emit_schema_form, emit_shortcut_bar, emit_task_hud, emit_tree_row_divider, layout_form,
+    layout_tags, parse_markdown, AccordionDesc, AccordionSection, AccordionState, AccordionTokens,
+    AddressBarDesc, AddressBarState, AddressBarTextVisual, AlertDesc, AlertDialogDesc,
+    AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc, BadgeDesc, BreadcrumbDesc, BreadcrumbState,
+    BreadcrumbTokens, ButtonDesc, CalendarState, CanvasToolbarDesc, CanvasToolbarState, CardDesc,
+    CardTokens, ChartDesc, ChartSeries, ChartState, CheckboxDesc, CheckboxTokens, ChipDesc,
+    CodeBlockDesc, CodeBlockState, ColorPickerDesc, ColorPickerState, ColorSwatchDesc, ColumnSpec,
+    ComboItem, ComboboxDesc, ComboboxState, Command, CommandPaletteDesc, CommandPaletteState,
+    CommandPaletteTokens, ContextMenuState, ControlState, Crumb, CurveEditorDesc, CurveEditorState,
+    DataColumnSpec, DatePickerDesc, DividerDesc, DividerTokens, DockTab, DockTokens, DockTree,
+    DrawerDesc, DrawerSide, DrawerState, EmptyStateDesc, FileDropDesc, FileDropState, FormDesc,
+    FormField, FormFieldDesc, GenericDataTableDesc, GenericDataTableState, GizmoDesc,
+    GradientEditorState, GraphNodeDesc, GraphWire, HoverCardDesc, IconDesc, ImageAssetResolver,
+    ImageDesc, LoadingOverlayDesc, MenuBarDesc, MenuBarItem, MenuBarState, MenuBarTokens, MenuDesc,
+    MenuItem, MenuState, MinimapDesc, MinimapItem, MinimapState, ModalDesc, NaiveDate,
+    NinePatchDesc, NodeGraphState, NumberInputDesc, NumberInputState, PinSpec, PipelineStageItem,
     PipelineViewDesc, PivotDesc, PointerPhase, PopoverDesc, Presence, ProgressDesc, ProgressState,
     PropertyDesc, PropertyGridDesc, PropertyGridState, PropertySection, PropertyValue,
     QueryBuilderDesc, QueryCombinator, QueryRule, RadioDesc, RadioGroupDesc, RadioTokens,
@@ -1967,6 +1968,11 @@ where
                 TreeViewTokens::standard(),
             );
             merge_output(&mut out, child_out);
+            // 分区前置分隔线发射器同样纳入穷举目录，确保导航窗格分区契约有真实调用。
+            merge_output(
+                &mut out,
+                emit_tree_row_divider(&desc, &child_row, TreeViewTokens::standard()),
+            );
             out
         }
         WidgetCatalogId::ListView => {
@@ -2973,6 +2979,26 @@ where
                 glyphs.extend(shape_centered(&mut shape, seg, seg_r, 12.0));
                 sx += w + 6.0;
             }
+            // 独立外框与文本叠加层发射器需在穷举目录中真实调用，覆盖裁剪层与编辑态路径。
+            let _chrome = emit_address_bar_chrome(node, &desc, &ab_state, state);
+            let _with_visual = emit_address_bar_with_visual(
+                node,
+                &desc,
+                &ab_state,
+                state,
+                &[],
+                &[],
+                &AddressBarTextVisual::default(),
+            );
+            let _text_layer = emit_address_bar_text_layer(
+                &[],
+                &[],
+                &TextInputVisual::default(),
+                ab_state.editing,
+                false,
+                false,
+                desc.z,
+            );
             emit_address_bar(node, &desc, &ab_state, state, &glyphs)
         }
         WidgetCatalogId::GenericDataTable => {

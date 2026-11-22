@@ -5,7 +5,7 @@ use std::ops::Deref;
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance};
+use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -14,8 +14,8 @@ use unbound_theme::Token;
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
 use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::text_input::{
-    focus_underline, reduce_text_input, TextEditState, TextInputDesc, TextInputEvent,
-    TextInputOutcome,
+    floor_boundary, focus_underline, reduce_text_input, TextEditState, TextInputDesc,
+    TextInputEvent, TextInputOutcome, TextInputVisual,
 };
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
@@ -39,8 +39,12 @@ const ROOT_ICON_SIZE: f32 = 16.0;
 const MIN_EDIT_TRIGGER_WIDTH: f32 = 36.0;
 /// 溢出折叠按钮（`«`）宽度（`24px`）。
 const OVERFLOW_BUTTON_WIDTH: f32 = 24.0;
+/// 根图标右侧分隔箭头（`›`）宽度（`14px`）。
+const ROOT_CHEVRON_WIDTH: f32 = 14.0;
 /// 分段右侧子目录展开箭头（`›`）宽度（`18px`）。
 const CHEVRON_WIDTH: f32 = 18.0;
+/// 地址栏默认深度键（与 `TreeViewDesc` 对齐，确保绘制在容器 `BoxSurface` 背景之上）。
+const DEFAULT_ADDRESS_BAR_Z: u16 = 450;
 /// 启用搜索框时，低于该总宽则自动折叠为图标按钮。
 const SEARCH_COLLAPSE_THRESHOLD: f32 = 420.0;
 
@@ -178,6 +182,8 @@ pub struct AddressBarLayout {
     pub address_rect: Rect,
     /// 左侧 `16×16` 根图标矩形。
     pub root_icon_rect: Rect,
+    /// 根图标右侧与首个分段之间的分隔箭头（`›`）矩形。
+    pub root_chevron_rect: Option<Rect>,
     /// 被折叠的前段数量（大于 0 时渲染 `«` 按钮）。
     pub overflow_count: usize,
     /// `«` 溢出按钮矩形。
@@ -246,7 +252,7 @@ impl AddressBarDesc {
             show_refresh: true,
             show_search: false,
             search_placeholder: String::new(),
-            z: 10,
+            z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
 
@@ -269,7 +275,7 @@ impl AddressBarDesc {
             show_refresh: true,
             show_search: false,
             search_placeholder: String::new(),
-            z: 10,
+            z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
 
@@ -341,6 +347,16 @@ impl AddressBarDesc {
     }
 }
 
+/// 估算面包屑分段标签的逻辑像素宽度（非 ASCII / CJK 宽字符按 `13.8px`、ASCII 按 `7.5px` 估算）。
+#[must_use]
+fn estimate_segment_label_width(label: &str) -> f32 {
+    let text_w: f32 = label
+        .chars()
+        .map(|ch| if ch.is_ascii() { 7.5 } else { 13.8 })
+        .sum();
+    (text_w + 16.0).clamp(32.0, 220.0)
+}
+
 /// 计算地址栏三段式确定性几何布局。
 #[must_use]
 pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
@@ -383,9 +399,9 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
             };
             let sx = (r.max().x - sw).max(left_x);
             let sr = Rect::new(sx, r.origin.y, (r.max().x - sx).max(0.0), r.size.y);
-            let icon_s = 24.0f32.min(sr.size.y);
-            let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
             let icon_r = if collapsed {
+                let icon_s = 24.0f32.min(sr.size.y).min(sr.size.x);
+                let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
                 Rect::new(
                     sr.origin.x + (sr.size.x - icon_s) * 0.5,
                     icon_y,
@@ -393,19 +409,22 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
                     icon_s,
                 )
             } else {
-                Rect::new((sr.max().x - icon_s - 4.0).max(sr.origin.x), icon_y, icon_s, icon_s)
+                // Windows 11 资源管理器标准：非折叠搜索框放大镜图标位于左侧
+                let icon_s = 16.0f32.min(sr.size.y).min(sr.size.x);
+                let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
+                let icon_x = (sr.origin.x + 8.0).min((sr.max().x - icon_s).max(sr.origin.x));
+                Rect::new(icon_x, icon_y, icon_s, icon_s)
             };
             let clear_r = if collapsed {
                 None
             } else {
-                let clear_s = 22.0f32.min(sr.size.y);
+                // 清除按钮固定位于搜索框最右侧，确保文本区严格落在图标与清除按钮之间
+                let clear_s = 22.0f32.min(sr.size.y).min(sr.size.x);
                 let clear_y = sr.origin.y + (sr.size.y - clear_s) * 0.5;
-                Some(Rect::new(
-                    (icon_r.origin.x - clear_s - 2.0).max(sr.origin.x),
-                    clear_y,
-                    clear_s,
-                    clear_s,
-                ))
+                let clear_x = (sr.max().x - clear_s - 4.0)
+                    .max(icon_r.max().x + 4.0)
+                    .min((sr.max().x - clear_s).max(sr.origin.x));
+                Some(Rect::new(clear_x, clear_y, clear_s, clear_s))
             };
             (
                 Some(sr),
@@ -433,16 +452,29 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
 
     let inner_y = address_rect.origin.y + 3.0;
     let inner_h = (address_rect.size.y - 6.0).max(16.0);
-    let content_start_x = root_icon_rect.max().x + 4.0;
+    // 根图标后置 `›` 分隔符，使面包屑呈现 `[图标] > 分段1 > 分段2 >`
+    let root_chevron_rect = if !desc.segments.is_empty()
+        && root_icon_rect.max().x + 2.0 + ROOT_CHEVRON_WIDTH <= address_rect.max().x
+    {
+        Some(Rect::new(
+            root_icon_rect.max().x + 2.0,
+            inner_y,
+            ROOT_CHEVRON_WIDTH,
+            inner_h,
+        ))
+    } else {
+        None
+    };
+    let content_start_x = root_chevron_rect.map_or(root_icon_rect.max().x + 4.0, |rc| rc.max().x + 2.0);
     let available_total =
         (address_rect.max().x - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
 
-    // 预估每段所需宽度（标签 + 可选 `›` 箭头）
+    // 预估每段所需宽度（标签 + 可选 `›` 箭头），对 CJK 宽字符按双倍宽度系数估算
     let seg_widths: Vec<(f32, f32)> = desc
         .segments
         .iter()
         .map(|seg| {
-            let label_w = (seg.label.chars().count() as f32 * 7.5 + 14.0).clamp(32.0, 140.0);
+            let label_w = estimate_segment_label_width(&seg.label);
             let chev_w = if seg.has_subfolders {
                 CHEVRON_WIDTH
             } else {
@@ -516,6 +548,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         refresh_rect,
         address_rect,
         root_icon_rect,
+        root_chevron_rect,
         overflow_count,
         overflow_rect,
         segments,
@@ -1049,9 +1082,207 @@ fn emit_segment_chevron(
     );
 }
 
+/// 地址栏编辑态与内联搜索框的已测量文本视觉信息（光标、选区与 IME 预编辑下划线）。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AddressBarTextVisual {
+    /// 主地址栏编辑态光标、选区与 IME 几何信息（仅 `state.editing == true` 时生效）。
+    pub edit_visual: TextInputVisual,
+    /// 右侧内联搜索框光标、选区与 IME 几何信息（仅 `state.search_focused == true` 且非折叠时生效）。
+    pub search_visual: TextInputVisual,
+}
+
+impl Default for AddressBarTextVisual {
+    fn default() -> Self {
+        let hidden = TextInputVisual {
+            caret: Rect::ZERO,
+            selection: None,
+            preedit: None,
+            caret_visible: false,
+        };
+        Self {
+            edit_visual: hidden,
+            search_visual: hidden,
+        }
+    }
+}
+
+/// 根据编辑核心状态与文本测量回调计算光标竖线、选区高亮矩形与 IME 预编辑下划线矩形。
+#[must_use]
+pub fn compute_text_edit_visual<F>(
+    edit: &TextEditState,
+    text_rect: Rect,
+    active: bool,
+    mut measure_width: F,
+) -> TextInputVisual
+where
+    F: FnMut(&str) -> f32,
+{
+    let text = edit.text();
+    let scroll_x = edit.scroll_x();
+    let x_at = |byte_offset: usize, measure: &mut F| -> f32 {
+        let clamped = floor_boundary(text, byte_offset.min(text.len()));
+        let prefix_w = if clamped == 0 {
+            0.0
+        } else {
+            measure(&text[..clamped])
+        };
+        (text_rect.origin.x + prefix_w - scroll_x).clamp(text_rect.origin.x, text_rect.max().x)
+    };
+
+    let caret_x = x_at(edit.cursor(), &mut measure_width);
+    let caret_h = (text_rect.size.y - 12.0).max(12.0).min(text_rect.size.y);
+    let caret_y = text_rect.origin.y + (text_rect.size.y - caret_h) * 0.5;
+    let caret = Rect::new(caret_x, caret_y, 1.5, caret_h);
+
+    let selection = edit.selection().and_then(|(start, end)| {
+        let x0 = x_at(start, &mut measure_width);
+        let x1 = x_at(end, &mut measure_width);
+        let w = (x1 - x0).max(0.0);
+        (w > 0.5).then_some(Rect::new(x0, caret_y, w, caret_h))
+    });
+
+    let preedit = edit.preedit().and_then(|(start, end)| {
+        let x0 = x_at(start, &mut measure_width);
+        let x1 = x_at(end, &mut measure_width);
+        let w = (x1 - x0).max(0.0);
+        (w > 0.5).then_some(Rect::new(x0, caret_y + caret_h, w, 1.5))
+    });
+
+    TextInputVisual {
+        caret,
+        selection,
+        preedit,
+        caret_visible: active,
+    }
+}
+
+/// 发射编辑态选区高亮矩形（槽位恒定，通过不透明度切换显隐）。
+fn push_selection_overlay(
+    visual: &TextInputVisual,
+    active: bool,
+    disabled: bool,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+) {
+    let mut selection = surface(
+        visual.selection.unwrap_or(Rect::ZERO),
+        2.0,
+        Token::SELECTION,
+        z,
+    );
+    selection.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
+        PrimType::RoundedRect,
+        Default::default(),
+        SubElement::InnerShadow as u16,
+    );
+    selection.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        z,
+        if active && !disabled && visual.selection.is_some() {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(selection);
+}
+
+/// 发射编辑态光标竖线与 IME 预编辑下划线（槽位恒定，通过不透明度切换显隐）。
+fn push_caret_and_preedit_overlays(
+    visual: &TextInputVisual,
+    active: bool,
+    has_preedit: bool,
+    disabled: bool,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+) {
+    let mut caret = surface(visual.caret, 0.0, Token::TEXT_PRIMARY, z);
+    caret.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
+        PrimType::RoundedRect,
+        Default::default(),
+        SubElement::Content as u16,
+    );
+    caret.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        z,
+        if active && !disabled && visual.caret_visible {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(caret);
+
+    let mut preedit = surface(
+        visual.preedit.unwrap_or(Rect::ZERO),
+        0.0,
+        Token::PREEDIT_UNDERLINE,
+        z,
+    );
+    preedit.prim_type_and_flags = GpuPrimitiveInstance::pack_type(
+        PrimType::RoundedRect,
+        Default::default(),
+        SubElement::Content as u16,
+    );
+    preedit.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(
+        z,
+        if active && !disabled && has_preedit && visual.preedit.is_some() {
+            1.0
+        } else {
+            0.0
+        },
+    );
+    primitives.push(preedit);
+}
+
+/// 发射地址栏单个文本裁剪层（用于路径区或搜索区在独立 `push_clip` 作用域内绘制主文本、次级占位文本与光标/选区/IME）。
+#[must_use]
+pub fn emit_address_bar_text_layer(
+    primary_glyphs: &[GlyphQuad],
+    placeholder_glyphs: &[GlyphQuad],
+    visual: &TextInputVisual,
+    active: bool,
+    has_preedit: bool,
+    disabled: bool,
+    z: u16,
+) -> WidgetOutput {
+    let mut primitives =
+        Vec::with_capacity(3 + primary_glyphs.len() + placeholder_glyphs.len());
+    let mut payloads = Vec::with_capacity(primary_glyphs.len() + placeholder_glyphs.len());
+    let text_z = z.saturating_add(2);
+
+    push_selection_overlay(visual, active, disabled, text_z, &mut primitives);
+    emit_glyphs(
+        primary_glyphs,
+        if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        },
+        text_z,
+        &mut primitives,
+        &mut payloads,
+    );
+    emit_glyphs(
+        placeholder_glyphs,
+        if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_SECONDARY
+        },
+        text_z,
+        &mut primitives,
+        &mut payloads,
+    );
+    push_caret_and_preedit_overlays(visual, active, has_preedit, disabled, text_z, &mut primitives);
+
+    WidgetOutput {
+        primitives,
+        payloads,
+        ..Default::default()
+    }
+}
+
 /// 发射双模复合地址栏（外部导航按钮簇 + 一体化双模地址框 + 可选内联搜索框，严格保持 24 态恒定图元数）。
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn emit_address_bar(
     node: u64,
     desc: &AddressBarDesc,
@@ -1059,10 +1290,34 @@ pub fn emit_address_bar(
     control: ControlState,
     glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
+    emit_address_bar_with_visual(
+        node,
+        desc,
+        state,
+        control,
+        glyphs,
+        &[],
+        &AddressBarTextVisual::default(),
+    )
+}
+
+/// 发射双模复合地址栏，支持区分主文本与次级色占位文本字形，以及编辑态/搜索框的光标、选区与 IME 预编辑下划线。
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn emit_address_bar_with_visual(
+    node: u64,
+    desc: &AddressBarDesc,
+    state: &AddressBarState,
+    control: ControlState,
+    primary_glyphs: &[GlyphQuad],
+    placeholder_glyphs: &[GlyphQuad],
+    visual: &AddressBarTextVisual,
+) -> WidgetOutput {
     let layout = compute_layout(desc);
     let z = desc.z;
-    let mut primitives = Vec::with_capacity(28 + layout.segments.len() * 4 + glyphs.len());
-    let mut payloads = Vec::with_capacity(16 + layout.segments.len() * 2 + glyphs.len());
+    let total_glyphs = primary_glyphs.len() + placeholder_glyphs.len();
+    let mut primitives = Vec::with_capacity(36 + layout.segments.len() * 4 + total_glyphs);
+    let mut payloads = Vec::with_capacity(20 + layout.segments.len() * 2 + total_glyphs);
 
     // 1. 左段：外部 4 枚导航按钮槽位（后退/前进/向上/刷新，位于地址框之外）
     let nav_slots: [(Option<Rect>, AddressBarHitKind, bool); 4] = [
@@ -1080,13 +1335,14 @@ pub fn emit_address_bar(
             continue;
         };
         let active = !control.disabled && enabled;
-        let is_hovered = active
-            && (state.hovered_hit == Some(kind)
-                || (state.hovered_hit.is_none()
-                    && control.phase == PointerPhase::Hovered
-                    && kind == AddressBarHitKind::NavBack));
+        // 仅在 `hovered_hit` 精确命中对应按钮时才高亮，避免空白悬停误高亮后退按钮
+        let is_hovered = active && state.hovered_hit == Some(kind);
         let fill = if is_hovered {
-            Token::HOVER
+            if control.phase == PointerPhase::Pressed {
+                Token::PRESSED
+            } else {
+                Token::HOVER
+            }
         } else {
             Token::NONE
         };
@@ -1178,12 +1434,28 @@ pub fn emit_address_bar(
         &mut payloads,
     );
 
+    // 根图标后置 `›` 分隔箭头（编辑态置透明以保持图元数恒定）
+    if let Some(rc_r) = layout.root_chevron_rect {
+        let rc_color = if state.editing {
+            Token::NONE
+        } else if control.disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_SECONDARY
+        };
+        emit_segment_chevron(rc_r, rc_color, z + 2, &mut primitives, &mut payloads);
+    }
+
     // 溢出折叠 `«` 按钮（编辑态置透明以保持图元数恒定）
     if let Some(ov_r) = layout.overflow_rect {
         let ov_fill = if state.editing || control.disabled {
             Token::NONE
         } else if state.hovered_hit == Some(AddressBarHitKind::OverflowButton) {
-            Token::HOVER
+            if control.phase == PointerPhase::Pressed {
+                Token::PRESSED
+            } else {
+                Token::HOVER
+            }
         } else {
             Token::NONE
         };
@@ -1198,14 +1470,18 @@ pub fn emit_address_bar(
         emit_overflow_chevrons(ov_r, ov_color, z + 2, &mut primitives, &mut payloads);
     }
 
-    // 面包屑分段胶囊与条件性 `›` 展开箭头（编辑态隐藏，仍保持图元数恒定）
+    // 面包屑分段胶囊与条件性 `›` 展开箭头（常态透明，悬停/按下呈现圆角高亮；编辑态隐藏但保持图元数恒定）
     for seg in &layout.segments {
         let seg_fill = if state.editing || control.disabled {
             Token::NONE
         } else if state.hovered_hit == Some(AddressBarHitKind::Segment(seg.index)) {
-            Token::CONTROL_HOVER
+            if control.phase == PointerPhase::Pressed {
+                Token::PRESSED
+            } else {
+                Token::HOVER
+            }
         } else {
-            Token::HOVER
+            Token::NONE
         };
         primitives.push(surface(seg.label_rect, INNER_RADIUS, seg_fill, z + 1));
 
@@ -1213,7 +1489,11 @@ pub fn emit_address_bar(
             let chev_fill = if state.editing || control.disabled {
                 Token::NONE
             } else if state.hovered_hit == Some(AddressBarHitKind::SegmentChevron(seg.index)) {
-                Token::HOVER
+                if control.phase == PointerPhase::Pressed {
+                    Token::PRESSED
+                } else {
+                    Token::HOVER
+                }
             } else {
                 Token::NONE
             };
@@ -1293,9 +1573,24 @@ pub fn emit_address_bar(
         }
     }
 
-    // 4. 文本字形与键盘焦点环
+    // 4. 编辑态/搜索框选区高亮、主文本与次级占位文本字形、光标与 IME 预编辑下划线
+    let edit_active = state.editing && !control.disabled;
+    let search_active =
+        layout.search_rect.is_some() && !layout.search_collapsed && state.search_focused && !control.disabled;
+
+    push_selection_overlay(&visual.edit_visual, edit_active, control.disabled, z + 2, &mut primitives);
+    if layout.search_rect.is_some() {
+        push_selection_overlay(
+            &visual.search_visual,
+            search_active,
+            control.disabled,
+            z + 2,
+            &mut primitives,
+        );
+    }
+
     emit_glyphs(
-        glyphs,
+        primary_glyphs,
         if control.disabled {
             Token::TEXT_DISABLED
         } else {
@@ -1305,6 +1600,36 @@ pub fn emit_address_bar(
         &mut primitives,
         &mut payloads,
     );
+    emit_glyphs(
+        placeholder_glyphs,
+        if control.disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_SECONDARY
+        },
+        z + 2,
+        &mut primitives,
+        &mut payloads,
+    );
+
+    push_caret_and_preedit_overlays(
+        &visual.edit_visual,
+        edit_active,
+        state.edit_core.preedit().is_some(),
+        control.disabled,
+        z + 2,
+        &mut primitives,
+    );
+    if layout.search_rect.is_some() {
+        push_caret_and_preedit_overlays(
+            &visual.search_visual,
+            search_active,
+            state.search_core.preedit().is_some(),
+            control.disabled,
+            z + 2,
+            &mut primitives,
+        );
+    }
     primitives.push(focus_ring(
         addr_r.inflate(2.0),
         BAR_RADIUS + 2.0,
@@ -1670,5 +1995,286 @@ mod tests {
         let mut state = AddressBarState::new();
         state.begin_edit(&desc.full_path());
         assert_eq!(state.commit_edit(), vec!["Workspace", "Assets"]);
+    }
+
+    #[test]
+    fn default_z_is_above_container_surface_layer() {
+        let legacy = AddressBarDesc::new(
+            Rect::new(0.0, 0.0, 600.0, ADDRESS_BAR_HEIGHT),
+            vec!["C:".to_owned(), "Workspace".to_owned()],
+        );
+        let structured = sample_desc();
+        assert!(legacy.z >= 400, "legacy default z must be >= 400, got {}", legacy.z);
+        assert!(
+            structured.z >= 400,
+            "structured default z must be >= 400, got {}",
+            structured.z
+        );
+        assert_eq!(legacy.z, 450);
+        assert_eq!(structured.z, 450);
+    }
+
+    #[test]
+    fn search_icon_is_on_left_and_text_region_stays_inside_search_box() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let sr = layout.search_rect.expect("search rect");
+        let icon_r = layout.search_icon_rect.expect("search icon rect");
+        let clear_r = layout.search_clear_rect.expect("search clear rect");
+
+        assert!(!layout.search_collapsed);
+        assert!(
+            icon_r.origin.x >= sr.origin.x && icon_r.max().x < sr.center().x,
+            "search icon must be positioned on the left side of search box"
+        );
+        assert!(
+            clear_r.origin.x > sr.center().x && clear_r.max().x <= sr.max().x,
+            "clear button must be positioned on the right side of search box"
+        );
+        let text_left = icon_r.max().x + 6.0;
+        let text_right = clear_r.origin.x - 4.0;
+        assert!(
+            text_left < text_right && text_right <= sr.max().x,
+            "search text region [{text_left}, {text_right}] must fit inside search_rect"
+        );
+
+        // 折叠态下图标居中且不分配清除按钮
+        let mut narrow = desc.clone();
+        narrow.rect = Rect::new(0.0, 0.0, 360.0, ADDRESS_BAR_HEIGHT);
+        let narrow_layout = compute_layout(&narrow);
+        assert!(narrow_layout.search_collapsed);
+        assert!(narrow_layout.search_clear_rect.is_none());
+        let collapsed_sr = narrow_layout.search_rect.expect("collapsed search rect");
+        let collapsed_icon = narrow_layout.search_icon_rect.expect("collapsed icon");
+        assert!((collapsed_icon.center().x - collapsed_sr.center().x).abs() < 0.5);
+    }
+
+    #[test]
+    fn root_chevron_rect_sits_between_root_icon_and_first_segment() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let rc = layout.root_chevron_rect.expect("root chevron rect");
+        let first_seg = layout.segments.first().expect("first segment");
+        assert!(
+            rc.origin.x >= layout.root_icon_rect.max().x,
+            "root chevron must follow root icon"
+        );
+        assert!(
+            rc.max().x <= first_seg.label_rect.origin.x,
+            "root chevron must precede first segment"
+        );
+    }
+
+    #[test]
+    fn cjk_segment_width_exceeds_same_char_count_ascii_and_clamps_upper_bound() {
+        // 使用 Unicode 转义构造 CJK 目录名，满足代码语言守卫同时覆盖宽字符估算
+        let cjk_short = "\u{6B64}\u{7535}\u{8111}";
+        let ascii_short = "abc";
+        let cjk_long = "\u{672C}\u{5730}\u{78C1}\u{76D8}\u{5DE5}\u{4F5C}\u{533A}\u{8D44}\u{6E90}\u{7BA1}\u{7406}\u{5668}\u{957F}\u{76EE}\u{5F55}\u{540D}\u{79F0}\u{6D4B}\u{8BD5}\u{7528}\u{4F8B}";
+
+        let desc_cjk = AddressBarDesc::with_path_segments(
+            Rect::new(0.0, 0.0, 900.0, ADDRESS_BAR_HEIGHT),
+            cjk_short,
+            vec![
+                PathSegment::new(cjk_short, cjk_short),
+                PathSegment::new(cjk_long, cjk_long).with_subfolders(false),
+            ],
+        )
+        .without_search();
+        let desc_ascii = AddressBarDesc::with_path_segments(
+            Rect::new(0.0, 0.0, 900.0, ADDRESS_BAR_HEIGHT),
+            ascii_short,
+            vec![PathSegment::new(ascii_short, ascii_short)],
+        )
+        .without_search();
+
+        let layout_cjk = compute_layout(&desc_cjk);
+        let layout_ascii = compute_layout(&desc_ascii);
+        assert!(
+            layout_cjk.segments[0].label_rect.width()
+                > layout_ascii.segments[0].label_rect.width() + 10.0,
+            "CJK segment width must exceed same-char-count ASCII width"
+        );
+        assert!(
+            layout_cjk.segments[1].label_rect.width() <= 220.0 + 0.01,
+            "long CJK segment width must clamp to 220px"
+        );
+    }
+
+    #[test]
+    fn idle_segments_are_transparent_and_none_hover_does_not_highlight_nav_back() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let mut state = AddressBarState::new();
+        let hovered_control = ControlState {
+            phase: PointerPhase::Hovered,
+            ..ControlState::default()
+        };
+
+        // hovered_hit == None 且控件整体处于 Hovered 时：NavBack 不得被误高亮，且所有分段常态透明
+        let out = emit_address_bar(1, &desc, &state, hovered_control, &[]);
+        let back_r = layout.back_rect.expect("back rect");
+        let back_bg = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - back_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - back_r.origin.y).abs() < 0.5
+                    && (p.size[0] - back_r.size.x).abs() < 0.5
+            })
+            .expect("back button surface");
+        assert_eq!(
+            back_bg.fill_token_or_uv,
+            u32::from(Token::NONE.raw()),
+            "NavBack must remain transparent when hovered_hit is None"
+        );
+
+        let seg0_r = layout.segments[0].label_rect;
+        let seg0_bg = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - seg0_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - seg0_r.origin.y).abs() < 0.5
+                    && (p.size[0] - seg0_r.size.x).abs() < 0.5
+            })
+            .expect("segment 0 surface");
+        assert_eq!(
+            seg0_bg.fill_token_or_uv,
+            u32::from(Token::NONE.raw()),
+            "unhovered breadcrumb segment must be transparent"
+        );
+
+        // 精确悬停在 NavBack 或 Segment(0) 时应呈现 Token::HOVER，按下时呈现 Token::PRESSED
+        state.hovered_hit = Some(AddressBarHitKind::NavBack);
+        let out_back_hover = emit_address_bar(1, &desc, &state, hovered_control, &[]);
+        let back_bg_hover = out_back_hover
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - back_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - back_r.origin.y).abs() < 0.5
+                    && (p.size[0] - back_r.size.x).abs() < 0.5
+            })
+            .expect("hovered back button surface");
+        assert_eq!(back_bg_hover.fill_token_or_uv, u32::from(Token::HOVER.raw()));
+
+        state.hovered_hit = Some(AddressBarHitKind::Segment(0));
+        let pressed_control = ControlState {
+            phase: PointerPhase::Pressed,
+            ..ControlState::default()
+        };
+        let out_seg_pressed = emit_address_bar(1, &desc, &state, pressed_control, &[]);
+        let seg0_bg_pressed = out_seg_pressed
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - seg0_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - seg0_r.origin.y).abs() < 0.5
+                    && (p.size[0] - seg0_r.size.x).abs() < 0.5
+            })
+            .expect("pressed segment 0 surface");
+        assert_eq!(
+            seg0_bg_pressed.fill_token_or_uv,
+            u32::from(Token::PRESSED.raw())
+        );
+    }
+
+    #[test]
+    fn edit_and_search_overlays_emit_selection_caret_ime_and_secondary_placeholder() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let mut state = AddressBarState::new();
+        state.begin_edit(&desc.full_path());
+        let edit_r = Rect::new(
+            layout.root_icon_rect.max().x + 6.0,
+            layout.address_rect.origin.y,
+            240.0,
+            layout.address_rect.size.y,
+        );
+        // 刚进入编辑态时全选路径，验证选区高亮矩形发射
+        let sel_visual = compute_text_edit_visual(&state.edit_core, edit_r, true, |s| {
+            s.chars().count() as f32 * 8.0
+        });
+        assert!(sel_visual.selection.is_some());
+        let out_sel = emit_address_bar_with_visual(
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &[],
+            &[],
+            &AddressBarTextVisual {
+                edit_visual: sel_visual,
+                ..AddressBarTextVisual::default()
+            },
+        );
+        assert!(
+            out_sel
+                .primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == u32::from(Token::SELECTION.raw())
+                    && p.opacity() > 0.5),
+            "active edit selection must emit visible Token::SELECTION overlay"
+        );
+
+        // 触发 IME 预编辑态以验证预编辑下划线发射
+        let _ = state.handle_text_event(
+            &desc,
+            &TextInputEvent::ImePreedit {
+                text: "src".to_owned(),
+                cursor: Some(3),
+            },
+        );
+        let edit_visual = compute_text_edit_visual(&state.edit_core, edit_r, true, |s| {
+            s.chars().count() as f32 * 8.0
+        });
+        assert!(edit_visual.preedit.is_some());
+        assert!(edit_visual.caret_visible);
+
+        let placeholder_quad = GlyphQuad {
+            rect: Rect::new(580.0, 8.0, 8.0, 14.0),
+            uv: [0.0, 0.0, 1.0, 1.0],
+            layer: 0,
+            color: false,
+            msdf: false,
+            phase: 0,
+        };
+        let visual = AddressBarTextVisual {
+            edit_visual,
+            ..AddressBarTextVisual::default()
+        };
+        let out = emit_address_bar_with_visual(
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &[],
+            &[placeholder_quad],
+            &visual,
+        );
+
+        assert!(
+            out.primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == u32::from(Token::TEXT_SECONDARY.raw())
+                    && (p.local_pos[0] - 580.0).abs() < 0.5),
+            "placeholder glyph must use Token::TEXT_SECONDARY"
+        );
+        assert!(
+            out.primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == u32::from(Token::PREEDIT_UNDERLINE.raw())
+                    && p.opacity() > 0.5),
+            "active IME preedit must emit visible underline"
+        );
+        assert!(
+            out.primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == u32::from(Token::TEXT_PRIMARY.raw())
+                    && (p.size[0] - 1.5).abs() < 0.01
+                    && p.opacity() > 0.5),
+            "active edit state must emit visible caret"
+        );
     }
 }

@@ -2242,9 +2242,14 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                 || desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
-            WidgetSpec::AddressBar { desc, .. } => (desc.rect.width() > 0.0
-                || desc.rect.height() > 0.0)
-                .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+            WidgetSpec::AddressBar { desc, .. } => Some(Vec2::new(
+                desc.rect.width(),
+                if desc.rect.height() > 0.0 {
+                    desc.rect.height()
+                } else {
+                    unbound_widgets::ADDRESS_BAR_HEIGHT
+                },
+            )),
             WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
                 || desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -2759,9 +2764,12 @@ impl<'a> ViewBuilder<'a> {
         if desc.rect.width() > 0.0 {
             node_desc = node_desc.width(Dim::px(desc.rect.width()));
         }
-        if desc.rect.height() > 0.0 {
-            node_desc = node_desc.height(Dim::px(desc.rect.height()));
-        }
+        let height = if desc.rect.height() > 0.0 {
+            desc.rect.height()
+        } else {
+            unbound_widgets::ADDRESS_BAR_HEIGHT
+        };
+        node_desc = node_desc.height(Dim::px(height));
         self.widget(
             key,
             node_desc,
@@ -5869,9 +5877,14 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                         || desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
-                    WidgetSpec::AddressBar { desc, .. } => (desc.rect.width() > 0.0
-                        || desc.rect.height() > 0.0)
-                        .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
+                    WidgetSpec::AddressBar { desc, .. } => Some(Vec2::new(
+                        desc.rect.width(),
+                        if desc.rect.height() > 0.0 {
+                            desc.rect.height()
+                        } else {
+                            unbound_widgets::ADDRESS_BAR_HEIGHT
+                        },
+                    )),
                     WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
                         || desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -6306,7 +6319,22 @@ impl<A: Application> AppRuntime<A> {
                     }
                     desc.z = entry.z_base.saturating_add(desc.z);
                     let layout = unbound_widgets::compute_layout(&desc);
-                    let mut glyphs = Vec::new();
+
+                    // 先发射地址栏外框、导航按钮、图标、子热区与无障碍节点（文本层在独立裁剪作用域内绘制）
+                    let chrome_out = unbound_widgets::emit_address_bar_with_visual(
+                        entry.key,
+                        &desc,
+                        bar_state,
+                        state,
+                        &[],
+                        &[],
+                        &unbound_widgets::AddressBarTextVisual::default(),
+                    );
+                    self.collector.push(entry.key, chrome_out);
+
+                    // 路径区：施加独立 GPU 裁剪作用域并对面包屑/编辑文本执行尾部省略与光标/选区/IME 发射
+                    let mut addr_glyphs = Vec::new();
+                    let mut edit_visual = unbound_widgets::AddressBarTextVisual::default().edit_visual;
                     if bar_state.editing {
                         let edit_text = if bar_state.edit_core.text().is_empty()
                             && !bar_state.edit_buffer.is_empty()
@@ -6316,70 +6344,161 @@ impl<A: Application> AppRuntime<A> {
                             bar_state.edit_core.text()
                         };
                         let text_x = layout.root_icon_rect.max().x + 6.0;
+                        let edit_w = (layout.address_rect.max().x - text_x - 8.0).max(0.0);
                         let edit_rect = Rect::new(
                             text_x,
                             layout.address_rect.origin.y,
-                            (layout.address_rect.max().x - text_x - 8.0).max(16.0),
+                            edit_w,
                             layout.address_rect.size.y.max(24.0),
                         );
-                        glyphs.extend(text_ctx.shape_line(
-                            edit_text,
-                            edit_rect,
-                            13.0,
-                            400,
-                            unbound_widgets::AlignX::Left,
-                            unbound_widgets::AlignY::Middle,
-                        ));
-                    } else {
-                        for seg_layout in &layout.segments {
-                            if let Some(seg) = desc.segments.get(seg_layout.index) {
-                                glyphs.extend(text_ctx.shape_line(
-                                    &seg.label,
-                                    seg_layout.label_rect,
-                                    12.5,
-                                    400,
-                                    unbound_widgets::AlignX::Center,
-                                    unbound_widgets::AlignY::Middle,
-                                ));
-                            }
-                        }
-                    }
-                    if let Some(sr) = layout.search_rect {
-                        if !layout.search_collapsed {
-                            let search_text = bar_state.search_core.text();
-                            let display = if search_text.is_empty() {
-                                desc.search_placeholder.as_str()
-                            } else {
-                                search_text
-                            };
-                            if !display.is_empty() {
-                                let left_x = layout
-                                    .search_icon_rect
-                                    .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
-                                let right_x = layout
-                                    .search_clear_rect
-                                    .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
-                                let search_text_rect = Rect::new(
-                                    left_x,
-                                    sr.origin.y,
-                                    (right_x - left_x).max(16.0),
-                                    sr.size.y.max(24.0),
-                                );
-                                glyphs.extend(text_ctx.shape_line(
-                                    display,
-                                    search_text_rect,
-                                    12.5,
+                        if edit_w > 0.0 && !edit_text.is_empty() {
+                            let elided = unbound_widgets::elide_text_with_measure(
+                                edit_text,
+                                edit_w,
+                                unbound_widgets::ElideMode::End,
+                                |candidate| text_ctx.measure_line(candidate, 13.0, 400).x,
+                            );
+                            if !elided.display.is_empty() {
+                                addr_glyphs.extend(text_ctx.shape_line(
+                                    &elided.display,
+                                    edit_rect,
+                                    13.0,
                                     400,
                                     unbound_widgets::AlignX::Left,
                                     unbound_widgets::AlignY::Middle,
                                 ));
                             }
                         }
+                        edit_visual = unbound_widgets::compute_text_edit_visual(
+                            &bar_state.edit_core,
+                            edit_rect,
+                            !state.disabled,
+                            |candidate| text_ctx.measure_line(candidate, 13.0, 400).x,
+                        );
+                    } else {
+                        for seg_layout in &layout.segments {
+                            if let Some(seg) = desc.segments.get(seg_layout.index) {
+                                let avail_w = (seg_layout.label_rect.width() - 8.0).max(0.0);
+                                if avail_w > 0.0 && !seg.label.is_empty() {
+                                    let elided = unbound_widgets::elide_text_with_measure(
+                                        &seg.label,
+                                        avail_w,
+                                        unbound_widgets::ElideMode::End,
+                                        |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                    );
+                                    if !elided.display.is_empty() {
+                                        addr_glyphs.extend(text_ctx.shape_line(
+                                            &elided.display,
+                                            seg_layout.label_rect,
+                                            12.5,
+                                            400,
+                                            unbound_widgets::AlignX::Center,
+                                            unbound_widgets::AlignY::Middle,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                     }
-                    let out = unbound_widgets::emit_address_bar(
-                        entry.key, &desc, bar_state, state, &glyphs,
+                    let addr_clip = GpuClipNode::from_aabb([
+                        layout.address_rect.min().x,
+                        layout.address_rect.min().y,
+                        layout.address_rect.max().x,
+                        layout.address_rect.max().y,
+                    ]);
+                    self.collector.push_clip(addr_clip, layout.address_rect);
+                    let addr_text_out = unbound_widgets::emit_address_bar_text_layer(
+                        &addr_glyphs,
+                        &[],
+                        &edit_visual,
+                        bar_state.editing,
+                        bar_state.edit_core.preedit().is_some(),
+                        state.disabled,
+                        desc.z,
                     );
-                    self.collector.push(entry.key, out);
+                    self.collector
+                        .push(entry.key ^ 0x4142_5458_0001, addr_text_out);
+                    self.collector.pop_clip();
+
+                    // 搜索区：施加独立 GPU 裁剪作用域，区分主文本与次级占位色字形，并绘制搜索态光标/选区/IME
+                    if let Some(sr) = layout.search_rect {
+                        if !layout.search_collapsed {
+                            let mut search_primary_glyphs = Vec::new();
+                            let mut search_placeholder_glyphs = Vec::new();
+                            let mut search_visual =
+                                unbound_widgets::AddressBarTextVisual::default().search_visual;
+                            let search_text = bar_state.search_core.text();
+                            let is_placeholder = search_text.is_empty();
+                            let display = if is_placeholder {
+                                desc.search_placeholder.as_str()
+                            } else {
+                                search_text
+                            };
+                            let left_x = layout
+                                .search_icon_rect
+                                .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
+                            let right_x = layout
+                                .search_clear_rect
+                                .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                            let search_w = (right_x - left_x).max(0.0);
+                            let search_text_rect = Rect::new(
+                                left_x,
+                                sr.origin.y,
+                                search_w,
+                                sr.size.y.max(24.0),
+                            );
+                            if search_w > 0.0 && !display.is_empty() {
+                                let elided = unbound_widgets::elide_text_with_measure(
+                                    display,
+                                    search_w,
+                                    unbound_widgets::ElideMode::End,
+                                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                );
+                                if !elided.display.is_empty() {
+                                    let shaped = text_ctx.shape_line(
+                                        &elided.display,
+                                        search_text_rect,
+                                        12.5,
+                                        400,
+                                        unbound_widgets::AlignX::Left,
+                                        unbound_widgets::AlignY::Middle,
+                                    );
+                                    if is_placeholder {
+                                        search_placeholder_glyphs.extend(shaped);
+                                    } else {
+                                        search_primary_glyphs.extend(shaped);
+                                    }
+                                }
+                            }
+                            if bar_state.search_focused {
+                                search_visual = unbound_widgets::compute_text_edit_visual(
+                                    &bar_state.search_core,
+                                    search_text_rect,
+                                    !state.disabled,
+                                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                );
+                            }
+                            let search_clip = GpuClipNode::from_aabb([
+                                sr.min().x,
+                                sr.min().y,
+                                sr.max().x,
+                                sr.max().y,
+                            ]);
+                            self.collector.push_clip(search_clip, sr);
+                            let search_text_out = unbound_widgets::emit_address_bar_text_layer(
+                                &search_primary_glyphs,
+                                &search_placeholder_glyphs,
+                                &search_visual,
+                                bar_state.search_focused,
+                                bar_state.search_core.preedit().is_some(),
+                                state.disabled,
+                                desc.z,
+                            );
+                            self.collector
+                                .push(entry.key ^ 0x4142_5458_0002, search_text_out);
+                            self.collector.pop_clip();
+                        }
+                    }
                 }
                 WidgetSpec::Dock { state: dock_state } => {
                     let dock_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
@@ -8166,6 +8285,117 @@ mod tests {
         assert!(
             scene.node_spans.contains_key(&(12u64 ^ 0x5452_4545_0003)),
             "overflowing tree view must emit scrollbar thumb primitives"
+        );
+    }
+
+    #[test]
+    fn address_bar_defaults_height_clips_path_and_search_and_keeps_search_text_inside() {
+        use unbound_theme::Token;
+        use unbound_widgets::{
+            AddressBarDesc, AddressBarState, PathSegment, ADDRESS_BAR_HEIGHT,
+        };
+
+        struct AddressBarTestApp {
+            bar_state: AddressBarState,
+        }
+        impl Application for AddressBarTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                // 刻意传入 height = 0.0，验证 ViewBuilder::address_bar 默认回退至 32px
+                let desc = AddressBarDesc::with_path_segments(
+                    Rect::new(0.0, 0.0, 760.0, 0.0),
+                    "C:/Workspace/Assets/Shaders",
+                    vec![
+                        PathSegment::new("C:", "C:/"),
+                        PathSegment::new("Workspace", "C:/Workspace"),
+                        PathSegment::new("Assets", "C:/Workspace/Assets"),
+                        PathSegment::new("Shaders", "C:/Workspace/Assets/Shaders")
+                            .with_subfolders(false),
+                    ],
+                )
+                .with_search("Search Shaders");
+                v.address_bar(30, desc, &self.bar_state);
+            }
+        }
+
+        let mut rt = AppRuntime::new(
+            AddressBarTestApp {
+                bar_state: AddressBarState::new(),
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        let _ = rt.frame(0.0);
+
+        let bar_rect = rt.widget_rect(30).expect("address bar laid out");
+        assert!(
+            (bar_rect.height() - ADDRESS_BAR_HEIGHT).abs() < 0.5,
+            "address bar must fall back to ADDRESS_BAR_HEIGHT (32.0), got {}",
+            bar_rect.height()
+        );
+
+        let layout = unbound_widgets::compute_layout(
+            &AddressBarDesc::new(bar_rect, vec!["C:".to_owned()]).with_search("Search Shaders"),
+        );
+        let search_rect = layout.search_rect.expect("search rect");
+        let scene = rt.scene();
+
+        // 验证路径区与搜索区均注册了对应的 GPU 裁剪节点
+        assert!(
+            scene.clips.iter().any(|c| {
+                (c.aabb_clip[0] - layout.address_rect.min().x).abs() < 0.5
+                    && (c.aabb_clip[2] - layout.address_rect.max().x).abs() < 0.5
+            }),
+            "address bar must push a clip node matching address_rect"
+        );
+        assert!(
+            scene.clips.iter().any(|c| {
+                (c.aabb_clip[0] - search_rect.min().x).abs() < 0.5
+                    && (c.aabb_clip[2] - search_rect.max().x).abs() < 0.5
+            }),
+            "address bar must push a clip node matching search_rect"
+        );
+
+        // 验证路径区文本层受 clip 约束
+        let (addr_start, addr_end) = scene
+            .node_spans
+            .get(&(30u64 ^ 0x4142_5458_0001))
+            .copied()
+            .expect("address text layer emitted");
+        assert!(addr_end > addr_start);
+        for prim in &scene.primitives[addr_start as usize..addr_end as usize] {
+            assert_ne!(prim.clip_idx, CLIP_NONE, "address text must be clipped");
+        }
+
+        // 验证搜索区占位文本层受 clip 约束、使用次级文本色且不越出 search_rect 右边界
+        let (search_start, search_end) = scene
+            .node_spans
+            .get(&(30u64 ^ 0x4142_5458_0002))
+            .copied()
+            .expect("search text layer emitted");
+        assert!(search_end > search_start);
+        let search_prims = &scene.primitives[search_start as usize..search_end as usize];
+        let mut saw_placeholder_glyph = false;
+        for prim in search_prims {
+            assert_ne!(prim.clip_idx, CLIP_NONE, "search text must be clipped");
+            if prim.fill_token_or_uv == Token::TEXT_SECONDARY.raw() as u32 {
+                saw_placeholder_glyph = true;
+                assert!(
+                    prim.local_pos[0] >= search_rect.origin.x - 1.0,
+                    "search placeholder glyph escaped left of search_rect"
+                );
+                assert!(
+                    prim.local_pos[0] + prim.size[0] <= search_rect.max().x + 1.0,
+                    "search placeholder glyph overflowed right edge of search_rect"
+                );
+            }
+        }
+        assert!(
+            saw_placeholder_glyph,
+            "empty search box must render placeholder with Token::TEXT_SECONDARY"
         );
     }
 }

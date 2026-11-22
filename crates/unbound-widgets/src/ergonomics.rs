@@ -10,7 +10,10 @@ use unbound_input::KeyName;
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
-use crate::address_bar::{emit_address_bar, AddressBarDesc, AddressBarState};
+use crate::address_bar::{
+    compute_text_edit_visual, emit_address_bar_with_visual, AddressBarDesc, AddressBarState,
+    AddressBarTextVisual,
+};
 use crate::alert::{emit_alert, AlertDesc, Severity};
 use crate::badge::{emit_badge, BadgeDesc};
 use crate::button::{emit_button, ButtonDesc, ButtonSize, ButtonVariant};
@@ -2394,7 +2397,9 @@ impl UiWidget for AddressBarDesc {
         let mut desc = self.clone();
         desc.rect = rect;
         let layout = crate::address_bar::compute_layout(&desc);
-        let mut glyphs = Vec::new();
+        let mut primary_glyphs = Vec::new();
+        let mut placeholder_glyphs = Vec::new();
+        let mut visual = AddressBarTextVisual::default();
         if state.editing {
             let edit_text = if state.edit_core.text().is_empty() && !state.edit_buffer.is_empty() {
                 state.edit_buffer.as_str()
@@ -2402,63 +2407,121 @@ impl UiWidget for AddressBarDesc {
                 state.edit_core.text()
             };
             let text_x = layout.root_icon_rect.max().x + 6.0;
+            let edit_w = (layout.address_rect.max().x - text_x - 8.0).max(0.0);
             let edit_r = Rect::new(
                 text_x,
                 layout.address_rect.origin.y,
-                (layout.address_rect.max().x - text_x - 8.0).max(16.0),
+                edit_w,
                 layout.address_rect.size.y,
             );
-            glyphs.extend(text_ctx.shape_line(
-                edit_text,
-                edit_r,
-                12.5,
-                400,
-                AlignX::Left,
-                AlignY::Middle,
-            ));
-        } else {
-            for seg_layout in &layout.segments {
-                if let Some(seg) = desc.segments.get(seg_layout.index) {
-                    glyphs.extend(text_ctx.shape_line(
-                        &seg.label,
-                        seg_layout.label_rect,
-                        12.0,
-                        400,
-                        AlignX::Center,
-                        AlignY::Middle,
-                    ));
-                }
-            }
-        }
-        if let Some(sr) = layout.search_rect {
-            if !layout.search_collapsed {
-                let search_text = state.search_core.text();
-                let display = if search_text.is_empty() {
-                    desc.search_placeholder.as_str()
-                } else {
-                    search_text
-                };
-                if !display.is_empty() {
-                    let left_x = layout
-                        .search_icon_rect
-                        .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
-                    let right_x = layout
-                        .search_clear_rect
-                        .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
-                    let text_r =
-                        Rect::new(left_x, sr.origin.y, (right_x - left_x).max(16.0), sr.size.y);
-                    glyphs.extend(text_ctx.shape_line(
-                        display,
-                        text_r,
-                        12.0,
+            if edit_w > 0.0 && !edit_text.is_empty() {
+                let elided = crate::elided_text::elide_text_with_measure(
+                    edit_text,
+                    edit_w,
+                    crate::elided_text::ElideMode::End,
+                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                );
+                if !elided.display.is_empty() {
+                    primary_glyphs.extend(text_ctx.shape_line(
+                        &elided.display,
+                        edit_r,
+                        12.5,
                         400,
                         AlignX::Left,
                         AlignY::Middle,
                     ));
                 }
             }
+            visual.edit_visual = compute_text_edit_visual(
+                &state.edit_core,
+                edit_r,
+                !control.disabled,
+                |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+            );
+        } else {
+            for seg_layout in &layout.segments {
+                if let Some(seg) = desc.segments.get(seg_layout.index) {
+                    let avail_w = (seg_layout.label_rect.width() - 8.0).max(0.0);
+                    if avail_w > 0.0 && !seg.label.is_empty() {
+                        let elided = crate::elided_text::elide_text_with_measure(
+                            &seg.label,
+                            avail_w,
+                            crate::elided_text::ElideMode::End,
+                            |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                        );
+                        if !elided.display.is_empty() {
+                            primary_glyphs.extend(text_ctx.shape_line(
+                                &elided.display,
+                                seg_layout.label_rect,
+                                12.0,
+                                400,
+                                AlignX::Center,
+                                AlignY::Middle,
+                            ));
+                        }
+                    }
+                }
+            }
         }
-        emit_address_bar(node, &desc, state, control, &glyphs)
+        if let Some(sr) = layout.search_rect {
+            if !layout.search_collapsed {
+                let search_text = state.search_core.text();
+                let is_placeholder = search_text.is_empty();
+                let display = if is_placeholder {
+                    desc.search_placeholder.as_str()
+                } else {
+                    search_text
+                };
+                let left_x = layout
+                    .search_icon_rect
+                    .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
+                let right_x = layout
+                    .search_clear_rect
+                    .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0);
+                let search_w = (right_x - left_x).max(0.0);
+                let text_r = Rect::new(left_x, sr.origin.y, search_w, sr.size.y);
+                if search_w > 0.0 && !display.is_empty() {
+                    let elided = crate::elided_text::elide_text_with_measure(
+                        display,
+                        search_w,
+                        crate::elided_text::ElideMode::End,
+                        |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                    );
+                    if !elided.display.is_empty() {
+                        let shaped = text_ctx.shape_line(
+                            &elided.display,
+                            text_r,
+                            12.0,
+                            400,
+                            AlignX::Left,
+                            AlignY::Middle,
+                        );
+                        if is_placeholder {
+                            placeholder_glyphs.extend(shaped);
+                        } else {
+                            primary_glyphs.extend(shaped);
+                        }
+                    }
+                }
+                if state.search_focused {
+                    visual.search_visual = compute_text_edit_visual(
+                        &state.search_core,
+                        text_r,
+                        !control.disabled,
+                        |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                    );
+                }
+            }
+        }
+        emit_address_bar_with_visual(
+            node,
+            &desc,
+            state,
+            control,
+            &primary_glyphs,
+            &placeholder_glyphs,
+            &visual,
+        )
     }
 }
 

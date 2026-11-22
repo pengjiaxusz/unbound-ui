@@ -27,8 +27,19 @@
      - `AddressBar` 文本编辑态路径历史与自动补全建议弹层；
      - `TreeView` 多级冻结祖先（`sticky_items`）与树节点拖拽落点反馈。
 
+4. **Windows 11 资源管理器布局、裁剪与交互对齐补充契约**：
+   - **`TreeView` 导航窗格契约**：
+     - `TreeViewState` 提供行标签映射（`set_row_label` / `row_label` / `clear_row_labels`）、前置分区横线映射（`set_row_divider_before` / `has_row_divider_before` / `clear_row_dividers`）与单行悬停态追踪（`hovered` / `hover_at` / `clear_hover`），避免整棵树共享父容器悬停态；
+     - `TreeViewDesc` 提供向后兼容的导航窗格预设（`.with_navigation_pane(bool)`、`.with_indent_guides(bool)`、`.with_selection_indicator(bool)`），开启后自动切换至 `TreeViewTokens::navigation_pane()`（透明云母底 `NAV_BG` + `NAV_SELECTED` 圆角选中态）、关闭缩进参考竖线与蓝色左侧强调条；
+     - 发射阶段始终以布局求解后的最终 `desc.rect` 重算行矩形并在容器边界内施加 `push_clip` / `pop_clip`，单行标签经 `elide_text_with_measure(..., ElideMode::End)` 尾部省略，内容溢出时自动注册滚轮区域并发射右侧细滚动条。
+   - **`AddressBar` Windows 11 几何与双模编辑契约**：
+     - 默认深度键提升至 `z = 450`（与 `TreeViewDesc` 对齐），确保嵌入带背景填充的 `BoxSurface` 容器时不被遮挡；`ViewBuilder::address_bar` 在未显式定高（`height <= 0.0`）时默认回退至 `ADDRESS_BAR_HEIGHT (32.0)`；
+     - 搜索框非折叠态采用 Windows 11 标准布局：放大镜图标左置（`sr.origin.x + 8.0`）、清除按钮右置、文本区严格落在两者之间；面包屑区在 `root_icon_rect` 与首个分段之间新增 `root_chevron_rect`（`›` 分隔符），分段宽度估算针对 CJK 宽字符做双倍宽度补偿并上限钳制至 `220px`；
+     - 未悬停面包屑分段常态为透明（仅悬停绘制 `Token::HOVER`、按下绘制 `Token::PRESSED`），且仅当 `hovered_hit` 精确命中对应导航按钮时才高亮，修复 `hovered_hit == None` 误高亮 `NavBack` 的缺陷；
+     - 发射阶段对路径区与搜索区分别施加 GPU `push_clip` / `pop_clip` 与尾部省略，通过 `emit_address_bar_with_visual` / `emit_address_bar_text_layer` 区分主文本与 `Token::TEXT_SECONDARY` 次级占位文本，并在编辑态与搜索聚焦态绘制选区高亮、光标竖线与 IME 预编辑下划线（保持 24 态图元数恒定）。
+
 ## 后果
 
 - 任何使用 `unbound-ui` 的桌面文件管理器或多标签工作台均可直接通过标准 `ViewBuilder` API 组装出与 Windows 11 资源管理器视觉及交互一致的三层壳层（融合标签标题栏 → 双模地址/搜索栏 → 紧凑 `CommandBar` + 虚拟化导航树），无需在应用层自建绕行控件。
 - `TreeRowIcon` 预留 `ExternalTexture(ExternalTextureHandle)` 变体，使应用在初期使用框架矢量图标时，未来可零破坏切换至平台原生系统图标纹理。
-- `TabView` 与 `TreeView` 的默认构造与 24 态图元恒定门禁保持向后兼容，不影响现有批量像素差分基线。
+- `TabView`、`TreeView` 与 `AddressBar` 的默认构造与 24 态图元恒定门禁保持向后兼容，不影响现有批量像素差分基线。
