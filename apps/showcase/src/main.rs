@@ -411,6 +411,30 @@ impl Showcase {
     }
 }
 
+/// 判断给定帧率上限与显示器物理刷新率下是否应允许撕裂（无垂直同步呈现）。
+///
+/// 高于显示器物理刷新率的上限或无限制（`fps_limit == 0`）无法通过 FIFO 达成——
+/// 合成器会把每帧量化回 VBlank，与 `vkWaitForPresentKHR` 叠加时还会形成双周期互锁。
+/// 启动建链与交换链重建共用此判定逻辑（ADR-0030）。
+fn should_allow_tearing(fps_limit: u32, refresh_hz: f32) -> bool {
+    fps_limit == 0 || (fps_limit as f32) > refresh_hz + 0.5
+}
+
+/// 按显示器刷新率、生效帧率上限与表面合成方式构建交换链呈现配置。
+///
+/// 刷新率查询失败时回退 60 Hz；启动建链（`resumed`）与重建（`recreate_swapchain`）均经由此入口。
+fn build_present_config(
+    extensions: &[String],
+    fps_limit: u32,
+    refresh_hz: Option<f32>,
+    composite_alpha: CompositeAlphaMode,
+) -> PresentConfig {
+    let refresh_hz = refresh_hz.unwrap_or(60.0);
+    let allow_tearing = should_allow_tearing(fps_limit, refresh_hz);
+    PresentConfig::from_capabilities(extensions, allow_tearing)
+        .with_composite_alpha(composite_alpha)
+}
+
 /// 按平台创建窗口渲染表面：Windows 上使用 Win32 `HWND`，非 Windows 平台显式返回不支持错误。
 fn create_window_surface(gpu: &Gpu, hwnd: isize) -> Result<Surface, unbound_gpu::device::GpuError> {
     #[cfg(windows)]
@@ -492,21 +516,13 @@ impl Showcase {
         let Some(surface) = &self.surface else {
             return false;
         };
-        // 高于显示器物理刷新率的上限无法通过 FIFO 达成——
-        // 合成器会把每帧量化回 VBlank（这正是过去在 60 Hz 面板上“120”实际只跑 60 FPS 的原因）。
-        // 此类上限会将节奏交由软件 pacer 控制并以无垂直同步模式呈现；
-        // 低于或等于刷新率的上限则保留无撕裂路径。
-        //
-        //
-        // 原生 Win32 后端通过窗口 DC 查询所在显示器的刷新率；查询失败时回退 60 Hz。
-        let refresh_hz = window.refresh_rate_hz().unwrap_or(60.0);
-        let allow_tearing = limit == 0 || (limit as f32) > refresh_hz + 0.5;
-        // 合成方式跟随实际生效的后景模式：原生路径需要预乘 alpha 才能透出 DWM 材质。
-        let present = PresentConfig::from_capabilities(
+        // 与 `resumed()` 共用同一套 `allow_tearing` 判定逻辑（ADR-0030）。
+        let present = build_present_config(
             &renderer.gpu.enabled_device_extensions,
-            allow_tearing,
-        )
-        .with_composite_alpha(composite_alpha);
+            limit,
+            window.refresh_rate_hz(),
+            composite_alpha,
+        );
         let Some(swapchain) = &mut self.swapchain else {
             return false;
         };
@@ -776,8 +792,15 @@ impl PlatformApp for Showcase {
         // 若驱动支持预乘 alpha，则生命周期统一采用预乘合成；关闭或自绘路径通过外观意图
         // 账本派生的 clear_alpha = 1.0 维持视觉不透明，确保运行期切换时无需重建交换链。
         self.composite_alpha = CompositeAlphaMode::PreMultiplied.resolve(premultiplied_alpha);
-        let present = PresentConfig::from_capabilities(&gpu.enabled_device_extensions, false)
-            .with_composite_alpha(self.composite_alpha);
+        let initial_fps_limit = self.shell().state.effective_fps_limit();
+        // 启动建链与交换链重建共用同一套 `allow_tearing` 判定逻辑（ADR-0030），
+        // 消除首帧硬编码关闭 tearing 导致的 `FIFO + vkWaitForPresentKHR` 双周期互锁。
+        let present = build_present_config(
+            &gpu.enabled_device_extensions,
+            initial_fps_limit,
+            window.refresh_rate_hz(),
+            self.composite_alpha,
+        );
         let swapchain = match Swapchain::new(&gpu, &surface, width, height, &present) {
             Ok(swapchain) => swapchain,
             Err(error) => {
@@ -835,6 +858,7 @@ impl PlatformApp for Showcase {
         self.surface = Some(surface);
         self.renderer = Some(renderer);
         state.set_present_extensions(&device_extensions);
+        state.pacer.set_fps_limit(initial_fps_limit);
 
         self.os_scale = window.scale_factor() as f32;
         self.primary = Some(window.id());
@@ -1253,6 +1277,9 @@ impl Showcase {
     ///
     ///
     fn frame_secondary(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+        if state.pacer.is_suspended() {
+            return Flow::Continue;
+        }
         let Some(index) = self.extras.iter().position(|extra| extra.id == window.id()) else {
             return Flow::Continue;
         };
@@ -1362,6 +1389,10 @@ impl Showcase {
     fn frame_impl(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
         if Some(window.id()) != self.primary {
             return self.frame_secondary(state, window);
+        }
+        // 遵循 ADR-0030：窗口最小化、隐藏或被完全遮挡时短路本帧，跳过所有布局与 GPU 提交。
+        if state.pacer.is_suspended() {
+            return Flow::Continue;
         }
         self.sync_window_size(window);
         let scale = self.effective_scale();
@@ -2034,5 +2065,41 @@ mod tests {
                 assert!(example.stage_height >= 200.0);
             }
         }
+    }
+
+    #[test]
+    fn startup_and_recreate_present_config_share_allow_tearing_policy() {
+        let extensions = vec![
+            "VK_KHR_swapchain".to_string(),
+            "VK_EXT_swapchain_maintenance1".to_string(),
+            "VK_KHR_present_wait".to_string(),
+        ];
+
+        // 120 FPS 上限运行在 60 Hz 面板或无限制（0）时必须开启 tearing，避免 FIFO + present_wait 互锁。
+        assert!(should_allow_tearing(0, 60.0));
+        assert!(should_allow_tearing(120, 60.0));
+        assert!(!should_allow_tearing(60, 60.0));
+        assert!(!should_allow_tearing(60, 120.0));
+        assert!(!should_allow_tearing(120, 120.0));
+
+        // 刷新率查询缺失时统一回退 60 Hz，启动建链与重建得到完全一致的 PresentConfig。
+        let at_startup =
+            build_present_config(&extensions, 120, None, CompositeAlphaMode::PreMultiplied);
+        let at_recreate = build_present_config(
+            &extensions,
+            120,
+            Some(60.0),
+            CompositeAlphaMode::PreMultiplied,
+        );
+        assert_eq!(at_startup, at_recreate);
+        assert_eq!(
+            at_startup.composite_alpha,
+            CompositeAlphaMode::PreMultiplied
+        );
+        assert_ne!(
+            at_startup.mode,
+            unbound_gpu::PresentMode::FifoLatestReady,
+            "120 fps on a 60 Hz display must select a tearing-capable present mode"
+        );
     }
 }

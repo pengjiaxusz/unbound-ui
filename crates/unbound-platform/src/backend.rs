@@ -266,6 +266,19 @@ pub(crate) fn compute_window_style(config: &WindowConfig) -> u32 {
     }
 }
 
+/// 将相对等待时长转换为 Win32 `SetWaitableTimer` 所需的负值 100 纳秒间隔。
+///
+/// 零时长返回 `0`；非零时长至少为 `-1`（100 ns），极大值钳制在 `-i64::MAX` 以防溢出。
+#[must_use]
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn duration_to_win32_relative_due_time(wait: std::time::Duration) -> i64 {
+    if wait.is_zero() {
+        return 0;
+    }
+    let ticks_100ns = (wait.as_nanos() / 100).clamp(1, i64::MAX as u128);
+    -(ticks_100ns as i64)
+}
+
 #[cfg(windows)]
 mod win32 {
     use super::*;
@@ -276,14 +289,16 @@ mod win32 {
     use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
     use std::time::Duration;
 
-    use ::windows::core::{w, PCWSTR};
-    use ::windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use ::windows::core::{s, w, BOOL, PCWSTR};
+    use ::windows::Win32::Foundation::{
+        CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+    };
     use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use ::windows::Win32::Graphics::Gdi::{
         ClientToScreen, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, ScreenToClient,
         MONITORINFO, MONITOR_DEFAULTTONEAREST,
     };
-    use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use ::windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use ::windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
     use ::windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     use ::windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -335,6 +350,151 @@ mod win32 {
     };
 
     const INFINITE_TIMEOUT: u32 = u32::MAX;
+
+    /// `CreateWaitableTimerExW` 高分辨率定时器标志（Windows 10 1803+）。
+    const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x0000_0002;
+    /// `TIMER_ALL_ACCESS`（`STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0x3`）。
+    const TIMER_ALL_ACCESS: u32 = 0x001F_0003;
+    /// 高分辨率定时器免系统调用自旋阈值：短于该时长直接返回循环由 pacer 精确自旋。
+    const HIGH_RES_MIN_WAIT: Duration = Duration::from_micros(250);
+
+    type CreateWaitableTimerExWFn =
+        unsafe extern "system" fn(*const c_void, PCWSTR, u32, u32) -> HANDLE;
+    type SetWaitableTimerFn = unsafe extern "system" fn(
+        HANDLE,
+        *const i64,
+        i32,
+        *const c_void,
+        *const c_void,
+        BOOL,
+    ) -> BOOL;
+
+    /// Win32 高分辨率可等待定时器封装（ADR-0030）。
+    ///
+    /// 通过从 `kernel32.dll` 动态解析 `CreateWaitableTimerExW` 与 `SetWaitableTimer`，
+    /// 创建带 `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION` 的自动复位定时器，仅作用于本进程等待句柄，
+    /// 避免调用 `timeBeginPeriod(1)` 影响全局系统时钟与功耗；在不支持的系统上返回 `None` 并优雅回退。
+    struct HighResWaitableTimer {
+        handle: HANDLE,
+        set_waitable_timer: SetWaitableTimerFn,
+    }
+
+    impl HighResWaitableTimer {
+        fn try_create() -> Option<Self> {
+            // SAFETY: `kernel32.dll` 常驻所有 Win32 进程；若符号不存在或系统不支持
+            // `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`，返回空句柄并回退原有等待逻辑。
+            unsafe {
+                let module = GetModuleHandleW(w!("kernel32.dll")).ok()?;
+                let create_proc = GetProcAddress(module, s!("CreateWaitableTimerExW"))?;
+                let set_proc = GetProcAddress(module, s!("SetWaitableTimer"))?;
+                let create_waitable_timer_ex: CreateWaitableTimerExWFn =
+                    core::mem::transmute::<
+                        unsafe extern "system" fn() -> isize,
+                        CreateWaitableTimerExWFn,
+                    >(create_proc);
+                let set_waitable_timer: SetWaitableTimerFn = core::mem::transmute::<
+                    unsafe extern "system" fn() -> isize,
+                    SetWaitableTimerFn,
+                >(set_proc);
+                let handle = create_waitable_timer_ex(
+                    core::ptr::null(),
+                    PCWSTR::null(),
+                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                    TIMER_ALL_ACCESS,
+                );
+                if handle.0.is_null() || handle.0 == (-1isize as *mut c_void) {
+                    return None;
+                }
+                Some(Self {
+                    handle,
+                    set_waitable_timer,
+                })
+            }
+        }
+
+        /// 以相对等待时长装填一次性高分辨率定时器；装填失败时返回 `false` 以便调用方回退。
+        fn arm(&self, wait: Duration) -> bool {
+            let due_time = duration_to_win32_relative_due_time(wait);
+            if due_time == 0 {
+                return false;
+            }
+            // SAFETY: `self.handle` 为本结构体持有的有效定时器句柄，`due_time` 位于当前栈帧。
+            unsafe {
+                (self.set_waitable_timer)(
+                    self.handle,
+                    &raw const due_time,
+                    0,
+                    core::ptr::null(),
+                    core::ptr::null(),
+                    BOOL(0),
+                )
+                .as_bool()
+            }
+        }
+
+        fn handle(&self) -> HANDLE {
+            self.handle
+        }
+    }
+
+    impl Drop for HighResWaitableTimer {
+        fn drop(&mut self) {
+            if !self.handle.0.is_null() && self.handle.0 != (-1isize as *mut c_void) {
+                // SAFETY: 释放由 `CreateWaitableTimerExW` 创建的定时器句柄，仅在 Drop 时调用一次。
+                unsafe {
+                    let _ = CloseHandle(self.handle);
+                }
+            }
+        }
+    }
+
+    /// 等待下一批 Win32 消息或帧截止时间到期。
+    ///
+    /// - `wait = None`：无限期阻塞直至新消息到达（不挂载定时器句柄，防止旧定时器误唤醒空闲态）；
+    /// - `wait = Some(dur)`：优先通过高分辨率可等待定时器唤醒，创建或装填失败时优雅回退至
+    ///   `MsgWaitForMultipleObjectsEx` 毫秒超时等待。
+    fn wait_for_events_or_deadline(
+        high_res_timer: Option<&HighResWaitableTimer>,
+        wait: Option<Duration>,
+    ) {
+        let Some(wait) = wait else {
+            unsafe {
+                let _ = MsgWaitForMultipleObjectsEx(
+                    None,
+                    INFINITE_TIMEOUT,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                );
+            }
+            return;
+        };
+
+        if let Some(timer) = high_res_timer {
+            if wait <= HIGH_RES_MIN_WAIT {
+                return;
+            }
+            if timer.arm(wait) {
+                let handles = [timer.handle()];
+                unsafe {
+                    let _ = MsgWaitForMultipleObjectsEx(
+                        Some(handles.as_slice()),
+                        INFINITE_TIMEOUT,
+                        QS_ALLINPUT,
+                        MWMO_INPUTAVAILABLE,
+                    );
+                }
+                return;
+            }
+        }
+
+        if wait <= Duration::from_millis(1) {
+            return;
+        }
+        let timeout_ms = wait.as_millis().min(u128::from(INFINITE_TIMEOUT - 1)) as u32;
+        unsafe {
+            let _ = MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    }
 
     std::thread_local! {
         /// 在 `DispatchMessageW` 进入系统模态移动/缩放循环期间挂载的单步即时渲染回调。
@@ -1801,6 +1961,7 @@ mod win32 {
         app.resumed(&mut first.state, &first.window);
 
         let mut msg = MSG::default();
+        let high_res_timer = HighResWaitableTimer::try_create();
         let mut last_occlusion_probe = Instant::now();
         const OCCLUSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
 
@@ -2135,22 +2296,12 @@ mod win32 {
                 (Some(frame), Some(timer)) => Some(frame.min(timer)),
                 (frame, timer) => frame.or(timer),
             };
-            let timeout_ms = match deadline {
-                Some(t) => {
-                    let wait = t.saturating_duration_since(now);
-                    if wait <= Duration::from_millis(1) {
-                        continue;
-                    }
-                    wait.as_millis().min(u128::from(INFINITE_TIMEOUT - 1)) as u32
-                }
+            let wait = match deadline {
+                Some(t) => Some(t.saturating_duration_since(now)),
                 None if any_active_animating => continue,
-                None => INFINITE_TIMEOUT,
+                None => None,
             };
-
-            unsafe {
-                let _ =
-                    MsgWaitForMultipleObjectsEx(None, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            }
+            wait_for_events_or_deadline(high_res_timer.as_ref(), wait);
         }
 
         primary_hwnd_atomic.store(0, Ordering::Release);
@@ -2185,6 +2336,22 @@ mod win32 {
                 preedit_is_new(&mut last, ""),
                 "a commit must clear the preedit held by the host"
             );
+        }
+
+        #[test]
+        fn high_res_waitable_timer_arms_or_falls_back_cleanly() {
+            use super::{wait_for_events_or_deadline, HighResWaitableTimer};
+            use std::time::Duration;
+
+            // 在支持的 Windows 10 1803+ 系统上应可创建并成功装填，零时长拒绝装填以触发回退；
+            // 在不支持的系统上 `try_create` 返回 `None`，`wait_for_events_or_deadline` 优雅回退。
+            if let Some(timer) = HighResWaitableTimer::try_create() {
+                assert!(!timer.arm(Duration::ZERO));
+                assert!(timer.arm(Duration::from_millis(1)));
+                wait_for_events_or_deadline(Some(&timer), Some(Duration::from_micros(100)));
+            } else {
+                wait_for_events_or_deadline(None, Some(Duration::from_micros(100)));
+            }
         }
     }
 }
@@ -2270,6 +2437,28 @@ mod style_tests {
             queue,
             vec![PlatformEvent::Resized(Extent::new(1050, 700))],
             "a burst of WM_SIZE messages must coalesce into a single final Resized event"
+        );
+    }
+
+    #[test]
+    fn relative_due_time_converts_duration_to_negative_100ns_units() {
+        use std::time::Duration;
+        assert_eq!(duration_to_win32_relative_due_time(Duration::ZERO), 0);
+        assert_eq!(
+            duration_to_win32_relative_due_time(Duration::from_nanos(50)),
+            -1
+        );
+        assert_eq!(
+            duration_to_win32_relative_due_time(Duration::from_micros(500)),
+            -5_000
+        );
+        assert_eq!(
+            duration_to_win32_relative_due_time(Duration::from_millis(8)),
+            -80_000
+        );
+        assert_eq!(
+            duration_to_win32_relative_due_time(Duration::MAX),
+            -i64::MAX
         );
     }
 }

@@ -1635,13 +1635,35 @@ mod tests {
             .pacer
             .set_throttle_policy(policy);
 
-        // 窗口 1 被完全遮挡进入暂停态，窗口 2 保持活跃。
+        // 窗口 1 被完全遮挡进入暂停态，窗口 2 失焦但仍可见，按 ADR-0030/ADR-0023 独立保持活跃不降帧。
+        let t0 = Instant::now();
         coord
             .registry_mut()
             .get_mut(WindowId(1))
             .unwrap()
             .pacer
             .set_occluded(true);
+        coord
+            .registry_mut()
+            .get_mut(WindowId(2))
+            .unwrap()
+            .pacer
+            .note_activity(t0);
+        coord
+            .registry_mut()
+            .get_mut(WindowId(2))
+            .unwrap()
+            .pacer
+            .set_focused(false);
+        assert_eq!(
+            coord
+                .registry()
+                .get(WindowId(2))
+                .unwrap()
+                .pacer
+                .throttle_state(t0 + std::time::Duration::from_secs(5)),
+            unbound_platform::RenderThrottleState::Active
+        );
 
         assert!(coord
             .registry_mut()
