@@ -1,17 +1,118 @@
-//! WinUI 3 规范名与目录标识之间的双向映射。
+//! WinUI 3 规范名、目录分类与控件能力边界的唯一事实源。
 //!
 //! 目录枚举以 WinUI 3 官方规范名为主键（例如 `ToggleSwitch`、`ComboBox`），而差分系统、
-//! 展台与设计规律巡检同样以官方名称寻址同一个控件。本模块是规范名与目录标识之间的
-//! 唯一事实源：
+//! 展台与设计规律巡检同样以官方名称寻址同一个控件。本模块承担四项编译期穷举职责：
 //!
 //! 1. [`WidgetCatalogId::winui3_name`] 返回该组件对应的官方规范名；
 //! 2. [`WidgetCatalogId::from_winui3_name`] 按官方规范名反查目录标识；
 //! 3. [`WidgetCatalogId::class`] 区分基准对齐控件、Community Toolkit 控件与
-//!    自有独有控件，供批量差分与风格巡检筛选。
+//!    自有独有控件，供批量差分与风格巡检筛选；
+//! 4. [`WidgetCatalogId::capabilities`] 声明全部 133 个变体的 [`WidgetCapabilities`]
+//!    （含 [`OverflowStrategy`]、文本截断、浮层贴边翻转与几何动画标记，遵循 ADR-0031）。
 //!
-//! 映射是穷举 `match`，新增目录变体时若不在此处归类会直接编译失败。
+//! 所有映射均为无通配符穷举 `match`，新增目录变体时若不在此处归类会直接触发 `E0004` 编译失败。
 
 use crate::WidgetCatalogId;
+
+/// 控件内容溢出时的官方处理策略（ADR-0031）。
+///
+/// 由 [`WidgetCatalogId::capabilities`] 在编译期穷举声明，并由运行期参数化契约测试
+/// 自动遍历校验所有声明 `OverlayScrollbar*` 的组件。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum OverflowStrategy {
+    /// 控件自身无内部滚动或溢出容器行为。
+    None,
+    /// 仅垂直方向溢出时渲染 Win11 按需叠加滚动条（复用 `emit_scrollbar`）。
+    OverlayScrollbarVertical,
+    /// 水平与垂直双轴溢出时渲染 Win11 按需叠加滚动条（如 `ScrollView`）。
+    OverlayScrollbarBoth,
+    /// 水平溢出走左右翻页箭头按钮，不绘制底边滚动条（如 `TabView`）。
+    TabStripButtons,
+    /// 溢出项收敛至弹出式溢出菜单（如 `CommandBar`、`MenuBar`）。
+    MenuOverflowPopup,
+    /// 自身不内置滚动容器，长内容由宿主外层 `ScrollView` 承载（如 `Form`）。
+    ExternalScrollView,
+}
+
+impl OverflowStrategy {
+    /// 该策略在内容溢出时是否渲染按需叠加滚动条（含单轴垂直与双轴）。
+    #[must_use]
+    pub const fn uses_overlay_scrollbar(self) -> bool {
+        matches!(
+            self,
+            Self::OverlayScrollbarVertical | Self::OverlayScrollbarBoth
+        )
+    }
+
+    /// 策略的稳定标识，用于测试诊断与合规报告。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::OverlayScrollbarVertical => "overlay-scrollbar-vertical",
+            Self::OverlayScrollbarBoth => "overlay-scrollbar-both",
+            Self::TabStripButtons => "tab-strip-buttons",
+            Self::MenuOverflowPopup => "menu-overflow-popup",
+            Self::ExternalScrollView => "external-scroll-view",
+        }
+    }
+}
+
+/// 控件在能力边界（Widget Capability Boundary）上的正交维度声明。
+///
+/// 全部 [`WidgetCatalogId`] 变体均须通过无通配符的穷举 `match` 返回本结构体，
+/// 确保未来新增控件不会在溢出滚动条、文本截断、贴边翻转或几何动画维度上静默漏检。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct WidgetCapabilities {
+    /// 内容溢出时的官方策略。
+    pub overflow: OverflowStrategy,
+    /// 文本标签或单元格在窄容器下是否需要截断省略或裁剪。
+    pub text_elidable: bool,
+    /// 浮层或弹出表面在贴近视口边缘时是否需要自动翻转或夹紧定位。
+    pub overlay_flippable: bool,
+    /// 是否包含驱动几何坐标或尺寸变化的过渡动画（须受中间帧几何不变量测试看守）。
+    pub animates_geometry: bool,
+}
+
+impl WidgetCapabilities {
+    /// 默认基础能力：无内部滚动、不自动截断、非贴边翻转浮层、无几何动画。
+    pub const NONE: Self = Self {
+        overflow: OverflowStrategy::None,
+        text_elidable: false,
+        overlay_flippable: false,
+        animates_geometry: false,
+    };
+
+    /// 以指定溢出策略构造能力声明。
+    #[must_use]
+    pub const fn with_overflow(overflow: OverflowStrategy) -> Self {
+        Self {
+            overflow,
+            ..Self::NONE
+        }
+    }
+
+    /// 标记文本在窄容器下支持截断省略或裁剪。
+    #[must_use]
+    pub const fn elidable(mut self) -> Self {
+        self.text_elidable = true;
+        self
+    }
+
+    /// 标记浮层支持贴边自动翻转与视口夹紧。
+    #[must_use]
+    pub const fn flippable(mut self) -> Self {
+        self.overlay_flippable = true;
+        self
+    }
+
+    /// 标记控件包含几何动画（须通过中间帧几何不变量回归）。
+    #[must_use]
+    pub const fn animated_geometry(mut self) -> Self {
+        self.animates_geometry = true;
+        self
+    }
+}
 
 /// 组件在三合一清单中的分类。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -52,6 +153,198 @@ pub const TOOLKIT_COUNT: usize = 20;
 pub const EXCLUSIVE_COUNT: usize = 43;
 
 impl WidgetCatalogId {
+    /// 该组件的能力边界声明（编译期穷举，禁止通配符）。
+    #[must_use]
+    pub const fn capabilities(self) -> WidgetCapabilities {
+        match self {
+            // 1. 双轴按需叠加滚动条。
+            Self::ScrollView => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::OverlayScrollbarBoth)
+            }
+
+            // 2. 垂直按需叠加滚动条（已统一接入 emit_scrollbar 的目录组件）。
+            Self::NavigationView => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::OverlayScrollbarVertical)
+                    .elidable()
+                    .animated_geometry()
+            }
+            Self::TreeView | Self::Table | Self::GenericDataTable => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::OverlayScrollbarVertical)
+                    .elidable()
+            }
+            Self::TextBoxMultiline => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::OverlayScrollbarVertical)
+            }
+            Self::MenuFlyout | Self::ContextMenu => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::OverlayScrollbarVertical)
+                    .elidable()
+                    .flippable()
+            }
+
+            // 3. 水平标签条翻页箭头按钮（显式排除底边滚动条）。
+            Self::TabView => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::TabStripButtons).elidable()
+            }
+
+            // 4. 溢出项收敛至弹出式溢出菜单。
+            Self::CommandBar | Self::MenuBar | Self::CommandBarFlyout => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::MenuOverflowPopup).flippable()
+            }
+
+            // 5. 无内置滚动容器，长内容由宿主外层 ScrollView 承载。
+            Self::Form
+            | Self::SchemaForm
+            | Self::Descriptions
+            | Self::Containers
+            | Self::StackPanel
+            | Self::Wrap
+            | Self::Masonry
+            | Self::VirtualMasonry
+            | Self::RichEditBox
+            | Self::CodeBlock
+            | Self::CodeEditor
+            | Self::TerminalView
+            | Self::BladeView => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::ExternalScrollView)
+            }
+            Self::ExpanderGroup => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::ExternalScrollView)
+                    .animated_geometry()
+            }
+            Self::DataGrid
+            | Self::ListView
+            | Self::GridView
+            | Self::ListBox
+            | Self::ItemsView
+            | Self::TreeTable
+            | Self::PropertyGrid
+            | Self::NotificationCenter
+            | Self::Timeline => {
+                WidgetCapabilities::with_overflow(OverflowStrategy::ExternalScrollView).elidable()
+            }
+
+            // 6. 无内部滚动容器：带贴边翻转与几何动画的浮层。
+            Self::Toast | Self::TeachingTip | Self::Tour => WidgetCapabilities::NONE
+                .elidable()
+                .flippable()
+                .animated_geometry(),
+
+            // 7. 无内部滚动容器：带贴边翻转与文本截断的弹出层/下拉触发器。
+            Self::AutoSuggestBox
+            | Self::CalendarDatePicker
+            | Self::Callout
+            | Self::Cascader
+            | Self::ComboBox
+            | Self::ComboBoxEditable
+            | Self::CommandPalette
+            | Self::DateRangePicker
+            | Self::DropDownButton
+            | Self::Flyout
+            | Self::HoverCard
+            | Self::Popconfirm
+            | Self::SplitButton
+            | Self::ToggleSplitButton
+            | Self::ToolTip => WidgetCapabilities::NONE.elidable().flippable(),
+
+            // 8. 无内部滚动容器：带贴边翻转的非文本浮层。
+            Self::ColorPicker | Self::DatePicker | Self::Overlay | Self::TimePicker => {
+                WidgetCapabilities::NONE.flippable()
+            }
+
+            // 9. 无内部滚动容器：带几何动画且文本可截断的控件。
+            Self::Expander | Self::SplitView | Self::SwipeControl => {
+                WidgetCapabilities::NONE.elidable().animated_geometry()
+            }
+
+            // 10. 无内部滚动容器：带几何动画的交互/指示控件。
+            Self::FlipView
+            | Self::LoadingOverlay
+            | Self::ProgressBar
+            | Self::ProgressRing
+            | Self::RangeSelector
+            | Self::RefreshContainer
+            | Self::Skeleton
+            | Self::Slider
+            | Self::ToggleSwitch => WidgetCapabilities::NONE.animated_geometry(),
+
+            // 11. 无内部滚动容器：文本可截断的标准内联/提示/输入控件。
+            Self::AddressBar
+            | Self::AlertDialog
+            | Self::AppBarButton
+            | Self::AppBarToggleButton
+            | Self::Banner
+            | Self::BreadcrumbBar
+            | Self::Button
+            | Self::CheckBox
+            | Self::Chip
+            | Self::ContentDialog
+            | Self::HeaderedContentControl
+            | Self::HyperlinkButton
+            | Self::InfoBar
+            | Self::PasswordBox
+            | Self::Pivot
+            | Self::RadioButton
+            | Self::RepeatButton
+            | Self::RichTextBlock
+            | Self::SelectorBar
+            | Self::ShortcutBar
+            | Self::StatusBar
+            | Self::Stepper
+            | Self::TagInput
+            | Self::TaskHud
+            | Self::TextBox
+            | Self::ToggleButton
+            | Self::Transfer => WidgetCapabilities::NONE.elidable(),
+
+            // 12. 其余固定尺寸、画布/图形/辅助类控件。
+            Self::AnnotatedScrollBar
+            | Self::AppBarSeparator
+            | Self::AspectRatioBox
+            | Self::AvatarGroup
+            | Self::CalendarView
+            | Self::CanvasToolbar
+            | Self::Chart
+            | Self::ColorSwatch
+            | Self::CurveEditor
+            | Self::Divider
+            | Self::Dock
+            | Self::EmptyState
+            | Self::FileDrop
+            | Self::FontIcon
+            | Self::Gizmo
+            | Self::GradientEditor
+            | Self::HotkeyInput
+            | Self::Image
+            | Self::ImageCropper
+            | Self::InfoBadge
+            | Self::Minimap
+            | Self::MultiSplit
+            | Self::NinePatch
+            | Self::NodeGraph
+            | Self::NumberBox
+            | Self::OrbitView
+            | Self::PersonPicture
+            | Self::PinInput
+            | Self::PipelineView
+            | Self::PipsPager
+            | Self::QueryBuilder
+            | Self::RadialGauge
+            | Self::RatingControl
+            | Self::Ruler
+            | Self::SplitPane
+            | Self::TimelineTrack
+            | Self::Watermark => WidgetCapabilities::NONE,
+        }
+    }
+
+    /// 迭代所有声明了按需叠加滚动条策略（单轴或双轴）的目录标识。
+    pub fn ids_with_overlay_scrollbar() -> impl Iterator<Item = Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|id| id.capabilities().overflow.uses_overlay_scrollbar())
+    }
+
     /// 该组件在三合一清单中的分类。
     #[must_use]
     pub const fn class(self) -> ControlClass {
@@ -455,5 +748,60 @@ mod tests {
         for id in WidgetCatalogId::ids_in_class(ControlClass::Exclusive) {
             assert!(!id.class().participates_in_parity());
         }
+    }
+
+    #[test]
+    fn capability_matrix_covers_all_133_variants_and_adr_0031_contracts() {
+        assert_eq!(WidgetCatalogId::COUNT, 133);
+
+        assert_eq!(
+            WidgetCatalogId::ScrollView.capabilities().overflow,
+            OverflowStrategy::OverlayScrollbarBoth
+        );
+        for id in [
+            WidgetCatalogId::NavigationView,
+            WidgetCatalogId::TreeView,
+            WidgetCatalogId::Table,
+            WidgetCatalogId::GenericDataTable,
+            WidgetCatalogId::TextBoxMultiline,
+            WidgetCatalogId::MenuFlyout,
+            WidgetCatalogId::ContextMenu,
+        ] {
+            assert_eq!(
+                id.capabilities().overflow,
+                OverflowStrategy::OverlayScrollbarVertical,
+                "{id:?} must declare OverlayScrollbarVertical"
+            );
+        }
+
+        assert_eq!(
+            WidgetCatalogId::TabView.capabilities().overflow,
+            OverflowStrategy::TabStripButtons
+        );
+        assert!(!WidgetCatalogId::TabView
+            .capabilities()
+            .overflow
+            .uses_overlay_scrollbar());
+        assert_eq!(
+            WidgetCatalogId::Form.capabilities().overflow,
+            OverflowStrategy::ExternalScrollView
+        );
+        assert_eq!(
+            WidgetCatalogId::SchemaForm.capabilities().overflow,
+            OverflowStrategy::ExternalScrollView
+        );
+        assert_eq!(
+            WidgetCatalogId::CommandBar.capabilities().overflow,
+            OverflowStrategy::MenuOverflowPopup
+        );
+        assert!(
+            WidgetCatalogId::NavigationView
+                .capabilities()
+                .animates_geometry
+        );
+
+        let overlay_ids: Vec<WidgetCatalogId> =
+            WidgetCatalogId::ids_with_overlay_scrollbar().collect();
+        assert_eq!(overlay_ids.len(), 8);
     }
 }

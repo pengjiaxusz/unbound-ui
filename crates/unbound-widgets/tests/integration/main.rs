@@ -5,6 +5,7 @@
 
 mod button_variants;
 mod button_vector_icon;
+mod capability_scrollbar_contract;
 mod checkbox_states;
 mod fluent_conformance;
 mod health;

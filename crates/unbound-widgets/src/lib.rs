@@ -812,7 +812,10 @@ pub use toggle_split_button::{
     ToggleSplitPart, TOGGLE_SPLIT_DROPDOWN_WIDTH, TOGGLE_SPLIT_HEIGHT, TOGGLE_SPLIT_RADIUS,
 };
 
-pub use canonical::{ControlClass, BASELINE_COUNT, EXCLUSIVE_COUNT, TOOLKIT_COUNT};
+pub use canonical::{
+    ControlClass, OverflowStrategy, WidgetCapabilities, BASELINE_COUNT, EXCLUSIVE_COUNT,
+    TOOLKIT_COUNT,
+};
 
 // 扩展控件（P1 / P2）：WinUI 3 官方核心控件与 Community Toolkit 选补控件。
 pub use annotated_scroll_bar::{emit_annotated_scroll_bar, AnnotatedScrollBarDesc};
