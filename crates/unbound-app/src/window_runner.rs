@@ -13,16 +13,14 @@ use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
-use unbound_platform::win32_frame::{
-    install_custom_frame, FrameHitMetrics, WindowBackdropMaterial,
-};
+use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, SurfaceAlpha, WindowConfig,
 };
 use unbound_platform::{
-    begin_outbound_file_drag, OutboundFileDragOutcome, PopupHostRegistry, PopupWindowConfig,
-    Window, WindowId,
+    begin_outbound_file_drag, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
+    PopupWindowConfig, WindowId,
 };
 use unbound_theme::{ThemeSet, ThemeState};
 
@@ -31,36 +29,6 @@ use crate::{
     AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind,
 };
-
-/// 封装平台剪贴板的适配器。
-struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
-
-impl crate::ClipboardProvider for WinClipboard {
-    fn get_text(&self) -> Option<String> {
-        use unbound_platform::ClipboardProvider as _;
-        self.0.borrow_mut().read_text().ok().flatten()
-    }
-
-    fn set_text(&mut self, text: &str) {
-        use unbound_platform::ClipboardProvider as _;
-        let _ = self.0.borrow_mut().write_text(text);
-    }
-}
-
-/// 按平台创建窗口渲染表面：Windows 上使用 Win32 `HWND`，非 Windows 平台显式返回不支持错误。
-fn create_window_surface(gpu: &Gpu, hwnd: isize) -> Result<Surface, unbound_gpu::device::GpuError> {
-    #[cfg(windows)]
-    {
-        Surface::new_win32(gpu, hwnd)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (gpu, hwnd);
-        Err(unbound_gpu::device::GpuError::Allocation(
-            "windowed presentation is implemented for Win32 only".into(),
-        ))
-    }
-}
 
 /// 按表面能力解析交换链合成方式。
 ///
@@ -169,7 +137,7 @@ fn translate_modifiers(m: Modifiers) -> AppModifiers {
 /// 则使 `VK_KHR_swapchain` 成为非法设备扩展
 /// （`VUID-vkCreateDevice-ppEnabledExtensionNames-01387`）。若把这一对硬编码，
 /// 运行器将只能在 Windows 工作，因此改为派生，与 `apps/showcase` 保持一致。
-fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
+fn window_instance_extensions(window: &NativeWindow) -> Result<Vec<String>, String> {
     use raw_window_handle::HasDisplayHandle;
 
     let handle = window
@@ -211,7 +179,6 @@ pub struct WindowedRunner<A: Application> {
     /// 当前窗口的系统物理显示 DPI 缩放比（`window.scale_factor()`）。
     os_scale: f32,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
-    hwnd: Option<isize>,
     /// GPU 着色器用于解析颜色 token 的语义颜色表。
     theme: ThemeState,
     /// 当前渲染器 LUT 中已写入的主题与品牌色三元组；`None` 表示仍需上传
@@ -258,9 +225,7 @@ impl<A: Application> WindowedRunner<A> {
         let viewport = Vec2::new(w as f32, h as f32);
         let mut runtime = AppRuntime::new(app, viewport);
         runtime.set_backdrop(config.backdrop);
-        runtime.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
-            unbound_platform::SystemClipboard::new(),
-        ))));
+        runtime.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
         let ctx = runtime.context();
         let theme = ThemeState::new(
             ThemeSet::for_product_with_system_accent(
@@ -302,7 +267,6 @@ impl<A: Application> WindowedRunner<A> {
             frame_dropped: false,
             os_scale: 1.0,
             frame_metrics: None,
-            hwnd: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
             primary_window_id: None,
@@ -348,7 +312,7 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     /// 同步窗口当前系统 DPI 缩放因子（`os_scale`）。
-    fn sync_os_scale(&mut self, window: &Window) -> f32 {
+    fn sync_os_scale(&mut self, window: &NativeWindow) -> f32 {
         let raw = window.scale_factor() as f32;
         if raw.is_finite() && raw > 0.0 {
             self.os_scale = raw.clamp(0.5, 4.0);
@@ -362,7 +326,7 @@ impl<A: Application> WindowedRunner<A> {
     /// 而 `SURFACE` 清屏为白色。在写入真正的 `ThemeLut` 之前，整窗就是一片
     /// 纯白：图元确实绘制了，但颜色全透明。showcase 自行上传 LUT，通用运行器
     /// 必须为每个示例做同样的事，并在设备重建后重新上传。
-    fn sync_theme(&mut self, window: &Window) {
+    fn sync_theme(&mut self, window: &NativeWindow) {
         let ctx = self.runtime.context();
         let sys_accent = ctx.resolved_system_accent();
         let sys_bits =
@@ -398,10 +362,7 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     /// 将外观意图账本同步至窗口与渲染器。
-    fn sync_appearance(&mut self, _window: &Window) {
-        let Some(hwnd) = self.hwnd else {
-            return;
-        };
+    fn sync_appearance(&mut self, window: &NativeWindow) {
         let caps = AppearanceCaps::new(
             unbound_platform::windows_build(),
             self.runtime.premultiplied_surface(),
@@ -413,14 +374,14 @@ impl<A: Application> WindowedRunner<A> {
         let diff = self
             .appearance
             .set_intent(self.runtime.backdrop_intent(), caps, theme);
-        self.apply_appearance_diff(hwnd, diff);
+        self.apply_appearance_diff(window, diff);
     }
 
     /// 执行外观变更 Diff。
-    fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
-        crate::appearance::apply_appearance_diff_to_platform(
+    fn apply_appearance_diff(&mut self, window: &NativeWindow, diff: AppearanceDiff) {
+        crate::appearance::apply_appearance_diff_to_window(
             &diff,
-            hwnd,
+            window,
             self.frame_metrics.as_deref(),
         );
         if let Some(clear_alpha) = diff.clear_alpha {
@@ -431,7 +392,7 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     /// 判断给定平台窗口是否为原生弹出窗并返回其业务浮层 ID。
-    fn resolve_popup_id(&self, window: &Window) -> Option<u64> {
+    fn resolve_popup_id(&self, window: &NativeWindow) -> Option<u64> {
         if let Some(id) = window.popup_id() {
             return Some(id);
         }
@@ -474,7 +435,7 @@ impl<A: Application> WindowedRunner<A> {
     }
 
     /// 排空应用运行时产生的窗口控制命令并执行平台动作。
-    fn drain_runtime_commands(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn drain_runtime_commands(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         let mut outbound_drag = None;
         for cmd in self.runtime.drain_window_commands() {
             match cmd {
@@ -536,7 +497,7 @@ impl<A: Application> WindowedRunner<A> {
         Flow::Continue
     }
 
-    fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &Window) {
+    fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &NativeWindow) {
         if ops.is_empty() {
             return;
         }
@@ -666,7 +627,7 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
-    fn recover_gpu(&mut self, window: &Window) {
+    fn recover_gpu(&mut self, window: &NativeWindow) {
         // 所有 Vulkan 对象都没有 `Drop`：过去直接置 `None` 会泄漏全部句柄。
         // 尤其是旧 `VkSurfaceKHR` 仍绑定在 HWND 上，导致第一次重建就报
         // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
@@ -689,11 +650,6 @@ impl<A: Application> WindowedRunner<A> {
             }
             renderer.destroy();
         }
-
-        let hwnd = match self.hwnd {
-            Some(h) => h,
-            None => return,
-        };
 
         let instance_extensions = match window_instance_extensions(window) {
             Ok(extensions) => extensions,
@@ -722,7 +678,7 @@ impl<A: Application> WindowedRunner<A> {
 
         let recovered = recover_with(policy, || {
             let gpu = Gpu::new(device_config.clone())?;
-            let surface = match create_window_surface(&gpu, hwnd) {
+            let surface = match window.create_vulkan_surface(&gpu) {
                 Ok(s) => s,
                 Err(err) => {
                     gpu.destroy();
@@ -808,7 +764,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         core::mem::take(&mut self.pending_popup_closes)
     }
 
-    fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
+    fn window_created(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         if let Some(popup_id) = self.resolve_popup_id(window) {
             let win_id = WindowId(window.id().0 as u64);
             self.native_popup_windows.insert(win_id, popup_id);
@@ -821,7 +777,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.resumed(state, window);
     }
 
-    fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+    fn resumed(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         if self.resolve_popup_id(window).is_some() || self.surface.is_some() {
             return;
         }
@@ -868,24 +824,11 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
         };
 
-        let hwnd = {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            match window.window_handle().ok().map(|h| h.as_raw()) {
-                Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
-                _ => {
-                    eprintln!("[unbound-app] Window has no native Win32 handle");
-                    gpu.destroy();
-                    window.request_close();
-                    return;
-                }
-            }
-        };
-
-        let surface = match create_window_surface(&gpu, hwnd) {
+        let surface = match window.create_vulkan_surface(&gpu) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
-                    "[unbound-app] Could not create Vulkan surface (hwnd=0x{hwnd:X}):\n{}",
+                    "[unbound-app] Could not create Vulkan surface:\n{}",
                     error.diagnostic_report()
                 );
                 gpu.destroy();
@@ -964,14 +907,14 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
-        self.hwnd = Some(hwnd);
-        if let Some(cb) = &mut self.on_hwnd_created {
+        #[cfg(windows)]
+        if let (Some(cb), Some(hwnd)) = (&mut self.on_hwnd_created, window.win32_hwnd()) {
             cb(hwnd);
         }
 
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(os_scale);
-        install_custom_frame(hwnd, metrics.clone());
+        window.install_custom_frame(metrics.clone());
         self.frame_metrics = Some(metrics);
 
         state.set_present_extensions(&device_extensions);
@@ -980,7 +923,12 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.last_frame = Instant::now();
     }
 
-    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+    fn event(
+        &mut self,
+        state: &mut PlatformState,
+        window: &NativeWindow,
+        event: PlatformEvent,
+    ) -> Flow {
         if let Some(popup_id) = self.resolve_popup_id(window) {
             let popup_rect = {
                 let live = window.client_rect_on_screen();
@@ -1226,7 +1174,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         Flow::Continue
     }
 
-    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         if self.resolve_popup_id(window).is_some() {
             return Flow::Continue;
         }
@@ -1448,7 +1396,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         Flow::Continue
     }
 
-    fn window_closing(&mut self, window: &Window) {
+    fn window_closing(&mut self, window: &NativeWindow) {
         let win_id = WindowId(window.id().0 as u64);
         if let Some(popup_id) = self
             .native_popup_windows

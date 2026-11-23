@@ -18,16 +18,14 @@ use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
-use unbound_platform::win32_frame::{
-    install_custom_frame, FrameHitMetrics, WindowBackdropMaterial,
-};
+use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, SurfaceAlpha, WindowConfig,
 };
 use unbound_platform::{
-    begin_outbound_file_drag, FramePacer, OutboundFileDragOutcome, PopupHostRegistry,
-    PopupWindowConfig, Window, WindowId, WindowRegistry,
+    begin_outbound_file_drag, FramePacer, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
+    PopupWindowConfig, WindowId, WindowRegistry,
 };
 use unbound_theme::{ThemeSet, ThemeState};
 
@@ -50,21 +48,6 @@ where
 {
     fn create(&mut self, id: WindowId, config: &WindowConfig) -> A {
         self(id, config)
-    }
-}
-
-/// 封装平台剪贴板的适配器。
-struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
-
-impl crate::ClipboardProvider for WinClipboard {
-    fn get_text(&self) -> Option<String> {
-        use unbound_platform::ClipboardProvider as _;
-        self.0.borrow_mut().read_text().ok().flatten()
-    }
-
-    fn set_text(&mut self, text: &str) {
-        use unbound_platform::ClipboardProvider as _;
-        let _ = self.0.borrow_mut().write_text(text);
     }
 }
 
@@ -161,7 +144,7 @@ fn translate_modifiers(m: Modifiers) -> AppModifiers {
     }
 }
 
-fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
+fn window_instance_extensions(window: &NativeWindow) -> Result<Vec<String>, String> {
     use raw_window_handle::HasDisplayHandle;
 
     let handle = window
@@ -175,7 +158,7 @@ fn window_instance_extensions(window: &Window) -> Result<Vec<String>, String> {
     )
 }
 
-fn platform_window_id(window: &Window) -> WindowId {
+fn platform_window_id(window: &NativeWindow) -> WindowId {
     WindowId(window.id().0 as u64)
 }
 
@@ -206,7 +189,6 @@ pub struct WindowContext<A: Application> {
     scene_generation: u64,
     frame_dropped: bool,
     os_scale: f32,
-    hwnd: Option<isize>,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     theme: ThemeState,
     uploaded_theme: Option<(
@@ -230,9 +212,7 @@ impl<A: Application> WindowContext<A> {
         let viewport = Vec2::new(w as f32, h as f32);
         let mut runtime = AppRuntime::new(app, viewport);
         runtime.set_backdrop(config.backdrop);
-        runtime.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
-            unbound_platform::SystemClipboard::new(),
-        ))));
+        runtime.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
         let ctx = runtime.context();
         let theme = ThemeState::new(
             ThemeSet::for_product_with_system_accent(
@@ -264,7 +244,6 @@ impl<A: Application> WindowContext<A> {
             scene_generation: 0,
             frame_dropped: false,
             os_scale: 1.0,
-            hwnd: None,
             frame_metrics: None,
             theme,
             uploaded_theme: None,
@@ -296,7 +275,7 @@ impl<A: Application> WindowContext<A> {
         false
     }
 
-    fn sync_os_scale(&mut self, window: &Window) -> f32 {
+    fn sync_os_scale(&mut self, window: &NativeWindow) -> f32 {
         let raw = window.scale_factor() as f32;
         if raw.is_finite() && raw > 0.0 {
             self.os_scale = raw.clamp(0.5, 4.0);
@@ -304,7 +283,7 @@ impl<A: Application> WindowContext<A> {
         self.os_scale
     }
 
-    fn sync_theme(&mut self, window: &Window) {
+    fn sync_theme(&mut self, window: &NativeWindow) {
         let ctx = self.runtime.context();
         let sys_accent = ctx.resolved_system_accent();
         let sys_bits =
@@ -337,10 +316,7 @@ impl<A: Application> WindowContext<A> {
         }
     }
 
-    fn sync_appearance(&mut self) {
-        let Some(hwnd) = self.hwnd else {
-            return;
-        };
+    fn sync_appearance(&mut self, window: &NativeWindow) {
         let caps = AppearanceCaps::new(
             unbound_platform::windows_build(),
             self.runtime.premultiplied_surface(),
@@ -352,13 +328,13 @@ impl<A: Application> WindowContext<A> {
         let diff = self
             .appearance
             .set_intent(self.runtime.backdrop_intent(), caps, theme);
-        self.apply_appearance_diff(hwnd, diff);
+        self.apply_appearance_diff(window, diff);
     }
 
-    fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
-        crate::appearance::apply_appearance_diff_to_platform(
+    fn apply_appearance_diff(&mut self, window: &NativeWindow, diff: AppearanceDiff) {
+        crate::appearance::apply_appearance_diff_to_window(
             &diff,
-            hwnd,
+            window,
             self.frame_metrics.as_deref(),
         );
         if let Some(clear_alpha) = diff.clear_alpha {
@@ -368,7 +344,7 @@ impl<A: Application> WindowContext<A> {
         }
     }
 
-    fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &Window) {
+    fn process_external_texture_ops(&mut self, ops: Vec<ExternalTextureOp>, window: &NativeWindow) {
         if ops.is_empty() {
             return;
         }
@@ -658,7 +634,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
     fn attach_window_gpu(
         &mut self,
         state: &mut PlatformState,
-        window: &Window,
+        window: &NativeWindow,
         config: WindowConfig,
     ) {
         let id = platform_window_id(window);
@@ -736,30 +712,11 @@ impl<A: Application> MultiWindowCoordinator<A> {
             }
         };
 
-        let hwnd = {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            match window.window_handle().ok().map(|h| h.as_raw()) {
-                Some(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
-                _ => {
-                    eprintln!("[unbound-app] Window has no native Win32 handle");
-                    window.request_close();
-                    return;
-                }
-            }
-        };
-
-        #[cfg(windows)]
-        let surface_result = Surface::new_win32(&gpu, hwnd);
-        #[cfg(not(windows))]
-        let surface_result: Result<Surface, unbound_gpu::device::GpuError> =
-            Err(unbound_gpu::device::GpuError::Allocation(
-                "windowed presentation is implemented for Win32 only".into(),
-            ));
-        let surface = match surface_result {
+        let surface = match window.create_vulkan_surface(&gpu) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
-                    "[unbound-app] Could not create Vulkan surface (hwnd=0x{hwnd:X}):\n{}",
+                    "[unbound-app] Could not create Vulkan surface:\n{}",
                     error.diagnostic_report()
                 );
                 window.request_close();
@@ -820,24 +777,22 @@ impl<A: Application> MultiWindowCoordinator<A> {
         ctx.swapchain = Some(swapchain);
         ctx.surface = Some(surface);
         ctx.renderer = Some(renderer);
-        ctx.hwnd = Some(hwnd);
-
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(os_scale);
-        install_custom_frame(hwnd, metrics.clone());
+        window.install_custom_frame(metrics.clone());
         ctx.frame_metrics = Some(metrics);
 
         state.set_present_extensions(&device_extensions);
         let client_screen = window.client_rect_on_screen();
         ctx.screen_origin = (client_screen.x, client_screen.y);
         ctx.sync_theme(window);
-        ctx.sync_appearance();
+        ctx.sync_appearance(window);
         ctx.last_frame = Instant::now();
 
         let _ = self.registry.insert(id, ctx);
     }
 
-    fn drain_window_commands_live(&mut self, id: WindowId, window: &Window) -> Flow {
+    fn drain_window_commands_live(&mut self, id: WindowId, window: &NativeWindow) -> Flow {
         let mut outbound_drag = None;
         let mut close_targets = Vec::new();
         let mut close_self = false;
@@ -923,7 +878,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
     }
 
     /// 识别平台窗口是否为原生弹出窗，返回 `(popup_id, owner_window_id)`。
-    fn resolve_popup_window(&self, window: &Window) -> Option<(u64, WindowId)> {
+    fn resolve_popup_window(&self, window: &NativeWindow) -> Option<(u64, WindowId)> {
         let win_id = platform_window_id(window);
         if let Some(&mapped) = self.native_popup_owners.get(&win_id) {
             return Some(mapped);
@@ -983,7 +938,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             .min()
     }
 
-    fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+    fn resumed(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         if window.is_popup() || self.resolve_popup_window(window).is_some() {
             return;
         }
@@ -991,7 +946,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         self.attach_window_gpu(state, window, config);
     }
 
-    fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
+    fn window_created(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         if window.is_popup() || self.resolve_popup_window(window).is_some() {
             if let Some((popup_id, owner_id)) = self.resolve_popup_window(window) {
                 let popup_win_id = platform_window_id(window);
@@ -1012,7 +967,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         self.attach_window_gpu(state, window, config);
     }
 
-    fn window_closing(&mut self, window: &Window) {
+    fn window_closing(&mut self, window: &NativeWindow) {
         let id = platform_window_id(window);
         if let Some((popup_id, owner_id)) = self
             .native_popup_owners
@@ -1048,7 +1003,12 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         core::mem::take(&mut self.pending_popup_closes)
     }
 
-    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+    fn event(
+        &mut self,
+        state: &mut PlatformState,
+        window: &NativeWindow,
+        event: PlatformEvent,
+    ) -> Flow {
         let id = platform_window_id(window);
         if window.is_popup() || self.resolve_popup_window(window).is_some() {
             let Some((popup_id, owner_id)) = self.resolve_popup_window(window) else {
@@ -1248,7 +1208,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                         ThemeKind::Light
                     });
                 }
-                ctx.sync_appearance();
+                ctx.sync_appearance(window);
             }
             PlatformEvent::FileHover(path) => {
                 ctx.runtime.file_hover(vec![path]);
@@ -1309,7 +1269,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         Flow::Continue
     }
 
-    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         if window.is_popup() || self.resolve_popup_window(window).is_some() {
             return Flow::Continue;
         }
@@ -1374,7 +1334,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
         ctx.sync_theme(window);
-        ctx.sync_appearance();
+        ctx.sync_appearance(window);
         ctx.process_external_texture_ops(report.external_texture_ops, window);
 
         if let (Some(renderer), Some(atlases)) = (&mut ctx.renderer, &shared_atlases) {

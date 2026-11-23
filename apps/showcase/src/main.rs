@@ -22,7 +22,7 @@ use showcase::shell::GalleryApp;
 use showcase::state::ThemeMode;
 use showcase::theme;
 use unbound_app::appearance::{
-    apply_appearance_diff_to_platform, AppearanceCaps, AppearanceDiff, AppearanceIntent,
+    apply_appearance_diff_to_window, AppearanceCaps, AppearanceDiff, AppearanceIntent,
     WindowAppearance,
 };
 
@@ -37,7 +37,7 @@ use unbound_gpu::{Camera, Renderer, SceneUpload};
 use unbound_input::{resize_edge, CursorKind, PointerButton, ResizeEdge};
 use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
-use unbound_platform::win32_frame::{install_custom_frame, FrameHitMetrics};
+use unbound_platform::win32_frame::FrameHitMetrics;
 use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
@@ -155,20 +155,7 @@ impl Showcase {
                 //
                 app.set_external_diff(true);
                 let mut rt = AppRuntime::new(app, Vec2::new(1440.0, 900.0));
-                struct WinClipboard(std::cell::RefCell<unbound_platform::SystemClipboard>);
-                impl unbound_app::ClipboardProvider for WinClipboard {
-                    fn get_text(&self) -> Option<String> {
-                        use unbound_platform::ClipboardProvider as _;
-                        self.0.borrow_mut().read_text().ok().flatten()
-                    }
-                    fn set_text(&mut self, text: &str) {
-                        use unbound_platform::ClipboardProvider as _;
-                        let _ = self.0.borrow_mut().write_text(text);
-                    }
-                }
-                rt.set_clipboard(Box::new(WinClipboard(std::cell::RefCell::new(
-                    unbound_platform::SystemClipboard::new(),
-                ))));
+                rt.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
                 rt
             },
             renderer: None,
@@ -253,7 +240,7 @@ impl Showcase {
     /// 已提交范围（`physical_size / (os_scale × app_zoom)`）重新计算的，
     /// 页面会针对更小的逻辑视口重新排版。
     ///
-    fn sync_window_size(&mut self, window: &Window) {
+    fn sync_window_size(&mut self, window: &NativeWindow) {
         let os_scale = window.scale_factor() as f32;
         if os_scale.is_finite() && os_scale > 0.0 {
             self.os_scale = os_scale;
@@ -262,7 +249,7 @@ impl Showcase {
         self.shell_mut().state.window_screen_rect = Some(rect);
     }
 
-    fn resize_edge_at(&self, window: &Window) -> Option<ResizeEdge> {
+    fn resize_edge_at(&self, window: &NativeWindow) -> Option<ResizeEdge> {
         if window.is_decorated() || window.is_maximized() {
             return None;
         }
@@ -292,7 +279,7 @@ impl Showcase {
         )
     }
 
-    fn handle_window_command(&mut self, window: &Window, command: WindowCommand) -> Flow {
+    fn handle_window_command(&mut self, window: &NativeWindow, command: WindowCommand) -> Flow {
         match command {
             WindowCommand::Minimize => window.set_minimized(true),
             WindowCommand::ToggleMaximize => {
@@ -400,7 +387,7 @@ impl Showcase {
         report
     }
 
-    fn apply_cursor(&mut self, window: &Window) {
+    fn apply_cursor(&mut self, window: &NativeWindow) {
         let kind = self
             .resize_edge
             .map_or_else(|| self.app.context().cursor, ResizeEdge::cursor);
@@ -435,40 +422,14 @@ fn build_present_config(
         .with_composite_alpha(composite_alpha)
 }
 
-/// 按平台创建窗口渲染表面：Windows 上使用 Win32 `HWND`，非 Windows 平台显式返回不支持错误。
-fn create_window_surface(gpu: &Gpu, hwnd: isize) -> Result<Surface, unbound_gpu::device::GpuError> {
-    #[cfg(windows)]
-    {
-        Surface::new_win32(gpu, hwnd)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (gpu, hwnd);
-        Err(unbound_gpu::device::GpuError::Allocation(
-            "windowed presentation is implemented for Win32 only".into(),
-        ))
-    }
-}
-
-/// 提取 Win32 原生窗口句柄。
-fn window_hwnd(window: &Window) -> Option<isize> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match window.window_handle().ok().map(|handle| handle.as_raw()) {
-        Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
-        _ => None,
-    }
-}
-
 impl Showcase {
     /// 将外观意图账本同步至窗口与渲染器。
     ///
     /// 向外观意图账本提供选择意图、平台能力与当前主题，账本负责解析计划、按已下发值去重，
     /// 仅将发生变更的增量（`AppearanceDiff`）交由宿主执行系统写入与清屏 alpha 设置。
-    fn sync_appearance(&mut self, window: &Window) {
+    fn sync_appearance(&mut self, window: &NativeWindow) {
         let plan_changed = self.shell_mut().sync_backdrop_plan();
-        let Some(hwnd) = window_hwnd(window) else {
-            return;
-        };
+
         let caps = AppearanceCaps::new(
             self.shell().state.windows_build,
             self.shell().state.premultiplied_alpha_supported,
@@ -484,15 +445,15 @@ impl Showcase {
             accent_tint: Some(self.shell().state.backdrop_accent_tint),
         };
         let diff = self.appearance.set_intent(intent, caps, theme);
-        self.apply_appearance_diff(hwnd, diff);
+        self.apply_appearance_diff(window, diff);
         if plan_changed {
             self.app.invalidate();
         }
     }
 
     /// 执行外观变更 Diff。
-    fn apply_appearance_diff(&mut self, hwnd: isize, diff: AppearanceDiff) {
-        apply_appearance_diff_to_platform(&diff, hwnd, self.frame_metrics.as_deref());
+    fn apply_appearance_diff(&mut self, window: &NativeWindow, diff: AppearanceDiff) {
+        apply_appearance_diff_to_window(&diff, window, self.frame_metrics.as_deref());
         if let Some(clear_alpha) = diff.clear_alpha {
             if let Some(renderer) = &mut self.renderer {
                 renderer.set_clear_alpha(clear_alpha);
@@ -505,7 +466,7 @@ impl Showcase {
     /// 旧呈现链通过 `oldSwapchain` 交给驱动，使呈现引擎能够移交资源而非撕毁表面——
     /// 这正是消除调整窗口大小时闪烁的关键。
     ///
-    fn recreate_swapchain(&mut self, window: &Window, width: u32, height: u32) -> bool {
+    fn recreate_swapchain(&mut self, window: &NativeWindow, width: u32, height: u32) -> bool {
         // 在借用渲染器前先读取上限：两者都经由 `self`，
         // 读取外壳会与可变借用产生冲突。
         let limit = self.shell().state.effective_fps_limit();
@@ -570,7 +531,7 @@ impl Showcase {
     /// 若不调用 `set_ime_allowed`，Windows 根本不会发送组合事件，
     /// 导致中日韩输入法只能输入 ASCII。候选框锚定在点击位置。
     ///
-    fn sync_ime(&mut self, _state: &mut PlatformState, window: &Window) {
+    fn sync_ime(&mut self, _state: &mut PlatformState, window: &NativeWindow) {
         let active = self.shell().ime_active();
         if active != self.ime_allowed {
             self.ime_allowed = active;
@@ -729,7 +690,7 @@ fn cursor_icon(kind: CursorKind) -> CursorIcon {
 }
 
 impl PlatformApp for Showcase {
-    fn resumed(&mut self, state: &mut PlatformState, window: &Window) {
+    fn resumed(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         let instance_extensions = window
             .display_handle()
             .map(|handle| {
@@ -758,17 +719,11 @@ impl PlatformApp for Showcase {
             }
         };
 
-        let Some(hwnd) = window_hwnd(window) else {
-            eprintln!("the window has no native handle");
-            gpu.destroy();
-            window.request_close();
-            return;
-        };
-        let surface = match create_window_surface(&gpu, hwnd) {
+        let surface = match window.create_vulkan_surface(&gpu) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
-                    "could not create a Vulkan surface (hwnd=0x{hwnd:X}):\n{}",
+                    "could not create a Vulkan surface:\n{}",
                     error.diagnostic_report()
                 );
                 gpu.destroy();
@@ -866,7 +821,7 @@ impl PlatformApp for Showcase {
 
         let metrics = Arc::new(FrameHitMetrics::new());
         metrics.set_scale_factor(self.effective_scale());
-        install_custom_frame(hwnd, Arc::clone(&metrics));
+        window.install_custom_frame(Arc::clone(&metrics));
         self.frame_metrics = Some(metrics);
 
         // 首帧外观意图同步：通过账本派生的变更集下发材质、深色模式与失焦锁定。
@@ -880,15 +835,11 @@ impl PlatformApp for Showcase {
         self.last_frame = Instant::now();
     }
 
-    fn window_created(&mut self, _state: &mut PlatformState, window: &Window) {
+    fn window_created(&mut self, _state: &mut PlatformState, window: &NativeWindow) {
         let Some(renderer) = &self.renderer else {
             return;
         };
-        let Some(raw) = window_hwnd(window) else {
-            eprintln!("the secondary window has no native handle");
-            return;
-        };
-        let surface = match create_window_surface(&renderer.gpu, raw) {
+        let surface = match window.create_vulkan_surface(&renderer.gpu) {
             Ok(surface) => surface,
             Err(error) => {
                 eprintln!(
@@ -922,7 +873,7 @@ impl PlatformApp for Showcase {
         });
     }
 
-    fn window_closing(&mut self, window: &Window) {
+    fn window_closing(&mut self, window: &NativeWindow) {
         if Some(window.id()) == self.primary {
             self.destroy_vulkan();
             return;
@@ -965,7 +916,12 @@ impl PlatformApp for Showcase {
         self.app.set_waker(std::sync::Arc::new(SignalWaker(waker)));
     }
 
-    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow {
+    fn event(
+        &mut self,
+        state: &mut PlatformState,
+        window: &NativeWindow,
+        event: PlatformEvent,
+    ) -> Flow {
         // 辅助窗口呈现同一应用；其输入尚未路由，因此仅呈现链响应缩放变化。
         //
         if Some(window.id()) != self.primary {
@@ -1216,7 +1172,7 @@ impl PlatformApp for Showcase {
         Flow::Continue
     }
 
-    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         Showcase::frame_impl(self, state, window)
     }
 
@@ -1227,7 +1183,7 @@ impl PlatformApp for Showcase {
     fn accessibility_action(
         &mut self,
         state: &mut PlatformState,
-        window: &Window,
+        window: &NativeWindow,
         request: unbound_platform::A11yRequest,
     ) -> Flow {
         Showcase::accessibility_action_impl(self, state, window, request)
@@ -1277,7 +1233,7 @@ impl Showcase {
     /// 绘制前应用会按此窗口的逻辑视口重新布局，使同一套 UI 按各自尺寸填满两个窗口。
     ///
     ///
-    fn frame_secondary(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame_secondary(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         if state.pacer.is_suspended() {
             return Flow::Continue;
         }
@@ -1387,7 +1343,7 @@ impl Showcase {
         Flow::Continue
     }
 
-    fn frame_impl(&mut self, state: &mut PlatformState, window: &Window) -> Flow {
+    fn frame_impl(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow {
         if Some(window.id()) != self.primary {
             return self.frame_secondary(state, window);
         }
@@ -1679,7 +1635,7 @@ impl Showcase {
     fn accessibility_action_impl(
         &mut self,
         _state: &mut PlatformState,
-        _window: &Window,
+        _window: &NativeWindow,
         request: unbound_platform::A11yRequest,
     ) -> Flow {
         // 经由 reducer 处理，使辅助技术点击与鼠标点击走同一条代码路径。

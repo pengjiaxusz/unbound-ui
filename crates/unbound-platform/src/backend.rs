@@ -9,6 +9,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::a11y_win32::Win32A11y;
+use crate::native_window::NativeWindow;
+#[cfg(windows)]
 use crate::win32_window::Window;
 use crate::window::{PlatformError, PlatformEvent, PlatformState, WindowConfig};
 
@@ -26,16 +28,21 @@ pub enum Flow {
 /// 该 trait 刻意保持精简：平台层负责帧时序与缩放策略，应用层负责场景逻辑。
 pub trait PlatformApp {
     /// 窗口已就绪，应用可创建渲染器。
-    fn resumed(&mut self, state: &mut PlatformState, window: &Window);
+    fn resumed(&mut self, state: &mut PlatformState, window: &NativeWindow);
 
     /// 发生了平台事件。
-    fn event(&mut self, state: &mut PlatformState, window: &Window, event: PlatformEvent) -> Flow;
+    fn event(
+        &mut self,
+        state: &mut PlatformState,
+        window: &NativeWindow,
+        event: PlatformEvent,
+    ) -> Flow;
 
     /// 绘制一帧。
     ///
     /// 在事件循环空闲点调用，此时所有待处理事件已派发完毕。
     /// 应用在此获取交换链图像、执行渲染并提交呈现。
-    fn frame(&mut self, state: &mut PlatformState, window: &Window) -> Flow;
+    fn frame(&mut self, state: &mut PlatformState, window: &NativeWindow) -> Flow;
 
     /// 窗口已隐藏；渲染器必须停止绘制。
     fn suspended(&mut self, state: &mut PlatformState) {
@@ -51,7 +58,7 @@ pub trait PlatformApp {
     fn accessibility_action(
         &mut self,
         state: &mut PlatformState,
-        window: &Window,
+        window: &NativeWindow,
         request: crate::a11y_bridge::A11yRequest,
     ) -> Flow {
         let _ = (state, window, request);
@@ -59,12 +66,12 @@ pub trait PlatformApp {
     }
 
     /// 辅助窗口已创建，可创建其独立渲染表面。
-    fn window_created(&mut self, state: &mut PlatformState, window: &Window) {
+    fn window_created(&mut self, state: &mut PlatformState, window: &NativeWindow) {
         self.resumed(state, window);
     }
 
     /// 辅助窗口即将关闭；释放其相关资源。
-    fn window_closing(&mut self, window: &Window) {
+    fn window_closing(&mut self, window: &NativeWindow) {
         let _ = window;
     }
 
@@ -148,7 +155,7 @@ impl PlatformWindow {
 
 /// 获取窗口的原始句柄，供 `vkCreateWin32SurfaceKHR` 使用。
 #[must_use]
-pub fn raw_window_handle(window: &Window) -> Option<raw_window_handle::RawWindowHandle> {
+pub fn raw_window_handle(window: &NativeWindow) -> Option<raw_window_handle::RawWindowHandle> {
     use raw_window_handle::HasWindowHandle;
     window.window_handle().ok().map(|handle| handle.as_raw())
 }
@@ -159,7 +166,7 @@ pub(crate) fn pump_a11y<A: PlatformApp>(
     app: &mut A,
     a11y: &mut Win32A11y,
     state: &mut PlatformState,
-    window: &Window,
+    window: &NativeWindow,
 ) -> Flow {
     for request in a11y.drain_requests() {
         if app.accessibility_action(state, window, request) == Flow::Exit {
@@ -1476,7 +1483,7 @@ mod win32 {
     }
 
     struct WindowEntry {
-        window: Window,
+        window: NativeWindow,
         state: PlatformState,
         a11y: Win32A11y,
         user_data: Rc<WindowUserData>,
@@ -1671,14 +1678,14 @@ mod win32 {
         // 清空隐藏定位阶段产生的中间尺寸消息，使应用在 resumed 时直接读取最终稳定尺寸。
         user_data.events.borrow_mut().clear();
 
-        let window = Window::new(
+        let window = NativeWindow::from_win32(Window::new(
             hwnd.0 as isize,
             hinstance.0 as isize,
             config.decorations,
             cursor,
             redraw_requested,
             destroyed,
-        );
+        ));
         let a11y = Win32A11y::new(hwnd.0 as isize);
         if config.visible {
             unsafe {
@@ -1791,15 +1798,17 @@ mod win32 {
 
         user_data.events.borrow_mut().clear();
 
-        let window = Window::new(
-            hwnd.0 as isize,
-            hinstance.0 as isize,
-            false,
-            cursor,
-            redraw_requested,
-            destroyed,
-        )
-        .with_popup_id(popup_id);
+        let window = NativeWindow::from_win32(
+            Window::new(
+                hwnd.0 as isize,
+                hinstance.0 as isize,
+                false,
+                cursor,
+                redraw_requested,
+                destroyed,
+            )
+            .with_popup_id(popup_id),
+        );
         let a11y = Win32A11y::new(hwnd.0 as isize);
         let popup_win_cfg = WindowConfig {
             title: String::new(),
@@ -1936,7 +1945,7 @@ mod win32 {
 
         let primary_entry = create_native_window(class_name, hinstance, &config)?;
         let mut primary_id = primary_entry.window.id();
-        let primary_hwnd_atomic = Arc::new(AtomicIsize::new(primary_entry.window.hwnd()));
+        let primary_hwnd_atomic = Arc::new(AtomicIsize::new(primary_entry.window.raw_win32_hwnd()));
 
         let wake_target = Arc::clone(&primary_hwnd_atomic);
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
@@ -2048,7 +2057,7 @@ mod win32 {
             // 当宿主窗口最小化或隐藏时，级联关闭其名下所有原生弹出窗并发出 PopupDismissed。
             for entry in &mut windows {
                 if entry.state.minimized || !entry.state.visible {
-                    let owner_id = crate::windows::WindowId(entry.window.hwnd() as u64);
+                    let owner_id = crate::windows::WindowId(entry.window.raw_win32_hwnd() as u64);
                     let dismissed = popup_registry.close_for_owner(owner_id);
                     for action in dismissed {
                         if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
@@ -2095,7 +2104,7 @@ mod win32 {
             for index in closing_indices.into_iter().rev() {
                 let entry = windows.remove(index);
                 let closed_was_primary = entry.window.id() == primary_id;
-                let owner_id = crate::windows::WindowId(entry.window.hwnd() as u64);
+                let owner_id = crate::windows::WindowId(entry.window.raw_win32_hwnd() as u64);
                 for action in popup_registry.close_for_owner(owner_id) {
                     if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
                         if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id) {
@@ -2114,7 +2123,8 @@ mod win32 {
                 if closed_was_primary {
                     if let Some(next_primary) = windows.first() {
                         primary_id = next_primary.window.id();
-                        primary_hwnd_atomic.store(next_primary.window.hwnd(), Ordering::Release);
+                        primary_hwnd_atomic
+                            .store(next_primary.window.raw_win32_hwnd(), Ordering::Release);
                     } else {
                         primary_hwnd_atomic.store(0, Ordering::Release);
                     }
@@ -2186,15 +2196,17 @@ mod win32 {
                         let owner_hwnd = windows
                             .iter()
                             .find(|w| {
-                                crate::windows::WindowId(w.window.hwnd() as u64) == config.owner
+                                crate::windows::WindowId(w.window.raw_win32_hwnd() as u64)
+                                    == config.owner
                             })
                             .or_else(|| windows.first())
                             .map(|w| w.hwnd);
                         if let Ok(mut popup_entry) = create_native_popup_window(
                             class_name, hinstance, owner_hwnd, id, &config,
                         ) {
-                            let popup_win_id =
-                                crate::windows::WindowId(popup_entry.window.hwnd() as u64);
+                            let popup_win_id = crate::windows::WindowId(
+                                popup_entry.window.raw_win32_hwnd() as u64,
+                            );
                             let _ = popup_registry.bind_native_window(id, popup_win_id);
                             app.window_created(&mut popup_entry.state, &popup_entry.window);
                             popup_windows.push((id, popup_entry));
@@ -2231,10 +2243,9 @@ mod win32 {
 
             // 响应应用侧显式关闭窗口请求，销毁对应原生 HWND 并级联回收其名下原生弹出窗。
             for close_id in app.take_window_close_requests() {
-                if let Some(pos) = windows
-                    .iter()
-                    .position(|e| crate::windows::WindowId(e.window.hwnd() as u64) == close_id)
-                {
+                if let Some(pos) = windows.iter().position(|e| {
+                    crate::windows::WindowId(e.window.raw_win32_hwnd() as u64) == close_id
+                }) {
                     let entry = windows.remove(pos);
                     let closed_was_primary = entry.window.id() == primary_id;
                     for action in popup_registry.close_for_owner(close_id) {
@@ -2257,7 +2268,7 @@ mod win32 {
                         if let Some(next_primary) = windows.first() {
                             primary_id = next_primary.window.id();
                             primary_hwnd_atomic
-                                .store(next_primary.window.hwnd(), Ordering::Release);
+                                .store(next_primary.window.raw_win32_hwnd(), Ordering::Release);
                         } else {
                             primary_hwnd_atomic.store(0, Ordering::Release);
                         }
@@ -2272,7 +2283,8 @@ mod win32 {
             if !windows.iter().any(|e| e.window.id() == primary_id) {
                 if let Some(next_primary) = windows.first() {
                     primary_id = next_primary.window.id();
-                    primary_hwnd_atomic.store(next_primary.window.hwnd(), Ordering::Release);
+                    primary_hwnd_atomic
+                        .store(next_primary.window.raw_win32_hwnd(), Ordering::Release);
                 }
             }
 

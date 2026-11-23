@@ -24,6 +24,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
+pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
 pub mod pacing;
@@ -51,6 +52,7 @@ pub use dialogs::{
     save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
+pub use native_window::NativeWindow;
 pub use ole_drag::{
     begin_outbound_file_drag, build_cf_hdrop_payload, OutboundFileDragOutcome,
     OutboundFileDragRequest,

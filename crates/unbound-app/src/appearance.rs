@@ -12,7 +12,7 @@ use unbound_backdrop::{
 };
 use unbound_platform::{
     accent_policy_export_available, clear_window_accent_tint, set_window_accent_tint,
-    set_window_backdrop, set_window_dark_mode, windows_build, FrameHitMetrics,
+    set_window_backdrop, set_window_dark_mode, windows_build, FrameHitMetrics, NativeWindow,
     WindowBackdropMaterial,
 };
 use unbound_theme::ThemeKind;
@@ -435,6 +435,41 @@ pub fn apply_appearance_diff_to_platform(
     }
     if let Some(dark) = diff.dark_mode {
         set_window_dark_mode(hwnd, dark);
+    }
+    if let Some(lock_mica) = diff.lock_mica {
+        if let Some(metrics) = metrics {
+            metrics.set_lock_mica_active(lock_mica);
+        }
+    }
+}
+
+/// 将外观差异中的平台级设置通过跨平台 [`NativeWindow`] 下发到原生窗口。
+///
+/// Windows 侧转发至 DWM / Accent Policy / 沉浸式深色模式；Linux/Wayland 侧对不支持的
+/// 原生后景能力安全无操作，不向业务层暴露裸 `hwnd`。
+pub fn apply_appearance_diff_to_window(
+    diff: &AppearanceDiff,
+    window: &NativeWindow,
+    metrics: Option<&FrameHitMetrics>,
+) {
+    if let Some(channel) = diff.channel {
+        match channel {
+            BackdropChannel::Dwm(material) => {
+                let _ = window.clear_accent_tint();
+                let _ = window.set_backdrop(material);
+            }
+            BackdropChannel::AccentTint(argb) => {
+                let _ = window.set_backdrop(WindowBackdropMaterial::None);
+                let _ = window.set_accent_tint(argb);
+            }
+            BackdropChannel::Off => {
+                let _ = window.clear_accent_tint();
+                let _ = window.set_backdrop(WindowBackdropMaterial::None);
+            }
+        }
+    }
+    if let Some(dark) = diff.dark_mode {
+        let _ = window.set_dark_mode(dark);
     }
     if let Some(lock_mica) = diff.lock_mica {
         if let Some(metrics) = metrics {

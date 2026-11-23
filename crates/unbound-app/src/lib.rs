@@ -74,8 +74,9 @@ pub mod state_store;
 pub mod window_runner;
 
 pub use appearance::{
-    apply_appearance_diff_to_platform, backdrop_channel_request, dwm_material_to_platform,
-    AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel, WindowAppearance,
+    apply_appearance_diff_to_platform, apply_appearance_diff_to_window, backdrop_channel_request,
+    dwm_material_to_platform, AppearanceCaps, AppearanceDiff, AppearanceIntent, BackdropChannel,
+    WindowAppearance,
 };
 pub use assets::{
     AssetHub, AssetResidency, ExternalTextureHandle, ExternalTextureOp, ExternalTextureState,
@@ -672,36 +673,8 @@ impl AppEventSender {
     }
 }
 
-/// 面向 `AppContext` 的平台无关剪贴板接口。
-pub trait ClipboardProvider {
-    /// 读取当前剪贴板文本（如有）。
-    fn get_text(&self) -> Option<String>;
-    /// 用 `text` 替换剪贴板内容。
-    fn set_text(&mut self, text: &str);
-}
-
-/// 用于无头测试及回退场景的内存剪贴板。
-#[derive(Clone, Debug, Default)]
-pub struct MemoryClipboard {
-    text: Option<String>,
-}
-
-impl MemoryClipboard {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl ClipboardProvider for MemoryClipboard {
-    fn get_text(&self) -> Option<String> {
-        self.text.clone()
-    }
-
-    fn set_text(&mut self, text: &str) {
-        self.text = Some(text.to_owned());
-    }
-}
+/// 复用 `unbound-platform` 统一的跨平台剪贴板接口与内存实现（消除重复定义）。
+pub use unbound_platform::{ClipboardError, ClipboardProvider, MemoryClipboard};
 
 /// 标签页命中目标（同时携带逻辑索引与稳定 `TabItem::id`）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -888,12 +861,12 @@ impl AppContext {
     /// 从当前激活的剪贴板提供者读取文本。
     #[must_use]
     pub fn clipboard_get(&self) -> Option<String> {
-        self.clipboard.borrow().get_text()
+        self.clipboard.borrow_mut().read_text().ok().flatten()
     }
 
     /// 向当前激活的剪贴板提供者写入文本。
     pub fn clipboard_set(&self, text: &str) {
-        self.clipboard.borrow_mut().set_text(text);
+        let _ = self.clipboard.borrow_mut().write_text(text);
     }
 
     /// 节点键对应的局部状态。
