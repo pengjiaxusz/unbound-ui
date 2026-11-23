@@ -11,7 +11,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 
 use crate::address_bar::{
-    compute_text_edit_visual, emit_address_bar_with_visual, AddressBarDesc, AddressBarState,
+    compute_text_edit_visual, emit_address_bar_with_dropdown, AddressBarDesc, AddressBarState,
     AddressBarTextVisual,
 };
 use crate::alert::{emit_alert, AlertDesc, Severity};
@@ -2507,21 +2507,13 @@ impl UiWidget for AddressBarDesc {
         let layout = crate::address_bar::compute_layout(&desc);
         let mut primary_glyphs = Vec::new();
         let mut placeholder_glyphs = Vec::new();
+        let mut dropdown_glyphs = Vec::new();
         let mut visual = AddressBarTextVisual::default();
         if state.editing {
-            let edit_text = if state.edit_core.text().is_empty() && !state.edit_buffer.is_empty() {
-                state.edit_buffer.as_str()
-            } else {
-                state.edit_core.text()
-            };
-            let text_x = layout.root_icon_rect.max().x + 6.0;
-            let edit_w = (layout.address_rect.max().x - text_x - 8.0).max(0.0);
-            let edit_r = Rect::new(
-                text_x,
-                layout.address_rect.origin.y,
-                edit_w,
-                layout.address_rect.size.y.max(0.0),
-            );
+            let edit_text = state.current_edit_text();
+            let show_edit_clear = !control.disabled && !edit_text.is_empty();
+            let edit_r = layout.edit_text_rect(show_edit_clear);
+            let edit_w = edit_r.size.x;
             // 活动编辑态保留未省略原文并按 `scroll_x` 平移起点，确保字形与光标/选区坐标严格一致。
             let scroll_x = state.edit_core.scroll_x();
             let scrolled_edit_r = Rect::new(
@@ -2539,6 +2531,21 @@ impl UiWidget for AddressBarDesc {
                     AlignX::Left,
                     AlignY::Middle,
                 ));
+                if let Some(suffix) = desc.inline_completion_suffix(edit_text) {
+                    let prefix_w = text_ctx.measure_line(edit_text, 12.5, 400).x;
+                    let ghost_x = scrolled_edit_r.origin.x + prefix_w;
+                    let ghost_w = (edit_r.max().x - ghost_x).max(0.0);
+                    if ghost_w > 0.0 {
+                        placeholder_glyphs.extend(text_ctx.shape_line(
+                            suffix,
+                            Rect::new(ghost_x, edit_r.origin.y, ghost_w, edit_r.size.y),
+                            12.5,
+                            400,
+                            AlignX::Left,
+                            AlignY::Middle,
+                        ));
+                    }
+                }
             }
             visual.edit_visual = compute_text_edit_visual(
                 &state.edit_core,
@@ -2637,13 +2644,50 @@ impl UiWidget for AddressBarDesc {
                 }
             }
         }
-        emit_address_bar_with_visual(
+        if !control.disabled {
+            if let Some(dd) =
+                layout.compute_dropdown_layout(&desc, state.editing, state.dropdown_open)
+            {
+                if let Some((_, items)) = desc.active_dropdown_items(state.editing) {
+                    for (idx, &row_r) in dd.item_rects.iter().enumerate() {
+                        if let Some(label) = items.get(idx) {
+                            let text_r = Rect::new(
+                                row_r.origin.x + 8.0,
+                                row_r.origin.y,
+                                (row_r.width() - 16.0).max(0.0),
+                                row_r.height().max(0.0),
+                            );
+                            if text_r.width() > 0.0 && !label.is_empty() {
+                                let elided = crate::elided_text::elide_text_with_measure(
+                                    label,
+                                    text_r.width(),
+                                    crate::elided_text::ElideMode::End,
+                                    |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                                );
+                                if !elided.display.is_empty() {
+                                    dropdown_glyphs.extend(text_ctx.shape_line(
+                                        &elided.display,
+                                        text_r,
+                                        12.0,
+                                        400,
+                                        AlignX::Left,
+                                        AlignY::Middle,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        emit_address_bar_with_dropdown(
             node,
             &desc,
             state,
             control,
             &primary_glyphs,
             &placeholder_glyphs,
+            &dropdown_glyphs,
             &visual,
         )
     }

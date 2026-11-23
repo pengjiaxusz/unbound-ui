@@ -51,6 +51,18 @@ const CHEVRON_WIDTH: f32 = 18.0;
 const DEFAULT_ADDRESS_BAR_Z: u16 = 450;
 /// 启用搜索框时，低于该总宽则自动折叠为图标按钮。
 const SEARCH_COLLAPSE_THRESHOLD: f32 = 420.0;
+/// 编辑态主地址框右侧清除按钮（`×`）尺寸（`22×22px`）。
+const EDIT_CLEAR_SIZE: f32 = 22.0;
+/// 主地址框最右侧历史下拉箭头按钮（`⌄`）宽度（`24px`）。
+const HISTORY_DROPDOWN_BUTTON_WIDTH: f32 = 24.0;
+/// 历史/补全下拉浮层单行高度（`28px`）。
+const DROPDOWN_ROW_HEIGHT: f32 = 28.0;
+/// 历史/补全下拉浮层内边距（`4px`）。
+const DROPDOWN_PADDING: f32 = 4.0;
+/// 历史/补全下拉浮层与地址框之间的垂直间距（`4px`）。
+const DROPDOWN_GAP: f32 = 4.0;
+/// 历史/补全下拉浮层最大同时可见条目数。
+const DROPDOWN_MAX_VISIBLE_ITEMS: usize = 8;
 
 /// 面包屑路径分段描述。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +140,15 @@ impl AsRef<str> for PathSegment {
     }
 }
 
+/// 地址栏下拉浮层条目来源模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AddressBarDropdownMode {
+    /// 最近访问的历史路径列表。
+    History,
+    /// 路径前缀自动补全建议列表。
+    Completion,
+}
+
 /// 双模地址栏离散交互事件。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AddressBarEvent {
@@ -153,6 +174,14 @@ pub enum AddressBarEvent {
     PathSubmitted(String),
     /// 取消原位路径编辑并恢复面包屑态。
     EditCancelled,
+    /// 在编辑态点击右侧清除按钮（`×`）清空了编辑缓冲。
+    EditCleared,
+    /// 点击历史下拉按钮展开/收起（或在非编辑态按 `Esc` 收起）历史下拉浮层。
+    HistoryDropdownToggled(bool),
+    /// 在历史下拉浮层中点击或按 `Enter` 选中了历史路径。
+    HistorySelected { index: usize, path: String },
+    /// 在编辑态按 `Tab`（或点击补全建议项）接受了路径前缀自动补全建议。
+    CompletionAccepted(String),
     /// 右侧内联搜索框内容发生变化。
     SearchChanged(String),
     /// 在右侧内联搜索框中按 `Enter` 提交搜索。
@@ -180,6 +209,12 @@ pub enum AddressBarHitKind {
     SegmentChevron(usize),
     /// 末段右侧空白编辑触发区（或编辑态文本框主体）。
     EditTrigger,
+    /// 编辑态主地址框右侧清除按钮（`×`）。
+    EditClear,
+    /// 主地址框最右侧历史下拉箭头按钮（`⌄`）。
+    HistoryDropdownButton,
+    /// 历史/补全下拉浮层中的第 `index` 行条目。
+    DropdownItem(usize),
     /// 右侧内联搜索框主体。
     SearchBox,
     /// 右侧内联搜索框清除按钮（`×`）。
@@ -222,6 +257,10 @@ pub struct AddressBarLayout {
     pub segments: Vec<SegmentLayout>,
     /// 末段右侧空白编辑触发区矩形。
     pub edit_trigger_rect: Rect,
+    /// 编辑态主地址框右侧清除 `×` 按钮矩形。
+    pub edit_clear_rect: Option<Rect>,
+    /// 主地址框右侧历史下拉箭头 `⌄` 按钮矩形（仅历史路径非空时分配）。
+    pub history_dropdown_rect: Option<Rect>,
     /// 可选右侧内联搜索框矩形。
     pub search_rect: Option<Rect>,
     /// 搜索框是否因窄窗折叠为图标按钮。
@@ -230,6 +269,17 @@ pub struct AddressBarLayout {
     pub search_icon_rect: Option<Rect>,
     /// 搜索框清除 `×` 按钮矩形。
     pub search_clear_rect: Option<Rect>,
+}
+
+/// 地址栏历史/补全下拉浮层确定性几何布局。
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddressBarDropdownLayout {
+    /// 当前浮层展示模式（历史路径或自动补全建议）。
+    pub mode: AddressBarDropdownMode,
+    /// 浮层整体容器矩形（锚定于 `address_rect` 正下方）。
+    pub popup_rect: Rect,
+    /// 每个可见条目的行矩形列表（索引与源列表前缀一一对应）。
+    pub item_rects: Vec<Rect>,
 }
 
 /// 地址栏与内联搜索框容器视觉风格。
@@ -253,6 +303,65 @@ pub enum SearchIconPlacement {
 }
 
 impl AddressBarLayout {
+    /// 计算编辑态主地址框内部可用的文本显示与输入区域（自动避让左侧根图标、右侧清除 `×` 与历史下拉按钮）。
+    #[must_use]
+    pub fn edit_text_rect(&self, show_clear: bool) -> Rect {
+        let left_x = self.root_icon_rect.max().x + 6.0;
+        let right_x = if show_clear {
+            self.edit_clear_rect
+                .map_or(self.address_rect.max().x - 8.0, |cr| cr.origin.x - 4.0)
+        } else if let Some(hr) = self.history_dropdown_rect {
+            hr.origin.x - 4.0
+        } else {
+            self.address_rect.max().x - 8.0
+        };
+        Rect::new(
+            left_x,
+            self.address_rect.origin.y,
+            (right_x - left_x).max(0.0),
+            self.address_rect.size.y.max(0.0),
+        )
+    }
+
+    /// 根据当前描述符与编辑/展开状态计算历史或补全下拉浮层的确定性几何布局。
+    #[must_use]
+    pub fn compute_dropdown_layout(
+        &self,
+        desc: &AddressBarDesc,
+        editing: bool,
+        dropdown_open: bool,
+    ) -> Option<AddressBarDropdownLayout> {
+        if !dropdown_open || self.address_rect.width() <= 0.0 {
+            return None;
+        }
+        let (mode, items) = desc.active_dropdown_items(editing)?;
+        let count = items.len().min(DROPDOWN_MAX_VISIBLE_ITEMS);
+        if count == 0 {
+            return None;
+        }
+        let popup_rect = Rect::new(
+            self.address_rect.origin.x,
+            self.address_rect.max().y + DROPDOWN_GAP,
+            self.address_rect.width(),
+            count as f32 * DROPDOWN_ROW_HEIGHT + DROPDOWN_PADDING * 2.0,
+        );
+        let row_w = (popup_rect.width() - DROPDOWN_PADDING * 2.0).max(16.0);
+        let mut item_rects = Vec::with_capacity(count);
+        for idx in 0..count {
+            item_rects.push(Rect::new(
+                popup_rect.origin.x + DROPDOWN_PADDING,
+                popup_rect.origin.y + DROPDOWN_PADDING + idx as f32 * DROPDOWN_ROW_HEIGHT,
+                row_w,
+                DROPDOWN_ROW_HEIGHT - 2.0,
+            ));
+        }
+        Some(AddressBarDropdownLayout {
+            mode,
+            popup_rect,
+            item_rects,
+        })
+    }
+
     /// 计算非折叠内联搜索框内部可用的文本显示与输入区域。
     ///
     /// 自动适配放大镜图标位于左侧或右侧、以及清除 `×` 按钮显隐时的边界留白。
@@ -309,6 +418,12 @@ pub struct AddressBarDesc {
     pub chrome_style: AddressBarChromeStyle,
     /// 搜索框放大镜图标置放位置（默认 [`SearchIconPlacement::Right`]）。
     pub search_icon_placement: SearchIconPlacement,
+    /// 最近访问的历史路径列表（非空时显示历史下拉按钮并支持编辑态/点击展开下拉浮层）。
+    pub history_paths: Vec<String>,
+    /// 路径前缀自动补全建议列表（编辑态非空时优先展示于下拉浮层并支持 `Tab` 接受）。
+    pub completion_suggestions: Vec<String>,
+    /// 可选单条行内自动补全建议槽位（支持次级色幽灵后缀展示与 `Tab` 接受）。
+    pub completion_hint: Option<String>,
     pub z: u16,
 }
 
@@ -344,6 +459,9 @@ impl AddressBarDesc {
             search_placeholder: String::new(),
             chrome_style: AddressBarChromeStyle::BorderlessPill,
             search_icon_placement: SearchIconPlacement::Right,
+            history_paths: Vec::new(),
+            completion_suggestions: Vec::new(),
+            completion_hint: None,
             z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
@@ -369,6 +487,9 @@ impl AddressBarDesc {
             search_placeholder: String::new(),
             chrome_style: AddressBarChromeStyle::BorderlessPill,
             search_icon_placement: SearchIconPlacement::Right,
+            history_paths: Vec::new(),
+            completion_suggestions: Vec::new(),
+            completion_hint: None,
             z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
@@ -428,6 +549,72 @@ impl AddressBarDesc {
     pub fn with_search_icon_placement(mut self, placement: SearchIconPlacement) -> Self {
         self.search_icon_placement = placement;
         self
+    }
+
+    /// 设置最近访问的历史路径列表（用于历史下拉浮层）。
+    #[must_use]
+    pub fn with_history_paths(mut self, history_paths: Vec<String>) -> Self {
+        self.history_paths = history_paths;
+        self
+    }
+
+    /// 设置路径前缀自动补全建议列表（用于编辑态补全浮层与 `Tab` 接受）。
+    #[must_use]
+    pub fn with_completion_suggestions(mut self, suggestions: Vec<String>) -> Self {
+        self.completion_suggestions = suggestions;
+        self
+    }
+
+    /// 设置行内路径前缀自动补全建议槽位（用于幽灵后缀展示与 `Tab` 接受）。
+    #[must_use]
+    pub fn with_completion_hint(mut self, hint: impl Into<String>) -> Self {
+        let hint = hint.into();
+        self.completion_hint = (!hint.is_empty()).then_some(hint);
+        self
+    }
+
+    /// 解析当前应展示在下拉浮层中的条目模式与只读切片。
+    ///
+    /// 编辑态下若 `completion_suggestions` 非空则优先展示补全建议，否则回退展示 `history_paths`。
+    #[must_use]
+    pub fn active_dropdown_items(
+        &self,
+        editing: bool,
+    ) -> Option<(AddressBarDropdownMode, &[String])> {
+        if editing && !self.completion_suggestions.is_empty() {
+            Some((
+                AddressBarDropdownMode::Completion,
+                &self.completion_suggestions,
+            ))
+        } else if !self.history_paths.is_empty() {
+            Some((AddressBarDropdownMode::History, &self.history_paths))
+        } else {
+            None
+        }
+    }
+
+    /// 计算编辑态下可紧接当前输入展示的自动补全幽灵后缀（优先取 `completion_hint`，其次取 `completion_suggestions` 首项）。
+    #[must_use]
+    pub fn inline_completion_suffix<'a>(&'a self, current_text: &str) -> Option<&'a str> {
+        if current_text.is_empty() {
+            return None;
+        }
+        let candidate = self
+            .completion_hint
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or_else(|| self.completion_suggestions.first().map(String::as_str))?;
+        if candidate.len() <= current_text.len() {
+            return None;
+        }
+        if candidate.starts_with(current_text)
+            || (candidate.is_char_boundary(current_text.len())
+                && candidate[..current_text.len()].eq_ignore_ascii_case(current_text))
+        {
+            Some(&candidate[current_text.len()..])
+        } else {
+            None
+        }
     }
 
     /// 设置绘制深度键。
@@ -576,9 +763,30 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
 
     let inner_y = address_rect.origin.y + 3.0;
     let inner_h = (address_rect.size.y - 6.0).max(16.0);
+    let history_dropdown_rect = if !desc.history_paths.is_empty()
+        && address_rect.width() >= ROOT_ICON_SIZE + HISTORY_DROPDOWN_BUTTON_WIDTH + 16.0
+    {
+        let hd_x = (address_rect.max().x - HISTORY_DROPDOWN_BUTTON_WIDTH - 4.0)
+            .max(address_rect.origin.x);
+        Some(Rect::new(hd_x, inner_y, HISTORY_DROPDOWN_BUTTON_WIDTH, inner_h))
+    } else {
+        None
+    };
+    let clear_s = EDIT_CLEAR_SIZE
+        .min(address_rect.size.y)
+        .min(address_rect.size.x);
+    let clear_y = address_rect.origin.y + (address_rect.size.y - clear_s) * 0.5;
+    let clear_right =
+        history_dropdown_rect.map_or(address_rect.max().x - 4.0, |hr| hr.origin.x - 2.0);
+    let clear_x = (clear_right - clear_s).max(root_icon_rect.max().x + 4.0);
+    let edit_clear_rect = (clear_s > 0.0 && clear_x + clear_s <= address_rect.max().x)
+        .then_some(Rect::new(clear_x, clear_y, clear_s, clear_s));
+    let right_content_edge =
+        history_dropdown_rect.map_or(address_rect.max().x, |hr| hr.origin.x - 2.0);
+
     // 根图标后置 `›` 分隔符，使面包屑呈现 `[图标] > 分段1 > 分段2 >`
     let root_chevron_rect = if !desc.segments.is_empty()
-        && root_icon_rect.max().x + 2.0 + ROOT_CHEVRON_WIDTH <= address_rect.max().x
+        && root_icon_rect.max().x + 2.0 + ROOT_CHEVRON_WIDTH <= right_content_edge
     {
         Some(Rect::new(
             root_icon_rect.max().x + 2.0,
@@ -592,7 +800,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     let content_start_x =
         root_chevron_rect.map_or(root_icon_rect.max().x + 4.0, |rc| rc.max().x + 2.0);
     let available_total =
-        (address_rect.max().x - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
+        (right_content_edge - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
 
     // 预估每段所需宽度（标签 + 可选 `›` 箭头），对 CJK 宽字符按双倍宽度系数估算
     let seg_widths: Vec<(f32, f32)> = desc
@@ -632,7 +840,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     };
 
     let mut segments = Vec::with_capacity(desc.segments.len().saturating_sub(overflow_count));
-    let seg_right_limit = (address_rect.max().x - MIN_EDIT_TRIGGER_WIDTH).max(cursor_x);
+    let seg_right_limit = (right_content_edge - MIN_EDIT_TRIGGER_WIDTH).max(cursor_x);
     for (idx, &(label_w, chev_w)) in seg_widths.iter().enumerate().skip(overflow_count) {
         let max_w = (seg_right_limit - cursor_x).max(0.0);
         if max_w < 16.0 && !segments.is_empty() {
@@ -641,7 +849,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         let actual_label_w = label_w.min((max_w - chev_w).max(16.0));
         let label_rect = Rect::new(cursor_x, inner_y, actual_label_w, inner_h);
         cursor_x = label_rect.max().x;
-        let chevron_rect = if chev_w > 0.0 && cursor_x + chev_w <= address_rect.max().x {
+        let chevron_rect = if chev_w > 0.0 && cursor_x + chev_w <= right_content_edge {
             let cr = Rect::new(cursor_x, inner_y, chev_w, inner_h);
             cursor_x = cr.max().x;
             Some(cr)
@@ -657,9 +865,9 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     }
 
     let edit_trigger_rect = Rect::new(
-        cursor_x.min(address_rect.max().x),
+        cursor_x.min(right_content_edge),
         address_rect.origin.y,
-        (address_rect.max().x - cursor_x).max(0.0),
+        (right_content_edge - cursor_x).max(0.0),
         address_rect.size.y,
     );
 
@@ -675,6 +883,8 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         overflow_rect,
         segments,
         edit_trigger_rect,
+        edit_clear_rect,
+        history_dropdown_rect,
         search_rect,
         search_collapsed,
         search_icon_rect,
@@ -707,6 +917,10 @@ pub struct AddressBarState {
     pub can_go_forward: bool,
     /// 缓存的向上一级可用状态。
     pub can_go_up: bool,
+    /// 历史/补全下拉浮层是否处于展开状态。
+    pub dropdown_open: bool,
+    /// 历史/补全下拉浮层当前键盘高亮条目索引。
+    pub dropdown_highlighted: Option<usize>,
     /// 当前指针悬停的子热区（用于高亮对应按钮或分段）。
     pub hovered_hit: Option<AddressBarHitKind>,
     /// 当前指针按下的子热区（用于高亮对应按钮或分段的按压态）。
@@ -725,23 +939,138 @@ impl AddressBarState {
         std::mem::take(&mut self.pending_events)
     }
 
-    /// 切换进入全路径编辑态并全选路径文本。
+    /// 返回当前活动编辑缓冲区文本（兼容仅写入 `edit_buffer` 的既有调用点）。
+    #[must_use]
+    pub fn current_edit_text(&self) -> &str {
+        if self.edit_core.text().is_empty() && !self.edit_buffer.is_empty() {
+            self.edit_buffer.as_str()
+        } else {
+            self.edit_core.text()
+        }
+    }
+
+    /// 切换进入全路径编辑态并全选路径文本（同时打开下拉浮层以便有历史/补全条目时立即展示）。
     pub fn begin_edit(&mut self, current_path: &str) {
         self.editing = true;
         self.search_focused = false;
+        self.dropdown_open = true;
+        self.dropdown_highlighted = None;
         self.edit_buffer = current_path.to_owned();
         self.edit_core.set_text(current_path);
         self.edit_core.select_all();
     }
 
+    /// 清空编辑态路径缓冲并派发 [`AddressBarEvent::EditCleared`]。
+    pub fn clear_edit(&mut self) -> bool {
+        if !self.editing || self.current_edit_text().is_empty() {
+            return false;
+        }
+        self.edit_core.set_text("");
+        self.edit_buffer.clear();
+        self.dropdown_highlighted = None;
+        self.pending_events.push(AddressBarEvent::EditCleared);
+        true
+    }
+
+    /// 显式展开历史路径下拉浮层并发射 [`AddressBarEvent::HistoryDropdownToggled`]。
+    pub fn open_history_dropdown(&mut self, desc: &AddressBarDesc) -> bool {
+        if desc.history_paths.is_empty() {
+            return false;
+        }
+        self.dropdown_open = true;
+        self.dropdown_highlighted = None;
+        self.search_focused = false;
+        self.pending_events
+            .push(AddressBarEvent::HistoryDropdownToggled(true));
+        true
+    }
+
+    /// 收起当前展开的历史或补全下拉浮层。
+    pub fn close_dropdown(&mut self) -> bool {
+        if !self.dropdown_open {
+            return false;
+        }
+        self.dropdown_open = false;
+        self.dropdown_highlighted = None;
+        true
+    }
+
+    /// 解析当前 `Tab` 按键应接受的路径前缀自动补全目标。
+    #[must_use]
+    pub fn resolve_completion(&self, desc: &AddressBarDesc) -> Option<String> {
+        if !self.editing {
+            return None;
+        }
+        if let Some((AddressBarDropdownMode::Completion, items)) = desc.active_dropdown_items(true)
+        {
+            return self
+                .dropdown_highlighted
+                .and_then(|idx| items.get(idx))
+                .or_else(|| items.first())
+                .cloned();
+        }
+        if let Some(hint) = desc.completion_hint.as_deref().filter(|s| !s.is_empty()) {
+            return Some(hint.to_owned());
+        }
+        if self.dropdown_open {
+            if let Some(idx) = self.dropdown_highlighted {
+                if let Some(path) = desc.history_paths.get(idx) {
+                    return Some(path.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// 接受当前路径前缀自动补全建议，写回编辑缓冲并派发 [`AddressBarEvent::CompletionAccepted`]。
+    pub fn accept_completion(&mut self, desc: &AddressBarDesc) -> bool {
+        let Some(accepted) = self.resolve_completion(desc) else {
+            return false;
+        };
+        self.edit_core.set_text(&accepted);
+        self.edit_buffer = accepted.clone();
+        self.dropdown_highlighted = None;
+        self.pending_events
+            .push(AddressBarEvent::CompletionAccepted(accepted));
+        true
+    }
+
+    fn move_dropdown_highlight(
+        &mut self,
+        desc: &AddressBarDesc,
+        editing: bool,
+        delta: isize,
+    ) -> bool {
+        let Some((_, items)) = desc.active_dropdown_items(editing) else {
+            return false;
+        };
+        let visible_len = items.len().min(DROPDOWN_MAX_VISIBLE_ITEMS);
+        if visible_len == 0 {
+            return false;
+        }
+        self.dropdown_open = true;
+        self.dropdown_highlighted = Some(match self.dropdown_highlighted {
+            None => {
+                if delta >= 0 {
+                    0
+                } else {
+                    visible_len - 1
+                }
+            }
+            Some(curr) => {
+                let clamped = curr.min(visible_len - 1) as isize;
+                (clamped + delta).rem_euclid(visible_len as isize) as usize
+            }
+        });
+        true
+    }
+
     /// 提交编辑路径、发射 [`AddressBarEvent::PathSubmitted`] 并解析为分段列表。
     pub fn commit_edit(&mut self) -> Vec<String> {
         self.editing = false;
-        let text = if self.edit_core.text().is_empty() && !self.edit_buffer.is_empty() {
-            self.edit_buffer.clone()
-        } else {
-            self.edit_core.text().to_owned()
-        };
+        self.dropdown_open = false;
+        self.dropdown_highlighted = None;
+        let text = self.current_edit_text().to_owned();
         self.edit_buffer = text.clone();
         self.pending_events
             .push(AddressBarEvent::PathSubmitted(text.clone()));
@@ -755,14 +1084,18 @@ impl AddressBarState {
     pub fn cancel_edit(&mut self) {
         if self.editing {
             self.editing = false;
+            self.dropdown_open = false;
+            self.dropdown_highlighted = None;
             self.pending_events.push(AddressBarEvent::EditCancelled);
         }
     }
 
-    /// 失焦处理：若正在编辑路径则取消编辑；同时取消搜索框聚焦。
+    /// 失焦处理：若正在编辑路径则取消编辑；同时取消搜索框聚焦并收起下拉浮层。
     pub fn handle_blur(&mut self) {
         self.cancel_edit();
         self.search_focused = false;
+        self.dropdown_open = false;
+        self.dropdown_highlighted = None;
     }
 
     /// 清空右侧内联搜索框内容并发射 `SearchChanged("")`。
@@ -780,6 +1113,15 @@ impl AddressBarState {
     #[must_use]
     pub fn hit_test(&self, desc: &AddressBarDesc, point: Vec2) -> Option<AddressBarHitKind> {
         let layout = compute_layout(desc);
+        if let Some(dd) = layout.compute_dropdown_layout(desc, self.editing, self.dropdown_open) {
+            if dd.popup_rect.contains_point(point) {
+                for (idx, row_r) in dd.item_rects.iter().enumerate() {
+                    if row_r.contains_point(point) {
+                        return Some(AddressBarHitKind::DropdownItem(idx));
+                    }
+                }
+            }
+        }
         if layout.back_rect.is_some_and(|r| r.contains_point(point)) {
             return Some(AddressBarHitKind::NavBack);
         }
@@ -806,7 +1148,20 @@ impl AddressBarState {
             }
         }
         if layout.address_rect.contains_point(point) {
+            if layout
+                .history_dropdown_rect
+                .is_some_and(|r| r.contains_point(point))
+            {
+                return Some(AddressBarHitKind::HistoryDropdownButton);
+            }
             if self.editing {
+                if !self.current_edit_text().is_empty()
+                    && layout
+                        .edit_clear_rect
+                        .is_some_and(|r| r.contains_point(point))
+                {
+                    return Some(AddressBarHitKind::EditClear);
+                }
                 return Some(AddressBarHitKind::EditTrigger);
             }
             if layout
@@ -847,6 +1202,7 @@ impl AddressBarState {
                 if !desc.can_go_back {
                     return false;
                 }
+                self.close_dropdown();
                 self.pending_events.push(AddressBarEvent::NavigateBack);
                 true
             }
@@ -854,6 +1210,7 @@ impl AddressBarState {
                 if !desc.can_go_forward {
                     return false;
                 }
+                self.close_dropdown();
                 self.pending_events.push(AddressBarEvent::NavigateForward);
                 true
             }
@@ -861,15 +1218,18 @@ impl AddressBarState {
                 if !desc.can_go_up {
                     return false;
                 }
+                self.close_dropdown();
                 self.pending_events.push(AddressBarEvent::NavigateUp);
                 true
             }
             Some(AddressBarHitKind::Refresh) => {
+                self.close_dropdown();
                 self.pending_events.push(AddressBarEvent::Refresh);
                 true
             }
             Some(AddressBarHitKind::RootChevron) => {
                 if let Some(rc_r) = layout.root_chevron_rect {
+                    self.close_dropdown();
                     self.pending_events
                         .push(AddressBarEvent::RootChevronDropdown {
                             anchor_rect: rect_to_i32(rc_r),
@@ -880,6 +1240,7 @@ impl AddressBarState {
             }
             Some(AddressBarHitKind::OverflowButton) => {
                 if let (Some(ov_r), Some(first)) = (layout.overflow_rect, desc.segments.first()) {
+                    self.close_dropdown();
                     self.pending_events
                         .push(AddressBarEvent::SubfolderMenuRequested {
                             index: 0,
@@ -892,6 +1253,7 @@ impl AddressBarState {
             }
             Some(AddressBarHitKind::Segment(index)) => {
                 if let Some(seg) = desc.segments.get(index) {
+                    self.close_dropdown();
                     self.pending_events.push(AddressBarEvent::SegmentClicked {
                         index,
                         path: seg.path.clone(),
@@ -906,6 +1268,7 @@ impl AddressBarState {
                     layout.segments.iter().find(|s| s.index == index),
                 ) {
                     if let Some(chev_r) = seg_layout.chevron_rect {
+                        self.close_dropdown();
                         self.pending_events
                             .push(AddressBarEvent::SubfolderMenuRequested {
                                 index,
@@ -923,14 +1286,51 @@ impl AddressBarState {
                 }
                 true
             }
+            Some(AddressBarHitKind::EditClear) => self.clear_edit(),
+            Some(AddressBarHitKind::HistoryDropdownButton) => {
+                self.search_focused = false;
+                self.dropdown_open = !self.dropdown_open;
+                self.dropdown_highlighted = None;
+                self.pending_events
+                    .push(AddressBarEvent::HistoryDropdownToggled(self.dropdown_open));
+                true
+            }
+            Some(AddressBarHitKind::DropdownItem(index)) => {
+                if let Some((mode, items)) = desc.active_dropdown_items(self.editing) {
+                    if let Some(path) = items.get(index).cloned() {
+                        match mode {
+                            AddressBarDropdownMode::History => {
+                                self.editing = false;
+                                self.dropdown_open = false;
+                                self.dropdown_highlighted = None;
+                                self.edit_buffer = path.clone();
+                                self.edit_core.set_text(&path);
+                                self.pending_events
+                                    .push(AddressBarEvent::HistorySelected { index, path });
+                                return true;
+                            }
+                            AddressBarDropdownMode::Completion => {
+                                self.edit_core.set_text(&path);
+                                self.edit_buffer = path.clone();
+                                self.dropdown_highlighted = None;
+                                self.pending_events
+                                    .push(AddressBarEvent::CompletionAccepted(path));
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
             Some(AddressBarHitKind::SearchClear) => self.clear_search(),
             Some(AddressBarHitKind::SearchBox) => {
                 self.cancel_edit();
+                self.close_dropdown();
                 self.search_focused = true;
                 true
             }
             None => {
-                let was_active = self.editing || self.search_focused;
+                let was_active = self.editing || self.search_focused || self.dropdown_open;
                 self.handle_blur();
                 was_active
             }
@@ -949,7 +1349,48 @@ impl AddressBarState {
 
         if self.editing {
             match chord.key {
+                KeyName::Named("Tab") if !chord.ctrl && !chord.alt && !chord.meta => {
+                    return self.accept_completion(desc);
+                }
+                KeyName::Named("ArrowDown") if !chord.ctrl && !chord.alt && !chord.meta => {
+                    if self.move_dropdown_highlight(desc, true, 1) {
+                        return true;
+                    }
+                }
+                KeyName::Named("ArrowUp") if !chord.ctrl && !chord.alt && !chord.meta => {
+                    if self.move_dropdown_highlight(desc, true, -1) {
+                        return true;
+                    }
+                }
                 KeyName::Named("Enter") => {
+                    if self.dropdown_open {
+                        if let Some(idx) = self.dropdown_highlighted {
+                            if let Some((mode, items)) = desc.active_dropdown_items(true) {
+                                if let Some(path) = items.get(idx).cloned() {
+                                    self.editing = false;
+                                    self.dropdown_open = false;
+                                    self.dropdown_highlighted = None;
+                                    self.edit_buffer = path.clone();
+                                    self.edit_core.set_text(&path);
+                                    match mode {
+                                        AddressBarDropdownMode::History => {
+                                            self.pending_events.push(
+                                                AddressBarEvent::HistorySelected {
+                                                    index: idx,
+                                                    path,
+                                                },
+                                            );
+                                        }
+                                        AddressBarDropdownMode::Completion => {
+                                            self.pending_events
+                                                .push(AddressBarEvent::PathSubmitted(path));
+                                        }
+                                    }
+                                    return true;
+                                }
+                            }
+                        }
+                    }
                     self.commit_edit();
                     return true;
                 }
@@ -968,6 +1409,42 @@ impl AddressBarState {
                 }
             }
             return false;
+        }
+
+        if self.dropdown_open {
+            match chord.key {
+                KeyName::Named("ArrowDown") if !chord.ctrl && !chord.alt && !chord.meta => {
+                    return self.move_dropdown_highlight(desc, false, 1);
+                }
+                KeyName::Named("ArrowUp") if !chord.ctrl && !chord.alt && !chord.meta => {
+                    return self.move_dropdown_highlight(desc, false, -1);
+                }
+                KeyName::Named("Enter") => {
+                    if let Some(idx) = self.dropdown_highlighted {
+                        if let Some((_, items)) = desc.active_dropdown_items(false) {
+                            if let Some(path) = items.get(idx).cloned() {
+                                self.dropdown_open = false;
+                                self.dropdown_highlighted = None;
+                                self.edit_buffer = path.clone();
+                                self.edit_core.set_text(&path);
+                                self.pending_events.push(AddressBarEvent::HistorySelected {
+                                    index: idx,
+                                    path,
+                                });
+                                return true;
+                            }
+                        }
+                    }
+                }
+                KeyName::Named("Escape") => {
+                    self.dropdown_open = false;
+                    self.dropdown_highlighted = None;
+                    self.pending_events
+                        .push(AddressBarEvent::HistoryDropdownToggled(false));
+                    return true;
+                }
+                _ => {}
+            }
         }
 
         if self.search_focused {
@@ -1008,6 +1485,8 @@ impl AddressBarState {
             let outcome = reduce_text_input(&editor_desc, &mut self.edit_core, event);
             if outcome.changed {
                 self.edit_buffer = self.edit_core.text().to_owned();
+                self.dropdown_highlighted = None;
+                self.dropdown_open = true;
             }
             return outcome;
         }
@@ -1039,8 +1518,11 @@ pub const fn address_bar_sub_node(node: u64, kind: AddressBarHitKind) -> u64 {
         AddressBarHitKind::EditTrigger => 0x4142_0006,
         AddressBarHitKind::SearchBox => 0x4142_0007,
         AddressBarHitKind::SearchClear => 0x4142_0008,
+        AddressBarHitKind::EditClear => 0x4142_000A,
+        AddressBarHitKind::HistoryDropdownButton => 0x4142_000B,
         AddressBarHitKind::Segment(idx) => 0x4142_1000 + idx as u64,
         AddressBarHitKind::SegmentChevron(idx) => 0x4142_2000 + idx as u64,
+        AddressBarHitKind::DropdownItem(idx) => 0x4142_3000 + idx as u64,
     };
     node ^ salt
 }
@@ -1440,6 +1922,33 @@ pub fn emit_address_bar_text_layer(
     }
 }
 
+/// 发射地址栏历史/补全下拉浮层的条目文本裁剪层。
+#[must_use]
+pub fn emit_address_bar_dropdown_text_layer(
+    dropdown_glyphs: &[GlyphQuad],
+    disabled: bool,
+    z: u16,
+) -> WidgetOutput {
+    let mut primitives = Vec::with_capacity(dropdown_glyphs.len());
+    let mut payloads = Vec::with_capacity(dropdown_glyphs.len());
+    emit_glyphs(
+        dropdown_glyphs,
+        if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        },
+        z.saturating_add(6),
+        &mut primitives,
+        &mut payloads,
+    );
+    WidgetOutput {
+        primitives,
+        payloads,
+        ..Default::default()
+    }
+}
+
 /// 发射双模复合地址栏（外部导航按钮簇 + 一体化双模地址框 + 可选内联搜索框，严格保持 24 态恒定图元数）。
 #[must_use]
 pub fn emit_address_bar(
@@ -1478,6 +1987,7 @@ pub fn emit_address_bar_chrome(
         control,
         &[],
         &[],
+        &[],
         &AddressBarTextVisual::default(),
         false,
     )
@@ -1494,6 +2004,31 @@ pub fn emit_address_bar_with_visual(
     placeholder_glyphs: &[GlyphQuad],
     visual: &AddressBarTextVisual,
 ) -> WidgetOutput {
+    emit_address_bar_with_dropdown(
+        node,
+        desc,
+        state,
+        control,
+        primary_glyphs,
+        placeholder_glyphs,
+        &[],
+        visual,
+    )
+}
+
+/// 发射双模复合地址栏，并在展开历史/补全下拉浮层时一并绘制条目文本字形。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn emit_address_bar_with_dropdown(
+    node: u64,
+    desc: &AddressBarDesc,
+    state: &AddressBarState,
+    control: ControlState,
+    primary_glyphs: &[GlyphQuad],
+    placeholder_glyphs: &[GlyphQuad],
+    dropdown_glyphs: &[GlyphQuad],
+    visual: &AddressBarTextVisual,
+) -> WidgetOutput {
     emit_address_bar_inner(
         node,
         desc,
@@ -1501,6 +2036,7 @@ pub fn emit_address_bar_with_visual(
         control,
         primary_glyphs,
         placeholder_glyphs,
+        dropdown_glyphs,
         visual,
         true,
     )
@@ -1514,12 +2050,13 @@ fn emit_address_bar_inner(
     control: ControlState,
     primary_glyphs: &[GlyphQuad],
     placeholder_glyphs: &[GlyphQuad],
+    dropdown_glyphs: &[GlyphQuad],
     visual: &AddressBarTextVisual,
     emit_text_overlays: bool,
 ) -> WidgetOutput {
     let layout = compute_layout(desc);
     let z = desc.z;
-    let total_glyphs = primary_glyphs.len() + placeholder_glyphs.len();
+    let total_glyphs = primary_glyphs.len() + placeholder_glyphs.len() + dropdown_glyphs.len();
     let mut primitives = Vec::with_capacity(36 + layout.segments.len() * 4 + total_glyphs);
     let mut payloads = Vec::with_capacity(20 + layout.segments.len() * 2 + total_glyphs);
 
@@ -1611,6 +2148,8 @@ fn emit_address_bar_inner(
                 | AddressBarHitKind::Segment(_)
                 | AddressBarHitKind::SegmentChevron(_)
                 | AddressBarHitKind::EditTrigger
+                | AddressBarHitKind::EditClear
+                | AddressBarHitKind::HistoryDropdownButton
         )
     ) || matches!(
         state.pressed_hit,
@@ -1620,6 +2159,8 @@ fn emit_address_bar_inner(
                 | AddressBarHitKind::Segment(_)
                 | AddressBarHitKind::SegmentChevron(_)
                 | AddressBarHitKind::EditTrigger
+                | AddressBarHitKind::EditClear
+                | AddressBarHitKind::HistoryDropdownButton
         )
     );
     let bg = if control.disabled {
@@ -1771,6 +2312,73 @@ fn emit_address_bar_inner(
             primitives.push(surface(chev_r, INNER_RADIUS, chev_fill, z + 1));
             emit_segment_chevron(chev_r, chev_color, z + 2, &mut primitives, &mut payloads);
         }
+    }
+
+    // 编辑态右侧清除 `×` 按钮（图元槽位恒定，非编辑态或缓冲为空时置透明以保持 24 态图元数恒定）
+    if let Some(clear_r) = layout.edit_clear_rect {
+        let show_edit_clear =
+            !control.disabled && state.editing && !state.current_edit_text().is_empty();
+        let clear_fill = if !show_edit_clear {
+            Token::NONE
+        } else if state.pressed_hit == Some(AddressBarHitKind::EditClear)
+            || (state.hovered_hit == Some(AddressBarHitKind::EditClear)
+                && control.phase == PointerPhase::Pressed)
+        {
+            Token::PRESSED
+        } else if state.hovered_hit == Some(AddressBarHitKind::EditClear) {
+            Token::HOVER
+        } else {
+            Token::NONE
+        };
+        let clear_color = if show_edit_clear {
+            Token::TEXT_SECONDARY
+        } else {
+            Token::NONE
+        };
+        primitives.push(surface(clear_r, INNER_RADIUS, clear_fill, z + 1));
+        emit_shell_icon_primitives(
+            ShellIcon::Close,
+            clear_r,
+            clear_color,
+            clear_fill,
+            z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
+
+    // 主地址框最右侧历史下拉箭头 `⌄` 按钮（仅历史路径非空时绘制）
+    if let Some(hd_r) = layout.history_dropdown_rect {
+        let active = !control.disabled;
+        let hd_fill = if !active {
+            Token::NONE
+        } else if state.pressed_hit == Some(AddressBarHitKind::HistoryDropdownButton)
+            || (state.hovered_hit == Some(AddressBarHitKind::HistoryDropdownButton)
+                && control.phase == PointerPhase::Pressed)
+        {
+            Token::PRESSED
+        } else if state.hovered_hit == Some(AddressBarHitKind::HistoryDropdownButton)
+            || state.dropdown_open
+        {
+            Token::HOVER
+        } else {
+            Token::NONE
+        };
+        let hd_color = if active {
+            Token::TEXT_SECONDARY
+        } else {
+            Token::TEXT_DISABLED
+        };
+        primitives.push(surface(hd_r, INNER_RADIUS, hd_fill, z + 1));
+        emit_shell_icon_primitives(
+            ShellIcon::ChevronDown,
+            hd_r,
+            hd_color,
+            hd_fill,
+            z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
     }
 
     // 3. 右段：可选可折叠内联搜索框
@@ -2066,6 +2674,83 @@ fn emit_address_bar_inner(
             A11yNode::new(Role::TextInput, desc.full_path(), edit_r),
             true,
         );
+
+        if state.editing && !state.current_edit_text().is_empty() {
+            if let Some(clear_r) = layout.edit_clear_rect {
+                let clear_sub = address_bar_sub_node(node, AddressBarHitKind::EditClear);
+                out.with_sub_control(
+                    clear_sub,
+                    HitRegion::new(clear_sub, LAYER, u32::from(z) + 2, clear_r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::Button, "Clear address", clear_r).clickable(),
+                    true,
+                );
+            }
+        }
+
+        if let Some(hd_r) = layout.history_dropdown_rect {
+            let hd_sub = address_bar_sub_node(node, AddressBarHitKind::HistoryDropdownButton);
+            out.with_sub_control(
+                hd_sub,
+                HitRegion::new(hd_sub, LAYER, u32::from(z) + 2, hd_r)
+                    .with_cursor(CursorKind::Pointer),
+                A11yNode::new(Role::Button, "Address history", hd_r).clickable(),
+                true,
+            );
+        }
+
+        if let Some(dd) = layout.compute_dropdown_layout(desc, state.editing, state.dropdown_open) {
+            let items = desc
+                .active_dropdown_items(state.editing)
+                .map_or(&[][..], |(_, slice)| slice);
+            let popup_z = z.saturating_add(4);
+            let row_z = z.saturating_add(5);
+            let glyph_z = z.saturating_add(6);
+            out.primitives.push(outlined(
+                dd.popup_rect,
+                8.0,
+                Token::OVERLAY_BG,
+                Token::CARD_BORDER,
+                1.0,
+                6.0,
+                popup_z,
+            ));
+            for (idx, &row_r) in dd.item_rects.iter().enumerate() {
+                let item_kind = AddressBarHitKind::DropdownItem(idx);
+                let row_fill = if state.pressed_hit == Some(item_kind)
+                    || (state.hovered_hit == Some(item_kind)
+                        && control.phase == PointerPhase::Pressed)
+                {
+                    Token::PRESSED
+                } else if state.dropdown_highlighted == Some(idx) {
+                    Token::SELECTION
+                } else if state.hovered_hit == Some(item_kind) {
+                    Token::HOVER
+                } else {
+                    Token::NONE
+                };
+                out.primitives
+                    .push(surface(row_r, INNER_RADIUS, row_fill, row_z));
+                let item_sub = address_bar_sub_node(node, item_kind);
+                let item_label = items.get(idx).map_or("", String::as_str);
+                out.with_sub_control(
+                    item_sub,
+                    HitRegion::new(item_sub, LAYER, u32::from(row_z), row_r)
+                        .with_cursor(CursorKind::Pointer),
+                    A11yNode::new(Role::ListItem, item_label, row_r).clickable(),
+                    true,
+                );
+            }
+            if !dropdown_glyphs.is_empty() {
+                emit_glyphs(
+                    dropdown_glyphs,
+                    Token::TEXT_PRIMARY,
+                    glyph_z,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+            }
+        }
 
         if let Some(sr) = layout.search_rect {
             let search_sub = address_bar_sub_node(node, AddressBarHitKind::SearchBox);
@@ -2878,5 +3563,256 @@ mod tests {
         assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert_eq!(disabled_img.border_token_or_tex, 64);
         assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+    }
+
+    #[test]
+    fn edit_clear_button_renders_in_edit_mode_clears_buffer_and_emits_event() {
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        let clear_r = layout.edit_clear_rect.expect("edit clear rect");
+        let clear_sub = address_bar_sub_node(1, AddressBarHitKind::EditClear);
+
+        // 非编辑态：不命中清除按钮，也不注册 EditClear 子热区
+        let mut state = AddressBarState::new();
+        assert_ne!(
+            state.hit_test(&desc, clear_r.center()),
+            Some(AddressBarHitKind::EditClear)
+        );
+        let out_idle = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        assert!(
+            !out_idle.sub_hits.iter().any(|h| h.node == clear_sub),
+            "EditClear sub-control must not be registered outside edit mode"
+        );
+
+        // 进入编辑态：注册独立子热区并支持悬停/按压反馈
+        state.begin_edit(&desc.full_path());
+        assert_eq!(
+            state.hit_test(&desc, clear_r.center()),
+            Some(AddressBarHitKind::EditClear)
+        );
+        let edit_text_r = layout.edit_text_rect(true);
+        assert!(
+            edit_text_r.max().x <= clear_r.origin.x,
+            "edit text rect must stay to the left of edit clear button"
+        );
+
+        state.hovered_hit = Some(AddressBarHitKind::EditClear);
+        state.pressed_hit = Some(AddressBarHitKind::EditClear);
+        let out_edit = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        assert!(
+            out_edit.sub_hits.iter().any(|h| h.node == clear_sub),
+            "EditClear sub-control must be registered in active edit mode"
+        );
+        let clear_surface = out_edit
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - clear_r.origin.x).abs() < 0.5
+                    && (p.local_pos[1] - clear_r.origin.y).abs() < 0.5
+                    && (p.size[0] - clear_r.size.x).abs() < 0.5
+            })
+            .expect("edit clear surface primitive");
+        assert_eq!(
+            clear_surface.fill_token_or_uv,
+            u32::from(Token::PRESSED.raw())
+        );
+
+        // 点击清除按钮：清空编辑缓冲、保持编辑态并派发 EditCleared
+        assert!(state.handle_click(&desc, clear_r.center()));
+        assert!(state.editing);
+        assert!(state.edit_core.text().is_empty());
+        assert!(state.edit_buffer.is_empty());
+        assert_eq!(state.drain_events(), vec![AddressBarEvent::EditCleared]);
+
+        // 清空后不再命中清除按钮，也不再注册其子热区
+        assert_eq!(
+            state.hit_test(&desc, clear_r.center()),
+            Some(AddressBarHitKind::EditTrigger)
+        );
+        let out_empty = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        assert!(!out_empty.sub_hits.iter().any(|h| h.node == clear_sub));
+    }
+
+    #[test]
+    fn history_dropdown_toggle_keyboard_navigation_and_click_selection() {
+        let history = vec![
+            "C:/Users/Alice".to_owned(),
+            "D:/Projects".to_owned(),
+            "E:/Archives".to_owned(),
+        ];
+        let desc = sample_desc().with_history_paths(history.clone());
+        let layout = compute_layout(&desc);
+        let hd_r = layout
+            .history_dropdown_rect
+            .expect("history dropdown button rect");
+        let clear_r = layout.edit_clear_rect.expect("edit clear rect");
+        assert!(
+            clear_r.max().x <= hd_r.origin.x,
+            "edit clear button must sit to the left of history dropdown button"
+        );
+
+        let mut state = AddressBarState::new();
+        assert_eq!(
+            state.hit_test(&desc, hd_r.center()),
+            Some(AddressBarHitKind::HistoryDropdownButton)
+        );
+
+        // 点击下拉按钮展开历史浮层
+        assert!(state.handle_click(&desc, hd_r.center()));
+        assert!(state.dropdown_open);
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::HistoryDropdownToggled(true)]
+        );
+
+        let dd = layout
+            .compute_dropdown_layout(&desc, state.editing, state.dropdown_open)
+            .expect("dropdown layout");
+        assert_eq!(dd.mode, AddressBarDropdownMode::History);
+        assert_eq!(dd.item_rects.len(), 3);
+        assert!(dd.popup_rect.origin.y > layout.address_rect.max().y);
+
+        // 验证浮层图元与子热区注册
+        let out = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        assert!(
+            out.primitives
+                .iter()
+                .any(|p| p.fill_token_or_uv == u32::from(Token::OVERLAY_BG.raw())),
+            "open dropdown must emit OVERLAY_BG popup surface"
+        );
+        for idx in 0..3 {
+            let item_sub = address_bar_sub_node(1, AddressBarHitKind::DropdownItem(idx));
+            assert!(
+                out.sub_hits.iter().any(|h| h.node == item_sub),
+                "dropdown item {idx} must register sub HitRegion"
+            );
+        }
+
+        // 键盘上下选择循环并按 Enter 提交
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowDown")));
+        assert_eq!(state.dropdown_highlighted, Some(0));
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowDown")));
+        assert_eq!(state.dropdown_highlighted, Some(1));
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowUp")));
+        assert_eq!(state.dropdown_highlighted, Some(0));
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowUp")));
+        assert_eq!(state.dropdown_highlighted, Some(2));
+        assert!(state.handle_key(&desc, KeyChord::named("Enter")));
+        assert!(!state.dropdown_open);
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::HistorySelected {
+                index: 2,
+                path: "E:/Archives".to_owned(),
+            }]
+        );
+
+        // 进入编辑态自动展示历史浮层，并支持直接点击条目提交
+        assert!(state.handle_key(&desc, KeyChord::character('l').with_ctrl()));
+        assert!(state.editing);
+        assert!(state.dropdown_open);
+        let edit_dd = layout
+            .compute_dropdown_layout(&desc, state.editing, state.dropdown_open)
+            .expect("edit dropdown layout");
+        assert_eq!(
+            state.hit_test(&desc, edit_dd.item_rects[1].center()),
+            Some(AddressBarHitKind::DropdownItem(1))
+        );
+        assert!(state.handle_click(&desc, edit_dd.item_rects[1].center()));
+        assert!(!state.editing);
+        assert!(!state.dropdown_open);
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::HistorySelected {
+                index: 1,
+                path: "D:/Projects".to_owned(),
+            }]
+        );
+
+        // 非编辑态再次展开历史浮层，按 Esc 收起
+        assert!(state.handle_click(&desc, hd_r.center()));
+        let _ = state.drain_events();
+        assert!(state.handle_key(&desc, KeyChord::named("Escape")));
+        assert!(!state.dropdown_open);
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::HistoryDropdownToggled(false)]
+        );
+    }
+
+    #[test]
+    fn completion_suggestions_inline_suffix_and_tab_accept() {
+        let desc = sample_desc()
+            .with_history_paths(vec!["C:/Users/Alice".to_owned()])
+            .with_completion_suggestions(vec![
+                "C:/Workspace/Assets/Shaders".to_owned(),
+                "C:/Workspace/Assets/Scripts".to_owned(),
+            ]);
+
+        assert_eq!(
+            desc.inline_completion_suffix("C:/Workspace/Assets/S"),
+            Some("haders")
+        );
+        assert_eq!(
+            desc.inline_completion_suffix("c:/workspace/assets/s"),
+            Some("haders")
+        );
+        assert_eq!(desc.inline_completion_suffix("D:/Other"), None);
+
+        let mut state = AddressBarState::new();
+        state.begin_edit("C:/Workspace/Assets/S");
+        assert_eq!(
+            desc.active_dropdown_items(state.editing).map(|(m, _)| m),
+            Some(AddressBarDropdownMode::Completion)
+        );
+
+        // 下移选中第 2 条补全建议并按 Tab 接受
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowDown")));
+        assert!(state.handle_key(&desc, KeyChord::named("ArrowDown")));
+        assert_eq!(state.dropdown_highlighted, Some(1));
+        assert!(state.handle_key(&desc, KeyChord::named("Tab")));
+        assert!(state.editing);
+        assert_eq!(state.edit_core.text(), "C:/Workspace/Assets/Scripts");
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::CompletionAccepted(
+                "C:/Workspace/Assets/Scripts".to_owned()
+            )]
+        );
+
+        // 点击补全列表首项同样派发 CompletionAccepted
+        let layout = compute_layout(&desc);
+        let dd = layout
+            .compute_dropdown_layout(&desc, state.editing, state.dropdown_open)
+            .expect("completion dropdown");
+        assert_eq!(dd.mode, AddressBarDropdownMode::Completion);
+        assert!(state.handle_click(&desc, dd.item_rects[0].center()));
+        assert_eq!(state.edit_core.text(), "C:/Workspace/Assets/Shaders");
+        assert_eq!(
+            state.drain_events(),
+            vec![AddressBarEvent::CompletionAccepted(
+                "C:/Workspace/Assets/Shaders".to_owned()
+            )]
+        );
+
+        // 仅配置单条 completion_hint 时，Tab 也可直接接受补全
+        let hint_desc = sample_desc().with_completion_hint("D:/Work/Notes");
+        let mut hint_state = AddressBarState::new();
+        hint_state.begin_edit("D:/Work/");
+        assert!(hint_state.handle_key(&hint_desc, KeyChord::named("Tab")));
+        assert_eq!(hint_state.edit_core.text(), "D:/Work/Notes");
+        assert_eq!(
+            hint_state.drain_events(),
+            vec![AddressBarEvent::CompletionAccepted(
+                "D:/Work/Notes".to_owned()
+            )]
+        );
+
+        // 无可用补全建议时，Tab 不消费按键且不派发事件
+        let empty_desc = sample_desc();
+        let mut empty_state = AddressBarState::new();
+        empty_state.begin_edit("C:/");
+        assert!(!empty_state.handle_key(&empty_desc, KeyChord::named("Tab")));
+        assert!(empty_state.drain_events().is_empty());
     }
 }
