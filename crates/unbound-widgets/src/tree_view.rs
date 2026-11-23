@@ -19,7 +19,7 @@ use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
 use crate::scroll::{ScrollState, ScrollViewDesc};
-use crate::shell::{emit_widget_icon_primitives, WidgetIcon};
+use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
@@ -44,6 +44,46 @@ pub const TREE_ICON_GAP: f32 = 6.0;
 
 /// 树形行前置图标槽类型别名（向后兼容 [`WidgetIcon`]）。
 pub type TreeRowIcon = WidgetIcon;
+
+/// 行右侧尾缀图标槽尺寸（`12×12px`，用于固定快捷项图钉等提示图标）。
+pub const TREE_TRAILING_ICON_SIZE: f32 = 12.0;
+
+/// 行右侧尾缀图标距行右沿的水平留白（`10px`）。
+const TREE_TRAILING_ICON_INSET: f32 = 10.0;
+
+/// 树形行节点级扩展展示选项（右侧尾缀图标槽与展开箭头显隐覆盖）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct TreeRowOptions {
+    /// 可选右侧尾缀图标（例如固定快捷项的 [`ShellIcon::Pin`]）。
+    pub trailing_icon: Option<ShellIcon>,
+    /// 是否强制隐藏该节点的展开/折叠箭头（即使 `has_children == true` 也不渲染 `>` 箭头与切换热区）。
+    pub hide_expand_chevron: bool,
+}
+
+impl TreeRowOptions {
+    /// 创建默认行选项（无尾缀图标、不隐藏展开箭头）。
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            trailing_icon: None,
+            hide_expand_chevron: false,
+        }
+    }
+
+    /// 配置右侧尾缀图标。
+    #[must_use]
+    pub const fn with_trailing_icon(mut self, icon: Option<ShellIcon>) -> Self {
+        self.trailing_icon = icon;
+        self
+    }
+
+    /// 配置是否强制隐藏展开/折叠箭头。
+    #[must_use]
+    pub const fn with_hide_expand_chevron(mut self, hide: bool) -> Self {
+        self.hide_expand_chevron = hide;
+        self
+    }
+}
 
 /// 树形视图行高密度档位。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -216,6 +256,10 @@ pub struct TreeViewState {
     pub pending_events: Vec<TreeViewEvent>,
     /// 按 `occurrence_key` 索引的行前置图标表。
     pub row_icons: FxHashMap<u64, TreeRowIcon>,
+    /// 按 `occurrence_key` 索引的行右侧尾缀图标表（例如固定项的 [`ShellIcon::Pin`]）。
+    pub row_trailing_icons: FxHashMap<u64, ShellIcon>,
+    /// 强制隐藏展开/折叠箭头的出现键集合。
+    row_hidden_chevrons: FxHashSet<u64>,
     /// 按 `occurrence_key` 索引的节点显示标签表。
     row_labels: FxHashMap<u64, String>,
     /// 需要在行顶部上方绘制水平分区分隔线的出现键集合。
@@ -245,6 +289,8 @@ impl TreeViewState {
             renaming: None,
             pending_events: Vec::new(),
             row_icons: FxHashMap::default(),
+            row_trailing_icons: FxHashMap::default(),
+            row_hidden_chevrons: FxHashSet::default(),
             row_labels: FxHashMap::default(),
             row_dividers_before: FxHashSet::default(),
             requested_loads: FxHashSet::default(),
@@ -282,6 +328,45 @@ impl TreeViewState {
             .get(&occurrence_key)
             .copied()
             .unwrap_or(TreeRowIcon::None)
+    }
+
+    /// 设置或清除指定行的右侧尾缀图标（例如固定快捷项的 [`ShellIcon::Pin`]）。
+    pub fn set_row_trailing_icon(&mut self, occurrence_key: u64, icon: Option<ShellIcon>) {
+        if let Some(icon) = icon {
+            self.row_trailing_icons.insert(occurrence_key, icon);
+        } else {
+            self.row_trailing_icons.remove(&occurrence_key);
+        }
+    }
+
+    /// 查询指定行的右侧尾缀图标。
+    #[must_use]
+    pub fn row_trailing_icon(&self, occurrence_key: u64) -> Option<ShellIcon> {
+        self.row_trailing_icons.get(&occurrence_key).copied()
+    }
+
+    /// 设置指定行是否强制隐藏展开/折叠箭头。
+    pub fn set_row_hide_expand_chevron(&mut self, occurrence_key: u64, hide: bool) {
+        if hide {
+            self.row_hidden_chevrons.insert(occurrence_key);
+        } else {
+            self.row_hidden_chevrons.remove(&occurrence_key);
+        }
+    }
+
+    /// 查询指定行是否强制隐藏展开/折叠箭头。
+    #[must_use]
+    pub fn is_row_expand_chevron_hidden(&self, occurrence_key: u64) -> bool {
+        self.row_hidden_chevrons.contains(&occurrence_key)
+    }
+
+    /// 汇总指定行的节点级扩展展示选项（右侧尾缀图标与展开箭头显隐覆盖）。
+    #[must_use]
+    pub fn row_options(&self, occurrence_key: u64) -> TreeRowOptions {
+        TreeRowOptions {
+            trailing_icon: self.row_trailing_icon(occurrence_key),
+            hide_expand_chevron: self.is_row_expand_chevron_hidden(occurrence_key),
+        }
     }
 
     /// 为指定行设置显示标签文本。
@@ -790,6 +875,34 @@ pub fn tree_row_label_x(desc: &TreeViewDesc, depth: u16, has_icon: bool) -> f32 
     }
 }
 
+/// 计算树形行右侧尾缀图标槽矩形（`12×12px`，垂直居中并距行右沿保留 `10px` 留白）。
+#[must_use]
+pub fn tree_row_trailing_icon_rect(row_rect: Rect) -> Rect {
+    let size = TREE_TRAILING_ICON_SIZE
+        .min(row_rect.size.x.max(0.0))
+        .min(row_rect.size.y.max(0.0));
+    let x = (row_rect.max().x - TREE_TRAILING_ICON_INSET - size).max(row_rect.origin.x);
+    let y = row_rect.origin.y + (row_rect.size.y - size) * 0.5;
+    Rect::new(x, y, size, size)
+}
+
+/// 计算单行文本标签的最大可用宽度（当存在右侧尾缀图标时自动预留尾缀槽位宽度与间距）。
+#[must_use]
+pub fn tree_row_label_max_width(
+    desc: &TreeViewDesc,
+    depth: u16,
+    has_icon: bool,
+    has_trailing_icon: bool,
+) -> f32 {
+    let label_x = tree_row_label_x(desc, depth, has_icon);
+    let right_reserve = if has_trailing_icon {
+        TREE_TRAILING_ICON_INSET + TREE_TRAILING_ICON_SIZE + TREE_ICON_GAP
+    } else {
+        8.0
+    };
+    (desc.rect.max().x - label_x - right_reserve).max(0.0)
+}
+
 /// 输出单行树节点：缩进参考线、展开箭头、标签与选中态（无行图标，保持既有签名向后兼容）。
 #[must_use]
 pub fn emit_tree_row(
@@ -811,6 +924,31 @@ pub fn emit_tree_row_with_icon(
     desc: &TreeViewDesc,
     row: &TreeViewRow,
     icon: TreeRowIcon,
+    selected: bool,
+    control: ControlState,
+    label: &[GlyphQuad],
+    tokens: TreeViewTokens,
+) -> WidgetOutput {
+    emit_tree_row_with_options(
+        desc,
+        row,
+        icon,
+        TreeRowOptions::default(),
+        selected,
+        control,
+        label,
+        tokens,
+    )
+}
+
+/// 输出带前置图标槽与节点级扩展选项（右侧尾缀图标、按节点隐藏展开箭头）的单行树节点。
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn emit_tree_row_with_options(
+    desc: &TreeViewDesc,
+    row: &TreeViewRow,
+    icon: TreeRowIcon,
+    options: TreeRowOptions,
     selected: bool,
     control: ControlState,
     label: &[GlyphQuad],
@@ -886,9 +1024,10 @@ pub fn emit_tree_row_with_icon(
     }
 
     // ExpandCollapseChevron 左侧 Padding = 14，字形 12 × 12，独立热区 20 × 20。
+    let show_chevron = row.row.has_children && !options.hide_expand_chevron;
     let arrow_x = rect.origin.x + row.row.depth as f32 * indent + 14.0;
     let centre = [arrow_x + 6.0, rect.origin.y + rect.size.y * 0.5];
-    if row.row.has_children {
+    if show_chevron {
         // 朝右的箭头；展开状态时向下旋转。加载期间调低对比度提示正在拉取。
         let arrow_color = if disabled || row.row.is_loading {
             Token::TEXT_DISABLED
@@ -954,6 +1093,24 @@ pub fn emit_tree_row_with_icon(
         &mut payloads,
     );
 
+    if let Some(trailing_icon) = options.trailing_icon {
+        let trailing_rect = tree_row_trailing_icon_rect(rect);
+        let trailing_color = if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            tokens.arrow
+        };
+        emit_shell_icon_primitives(
+            trailing_icon,
+            trailing_rect,
+            trailing_color,
+            fill,
+            desc.z + 1,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
+
     glyphs(
         label,
         if disabled {
@@ -986,7 +1143,7 @@ pub fn emit_tree_row_with_icon(
         .disabled(disabled);
     a11y.selected = selected;
     a11y.level = u32::from(row.row.depth) + 1;
-    if row.row.has_children {
+    if show_chevron {
         a11y.expanded = Some(row.row.expanded);
     }
 
@@ -998,7 +1155,7 @@ pub fn emit_tree_row_with_icon(
         focusable: !disabled,
         ..Default::default()
     };
-    if row.row.has_children && !disabled {
+    if show_chevron && !disabled {
         let toggle_key = tree_toggle_node(row.row.id);
         let toggle_h = 20.0f32.min(rect.size.y);
         let toggle_r = Rect::new(
@@ -1095,6 +1252,82 @@ mod tests {
         let mut state = TreeViewState::new(TREE_ROW);
         state.rebuild(&[root(1), root(2)], children);
         state
+    }
+
+    #[test]
+    fn tree_row_trailing_icon_and_hidden_expand_chevron_work_per_node() {
+        let mut state = state();
+        state.set_row_trailing_icon(1, Some(ShellIcon::Pin));
+        state.set_row_hide_expand_chevron(1, true);
+
+        let opts1 = state.row_options(1);
+        assert_eq!(opts1.trailing_icon, Some(ShellIcon::Pin));
+        assert!(opts1.hide_expand_chevron);
+        assert_eq!(state.row_options(2), TreeRowOptions::default());
+
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 240.0, 200.0)).with_navigation_pane(true);
+        let rows = state.rows(&desc);
+        let tokens = TreeViewTokens::navigation_pane();
+
+        // 节点 1（has_children = true，但隐藏展开箭头 + 带右侧图钉尾缀）
+        let pinned_out = emit_tree_row_with_options(
+            &desc,
+            &rows[0],
+            TreeRowIcon::Vector(ShellIcon::Folder),
+            opts1,
+            false,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
+        // 隐藏展开箭头后不注册 toggle 子热区且 a11y.expanded 为 None
+        let toggle_key = tree_toggle_node(rows[0].row.id);
+        assert!(
+            !pinned_out.sub_hits.iter().any(|h| h.node == toggle_key),
+            "hidden expand chevron must not register toggle hit region"
+        );
+        assert_eq!(
+            pinned_out.a11y.as_ref().and_then(|a| a.expanded),
+            None,
+            "hidden expand chevron must clear a11y.expanded"
+        );
+
+        // 右侧尾缀图标应落在行右半区（与 tree_row_trailing_icon_rect 对齐）
+        let trailing_rect = tree_row_trailing_icon_rect(rows[0].rect);
+        assert!(trailing_rect.origin.x > rows[0].rect.center().x);
+        assert!(trailing_rect.max().x <= rows[0].rect.max().x);
+        assert!(
+            pinned_out.primitives.iter().any(|p| {
+                let cx = p.local_pos[0] + p.size[0] * 0.5;
+                cx >= trailing_rect.origin.x - 4.0 && cx <= trailing_rect.max().x + 4.0
+            }),
+            "trailing Pin icon primitives must be emitted in the trailing icon rect"
+        );
+
+        // 存在尾缀图标时标签可用宽度应严格小于无尾缀图标
+        let w_plain = tree_row_label_max_width(&desc, 0, true, false);
+        let w_pinned = tree_row_label_max_width(&desc, 0, true, true);
+        assert!(w_pinned < w_plain);
+
+        // 节点 2 未隐藏展开箭头：仍正常注册 toggle 子热区与 a11y.expanded
+        let normal_out = emit_tree_row_with_options(
+            &desc,
+            &rows[1],
+            TreeRowIcon::Vector(ShellIcon::Folder),
+            state.row_options(2),
+            false,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
+        assert!(normal_out
+            .sub_hits
+            .iter()
+            .any(|h| h.node == tree_toggle_node(rows[1].row.id)));
+        assert_eq!(
+            normal_out.a11y.as_ref().and_then(|a| a.expanded),
+            Some(false)
+        );
     }
 
     #[test]

@@ -1508,6 +1508,8 @@ pub struct TreeViewRowSnapshot {
     label: Option<String>,
     /// 是否在该行顶部上方绘制水平分区分隔线。
     divider_before: bool,
+    /// 节点级扩展展示选项（右侧尾缀图标与展开箭头显隐覆盖）。
+    options: unbound_widgets::TreeRowOptions,
 }
 
 /// 树形视图滚轮同步水位记录。
@@ -2848,6 +2850,7 @@ impl<'a> ViewBuilder<'a> {
                     icon: state.row_icon(id),
                     label: state.row_label(id).map(str::to_owned),
                     divider_before: state.has_row_divider_before(id),
+                    options: state.row_options(id),
                 }
             })
             .collect();
@@ -6496,7 +6499,12 @@ impl<A: Application> AppRuntime<A> {
                             .unwrap_or_else(|| format!("Node {}", row.row.id));
                         let label_x =
                             unbound_widgets::tree_row_label_x(&desc, row.row.depth, has_icon);
-                        let avail_width = (row.rect.max().x - label_x - 8.0).max(0.0);
+                        let avail_width = unbound_widgets::tree_row_label_max_width(
+                            &desc,
+                            row.row.depth,
+                            has_icon,
+                            snap.options.trailing_icon.is_some(),
+                        );
                         let elided = unbound_widgets::elide_text_with_measure(
                             &raw_label,
                             avail_width,
@@ -6541,10 +6549,11 @@ impl<A: Application> AppRuntime<A> {
                             disabled: state.disabled,
                             selected: snap.selected,
                         };
-                        let mut row_out = unbound_widgets::emit_tree_row_with_icon(
+                        let mut row_out = unbound_widgets::emit_tree_row_with_options(
                             &desc,
                             &row,
                             resolved_icon,
+                            snap.options,
                             snap.selected,
                             row_state,
                             &label,
@@ -6769,20 +6778,17 @@ impl<A: Application> AppRuntime<A> {
                             } else {
                                 search_text
                             };
-                            let left_x = layout
-                                .search_icon_rect
-                                .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
                             let show_clear = !state.disabled && !is_placeholder;
-                            let right_x = if show_clear {
-                                layout
-                                    .search_clear_rect
-                                    .map_or(sr.max().x - 6.0, |cr| cr.origin.x - 6.0)
-                            } else {
-                                sr.max().x - 6.0
-                            };
-                            let search_w = (right_x - left_x).max(0.0);
                             let search_text_rect =
-                                Rect::new(left_x, sr.origin.y, search_w, sr.size.y.max(0.0));
+                                layout.search_text_rect(show_clear).unwrap_or_else(|| {
+                                    Rect::new(
+                                        sr.origin.x + 8.0,
+                                        sr.origin.y,
+                                        0.0,
+                                        sr.size.y.max(0.0),
+                                    )
+                                });
+                            let search_w = search_text_rect.size.x;
                             if search_w > 0.0 && !display.is_empty() {
                                 if bar_state.search_focused && !is_placeholder {
                                     // 搜索聚焦输入态保留未省略原文并按 `scroll_x` 平移，避免与光标/选区错位。

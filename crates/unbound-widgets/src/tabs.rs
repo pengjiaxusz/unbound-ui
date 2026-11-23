@@ -249,6 +249,8 @@ pub struct TabsDesc {
     pub style: TabViewStyle,
     /// 标签宽度分配策略（默认 [`TabWidthMode::Fixed`]）。
     pub width_mode: TabWidthMode,
+    /// 在 [`TabViewStyle::ShellChrome`] 模式下是否为激活标签页绘制 1px 外描边（默认 `false`，对齐 Win11 无描边平滑表面衔接）。
+    pub shell_active_border: bool,
     /// 绘制顺序键。
     pub z: u16,
 }
@@ -269,6 +271,7 @@ impl TabsDesc {
             tab_width: TAB_WIDTH,
             style: TabViewStyle::Standard,
             width_mode: TabWidthMode::Fixed,
+            shell_active_border: false,
             z: 620,
         }
     }
@@ -305,6 +308,13 @@ impl TabsDesc {
     #[must_use]
     pub fn with_width_mode(mut self, width_mode: TabWidthMode) -> Self {
         self.width_mode = width_mode;
+        self
+    }
+
+    /// 控制 [`TabViewStyle::ShellChrome`] 激活标签页是否绘制 1px 外描边（默认 `false`，无描边无缝融合）。
+    #[must_use]
+    pub fn with_shell_active_border(mut self, enabled: bool) -> Self {
+        self.shell_active_border = enabled;
         self
     }
 
@@ -949,7 +959,7 @@ pub fn emit_tab(
                 desc.z,
             ));
             // 2~4. 选中态顶/左/右 1px CARD_BORDER 描边（无底边），非选中态透明度 0 保持图元数恒定。
-            let border_opacity = if active { 1.0 } else { 0.0 };
+            let border_opacity = if active && desc.shell_active_border { 1.0 } else { 0.0 };
             let top_inset = TAB_SHELL_CORNER_RADIUS.min(rect.size.x * 0.5);
             let mut top_border = instance(
                 Rect::new(
@@ -1246,19 +1256,23 @@ pub fn emit_tabs_add(
         TabViewStyle::Standard => rect.size.x * 0.18,
         TabViewStyle::ShellChrome => 5.0,
     };
+    let plus_thickness = match desc.style {
+        TabViewStyle::Standard => 1.5,
+        TabViewStyle::ShellChrome => 1.0,
+    };
     let cx = rect.origin.x + centre;
     let cy = rect.origin.y + rect.size.y * 0.5;
     primitives.push(stroke_between(
         [cx - arm, cy],
         [cx + arm, cy],
-        1.5,
+        plus_thickness,
         color,
         desc.z,
     ));
     primitives.push(stroke_between(
         [cx, cy - arm],
         [cx, cy + arm],
-        1.5,
+        plus_thickness,
         color,
         desc.z,
     ));
@@ -1425,6 +1439,49 @@ mod tests {
             .with_addable(true)
             .with_style(TabViewStyle::ShellChrome)
             .with_width_mode(TabWidthMode::adaptive_default())
+    }
+
+    #[test]
+    fn shell_chrome_active_tab_is_borderless_by_default_and_add_plus_is_1px() {
+        let desc = shell_desc(720.0, 2);
+        let state = TabsState::new(0);
+        let tokens = TabsTokens::standard();
+
+        // 默认 ShellChrome 激活标签页无外描边（三段边线透明度为 0）
+        let active_out = emit_tab(&desc, &state, 0, ControlState::default(), &[], tokens);
+        for border_prim in &active_out.primitives[1..=3] {
+            assert_eq!(
+                border_prim.opacity(),
+                0.0,
+                "active ShellChrome tab must be borderless by default"
+            );
+        }
+
+        // 显式启用 shell_active_border(true) 时恢复 1px 外描边，且图元数恒定
+        let bordered_desc = desc.clone().with_shell_active_border(true);
+        let bordered_out = emit_tab(&bordered_desc, &state, 0, ControlState::default(), &[], tokens);
+        assert_eq!(active_out.primitives.len(), bordered_out.primitives.len());
+        for border_prim in &bordered_out.primitives[1..=3] {
+            assert!(
+                (border_prim.opacity() - 1.0).abs() < 1e-4,
+                "bordered ShellChrome tab must render 1px border when opted in"
+            );
+        }
+
+        // ShellChrome 新建 `+` 按钮采用 1px 纤细线条风格
+        let add_out = emit_tabs_add(99, &desc, ControlState::default(), tokens);
+        let h_stroke = add_out.primitives[1];
+        let v_stroke = add_out.primitives[2];
+        assert!(
+            (h_stroke.size[1] - 1.0).abs() < 1e-4,
+            "horizontal plus stroke must be 1px thick, got {}",
+            h_stroke.size[1]
+        );
+        assert!(
+            (v_stroke.size[0] - 1.0).abs() < 1e-4,
+            "vertical plus stroke must be 1px thick, got {}",
+            v_stroke.size[0]
+        );
     }
 
     #[test]
@@ -1643,7 +1700,7 @@ mod tests {
 
     #[test]
     fn shell_chrome_selected_card_has_top_and_side_borders_without_bottom_stroke() {
-        let desc = shell_desc(600.0, 3);
+        let desc = shell_desc(600.0, 3).with_shell_active_border(true);
         let state = TabsState::new(1);
         let tokens = TabsTokens::standard();
 

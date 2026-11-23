@@ -435,8 +435,9 @@ use unbound_world::{NodeId, UiWorld};
 pub use address_bar::{
     address_bar_sub_node, compute_layout, compute_text_edit_visual, emit_address_bar,
     emit_address_bar_chrome, emit_address_bar_text_layer, emit_address_bar_with_visual,
-    AddressBarDesc, AddressBarEvent, AddressBarHitKind, AddressBarLayout, AddressBarState,
-    AddressBarTextVisual, PathSegment, SegmentLayout, ADDRESS_BAR_HEIGHT,
+    AddressBarChromeStyle, AddressBarDesc, AddressBarEvent, AddressBarHitKind, AddressBarLayout,
+    AddressBarState, AddressBarTextVisual, PathSegment, SearchIconPlacement, SegmentLayout,
+    ADDRESS_BAR_HEIGHT,
 };
 pub use copy_button::{
     emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,
@@ -754,8 +755,10 @@ pub use tree_table::{
 };
 pub use tree_view::{
     emit_tree_background, emit_tree_row, emit_tree_row_divider, emit_tree_row_with_icon,
-    tree_row_label_x, tree_toggle_node, TreeRowIcon, TreeViewDensity, TreeViewDesc, TreeViewEvent,
-    TreeViewRow, TreeViewState, TreeViewTokens, TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT,
+    emit_tree_row_with_options, tree_row_label_max_width, tree_row_label_x,
+    tree_row_trailing_icon_rect, tree_toggle_node, TreeRowIcon, TreeRowOptions, TreeViewDensity,
+    TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens, TREE_ICON_GAP,
+    TREE_ICON_SIZE, TREE_ROW_COMPACT, TREE_TRAILING_ICON_SIZE,
 };
 pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 pub use virtual_views::{

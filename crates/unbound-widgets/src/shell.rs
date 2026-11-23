@@ -154,6 +154,26 @@ pub enum ShellIcon {
     Filter,
     /// 调色板/主题配色图标。
     Palette,
+    /// 剪切（剪刀）图标。
+    Cut,
+    /// 复制（双页叠加）图标。
+    Copy,
+    /// 粘贴（剪贴板）图标。
+    Paste,
+    /// 重命名（编辑框与 `A|` 光标）图标。
+    Rename,
+    /// 共享（方框右出箭头）图标。
+    Share,
+    /// 删除（垃圾桶）图标。
+    Delete,
+    /// 圆圈加号（`⊕`）图标。
+    AddCircle,
+    /// 分栏预览窗格图标。
+    PreviewPane,
+    /// 详细信息列表视图图标。
+    DetailsView,
+    /// 大图标视图图标。
+    LargeIconsView,
 }
 
 /// 跨控件统一图标变体（支持内置 Fluent 几何矢量图标与外部 RGBA8 彩色纹理双通道）。
@@ -1850,6 +1870,348 @@ pub fn emit_shell_icon_primitives(
                 z + 1,
             ));
         }
+        ShellIcon::Cut => {
+            // 剪刀双指环 + 交叉刀刃。
+            primitives.push(outlined(
+                Rect::new(c.x - 5.6, c.y + 1.4, 4.2, 4.2),
+                2.1,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x + 1.4, c.y + 1.4, 4.2, 4.2),
+                2.1,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            curve_stroke(
+                [c.x - 2.0, c.y + 2.2],
+                [c.x + 4.8, c.y - 5.6],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 2.0, c.y + 2.2],
+                [c.x - 4.8, c.y - 5.6],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Copy => {
+            // 前页圆角矩形 + 后页左上露出折线（不依赖不透明遮罩）。
+            primitives.push(outlined(
+                Rect::new(c.x - 2.4, c.y - 3.0, 8.2, 9.6),
+                1.5,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z + 1,
+            ));
+            curve_stroke(
+                [c.x - 5.4, c.y - 5.8],
+                [c.x + 2.2, c.y - 5.8],
+                1.4,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x - 5.4, c.y - 5.8],
+                [c.x - 5.4, c.y + 3.2],
+                1.4,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Paste => {
+            // 剪贴板主体 + 顶部夹扣 + 内部两条文本线。
+            primitives.push(outlined(
+                Rect::new(c.x - 5.2, c.y - 4.4, 10.4, 11.0),
+                1.6,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 2.6, c.y - 6.4, 5.2, 2.6),
+                1.0,
+                Token::NONE,
+                color,
+                1.3,
+                0.0,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 2.6, c.y - 0.6, 5.2, 1.3),
+                0.65,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 2.6, c.y + 2.2, 3.8, 1.3),
+                0.65,
+                color,
+                z + 1,
+            ));
+        }
+        ShellIcon::Rename => {
+            // 文本输入框轮廓 + 左侧 `A` 字形 + 右侧 `|` 文本光标。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.6, c.y - 4.2, 13.2, 8.4),
+                1.6,
+                Token::NONE,
+                color,
+                1.3,
+                0.0,
+                z,
+            ));
+            curve_stroke(
+                [c.x - 4.2, c.y + 2.2],
+                [c.x - 2.4, c.y - 2.2],
+                1.3,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x - 2.4, c.y - 2.2],
+                [c.x - 0.6, c.y + 2.2],
+                1.3,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x - 3.6, c.y + 0.8],
+                [c.x - 1.2, c.y + 0.8],
+                1.2,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 2.8, c.y - 5.8],
+                [c.x + 2.8, c.y + 5.8],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.4, c.y - 5.8],
+                [c.x + 4.2, c.y - 5.8],
+                1.2,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.4, c.y + 5.8],
+                [c.x + 4.2, c.y + 5.8],
+                1.2,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Share => {
+            // 共享托盘外框 + 右上出箭头。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.0, c.y - 3.0, 9.2, 9.2),
+                1.6,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            curve_stroke(
+                [c.x - 0.8, c.y + 1.0],
+                [c.x + 5.6, c.y - 5.2],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.8, c.y - 5.2],
+                [c.x + 5.6, c.y - 5.2],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 5.6, c.y - 5.2],
+                [c.x + 5.6, c.y - 1.4],
+                1.4,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::Delete => {
+            // 垃圾桶顶盖横线 + 提手 + 桶身 + 两条竖纹。
+            curve_stroke(
+                [c.x - 5.8, c.y - 3.8],
+                [c.x + 5.8, c.y - 3.8],
+                1.4,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            primitives.push(outlined(
+                Rect::new(c.x - 2.2, c.y - 6.0, 4.4, 2.4),
+                0.8,
+                Token::NONE,
+                color,
+                1.3,
+                0.0,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 4.4, c.y - 3.8, 8.8, 10.0),
+                1.4,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            curve_stroke(
+                [c.x - 1.6, c.y - 1.4],
+                [c.x - 1.6, c.y + 3.8],
+                1.2,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.6, c.y - 1.4],
+                [c.x + 1.6, c.y + 3.8],
+                1.2,
+                color,
+                z + 1,
+                primitives,
+                payloads,
+            );
+        }
+        ShellIcon::AddCircle => {
+            // 外圆环 + 中心纤细加号。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.4, c.y - 6.4, 12.8, 12.8),
+                6.4,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 3.4, c.y - 0.65, 6.8, 1.3),
+                0.65,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 0.65, c.y - 3.4, 1.3, 6.8),
+                0.65,
+                color,
+                z + 1,
+            ));
+        }
+        ShellIcon::PreviewPane => {
+            // 窗口外框 + 右侧预览分栏竖线 + 预览窗格内两条摘要线。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.6, c.y - 5.2, 13.2, 10.4),
+                1.8,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 1.0, c.y - 4.8, 1.3, 9.6),
+                0.0,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 3.0, c.y - 2.2, 2.4, 1.2),
+                0.6,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 3.0, c.y + 0.6, 2.0, 1.2),
+                0.6,
+                color,
+                z + 1,
+            ));
+        }
+        ShellIcon::DetailsView => {
+            // 三行详细信息列表：左侧圆点 + 右侧水平明细线。
+            for dy in [-4.0f32, 0.0, 4.0] {
+                primitives.push(surface(
+                    Rect::new(c.x - 6.2, c.y + dy - 0.9, 1.8, 1.8),
+                    0.9,
+                    color,
+                    z,
+                ));
+                primitives.push(surface(
+                    Rect::new(c.x - 3.2, c.y + dy - 0.7, 9.4, 1.4),
+                    0.7,
+                    color,
+                    z,
+                ));
+            }
+        }
+        ShellIcon::LargeIconsView => {
+            // 2x2 大图标线框方块。
+            for dx in [-6.2f32, 0.8] {
+                for dy in [-6.2f32, 0.8] {
+                    primitives.push(outlined(
+                        Rect::new(c.x + dx, c.y + dy, 5.4, 5.4),
+                        1.4,
+                        Token::NONE,
+                        color,
+                        1.4,
+                        0.0,
+                        z,
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -3295,6 +3657,62 @@ mod tests {
         assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert_eq!(disabled_img.border_token_or_tex, 77);
         assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+    }
+
+    #[test]
+    fn win11_shell_action_and_view_icons_emit_non_empty_constant_geometry() {
+        let icons = [
+            ShellIcon::Cut,
+            ShellIcon::Copy,
+            ShellIcon::Paste,
+            ShellIcon::Rename,
+            ShellIcon::Share,
+            ShellIcon::Delete,
+            ShellIcon::AddCircle,
+            ShellIcon::PreviewPane,
+            ShellIcon::DetailsView,
+            ShellIcon::LargeIconsView,
+        ];
+        let small = Rect::new(0.0, 0.0, 16.0, 16.0);
+        let large = Rect::new(10.0, 6.0, 24.0, 24.0);
+        for icon in icons {
+            let mut prims_small = Vec::new();
+            let mut payloads_small = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                small,
+                Token::TEXT_PRIMARY,
+                Token::SURFACE_RAISED,
+                620,
+                &mut prims_small,
+                &mut payloads_small,
+            );
+            let mut prims_large = Vec::new();
+            let mut payloads_large = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                large,
+                Token::TEXT_SECONDARY,
+                Token::SURFACE,
+                620,
+                &mut prims_large,
+                &mut payloads_large,
+            );
+            assert!(
+                !prims_small.is_empty(),
+                "ShellIcon::{icon:?} must emit non-empty geometry"
+            );
+            assert_eq!(
+                prims_small.len(),
+                prims_large.len(),
+                "ShellIcon::{icon:?} must keep constant primitive count across sizes"
+            );
+            assert_eq!(
+                payloads_small.len(),
+                payloads_large.len(),
+                "ShellIcon::{icon:?} must keep constant payload count across sizes"
+            );
+        }
     }
 
     #[test]

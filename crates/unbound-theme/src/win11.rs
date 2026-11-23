@@ -13,6 +13,9 @@ use unbound_math::color::{Color, Oklch};
 
 use crate::{Palette, ThemeKind, Token};
 
+/// Win11 列表/网格项选中态近直角圆角半径（`2px`，配合 1px 浅灰白细描边与半透明深灰底）。
+pub const ITEM_SELECTED_CORNER_RADIUS: f32 = 2.0;
+
 /// 从 8 位 sRGB 分量构造调色板表项。
 fn c(r: u8, g: u8, b: u8, a: u8) -> Color {
     Color::from_srgb8(r, g, b, a)
@@ -61,6 +64,13 @@ pub fn dark() -> Palette {
         (Token::SURFACE, c(32, 32, 32, 255)),
         (Token::SURFACE_RAISED, c(43, 43, 43, 255)),
         (Token::SURFACE_SUNKEN, c(26, 26, 26, 255)),
+        // Win11 暗色壳层分层：主工作区 #191919、独立状态栏 #1c1c1c、胶囊输入 #2c2b33 半透明填充
+        (Token::WORKSPACE_SURFACE, c(25, 25, 25, 255)),
+        (Token::STATUS_BAR_SURFACE, c(28, 28, 28, 255)),
+        (Token::PILL_INPUT_FILL, c(44, 43, 51, 230)),
+        // 列表/网格中性选中态：半透明深灰底 + 浅灰白 1px 细描边（不强绑亮蓝）
+        (Token::ITEM_SELECTED_BG, c(255, 255, 255, veil(28))),
+        (Token::ITEM_SELECTED_BORDER, c(255, 255, 255, veil(110))),
         (Token::ON_SURFACE, c(255, 255, 255, 255)),
         (Token::ON_SURFACE_MUTED, c(197, 197, 197, 255)),
         (Token::TEXT_PRIMARY, c(255, 255, 255, 255)),
@@ -205,6 +215,11 @@ pub fn light() -> Palette {
         (Token::SURFACE, c(243, 243, 243, 255)),
         (Token::SURFACE_RAISED, c(255, 255, 255, 255)),
         (Token::SURFACE_SUNKEN, c(233, 233, 233, 255)),
+        (Token::WORKSPACE_SURFACE, c(255, 255, 255, 255)),
+        (Token::STATUS_BAR_SURFACE, c(243, 243, 243, 255)),
+        (Token::PILL_INPUT_FILL, c(255, 255, 255, 204)),
+        (Token::ITEM_SELECTED_BG, c(0, 0, 0, light_base_veil(16))),
+        (Token::ITEM_SELECTED_BORDER, c(0, 0, 0, light_base_veil(96))),
         (Token::ON_SURFACE, c(26, 26, 26, 255)),
         (Token::ON_SURFACE_MUTED, c(92, 92, 92, 255)),
         (Token::TEXT_PRIMARY, c(26, 26, 26, 255)),
@@ -370,5 +385,48 @@ pub fn accent_ramp(
             Oklch::new(0.94, chroma * 0.18, hue, 1.0).to_linear(),
             Color::WHITE,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn win11_dark_surface_layering_and_neutral_selection_tokens_match_spec() {
+        let dark = dark();
+        let light = light();
+
+        // 纯净深灰主工作区表面（#191919，无暖色偏）
+        assert_eq!(dark.color(Token::WORKSPACE_SURFACE), c(25, 25, 25, 255));
+        // 次级深灰独立状态栏表面（#1c1c1c）
+        assert_eq!(dark.color(Token::STATUS_BAR_SURFACE), c(28, 28, 28, 255));
+        // 无描边胶囊输入框填充（#2c2b33 附近半透明深灰）
+        let pill = dark.color(Token::PILL_INPUT_FILL);
+        assert_eq!(pill, c(44, 43, 51, 230));
+        assert!(pill.a > 0.5 && pill.a < 1.0);
+
+        // 列表/网格选中态：半透明深灰底 + 浅灰白 1px 细描边（中性无蓝偏）+ 2px 近直角圆角
+        let sel_bg = dark.color(Token::ITEM_SELECTED_BG);
+        let sel_border = dark.color(Token::ITEM_SELECTED_BORDER);
+        assert!(sel_bg.a > 0.0 && sel_bg.a < 0.5);
+        assert!((sel_bg.r - sel_bg.g).abs() < 1e-4 && (sel_bg.g - sel_bg.b).abs() < 1e-4);
+        assert!(sel_border.a > sel_bg.a);
+        assert!(
+            (sel_border.r - sel_border.g).abs() < 1e-4
+                && (sel_border.g - sel_border.b).abs() < 1e-4
+        );
+        assert!((ITEM_SELECTED_CORNER_RADIUS - 2.0).abs() < 1e-4);
+
+        // 浅色模式同样具备非透明有效值
+        for tok in [
+            Token::WORKSPACE_SURFACE,
+            Token::STATUS_BAR_SURFACE,
+            Token::PILL_INPUT_FILL,
+            Token::ITEM_SELECTED_BG,
+            Token::ITEM_SELECTED_BORDER,
+        ] {
+            assert!(light.color(tok).a > 0.0, "light {tok:?} must be visible");
+        }
     }
 }
