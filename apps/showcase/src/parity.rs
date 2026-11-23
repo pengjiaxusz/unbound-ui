@@ -42,7 +42,7 @@ use crate::theme;
 /// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，再后 28 个为
 /// 「导航、浮层、集合与日期类」批次，后续包含补齐与扩展控件。
 /// 控件名统一使用 WinUI 3 官方规范名。
-pub const SUPPORTED_CONTROLS: [&str; 72] = [
+pub const SUPPORTED_CONTROLS: [&str; 73] = [
     // 首批试点（6）
     "Button",
     "CheckBox",
@@ -116,13 +116,14 @@ pub const SUPPORTED_CONTROLS: [&str; 72] = [
     // 第六批：集合与选补容器类补充（2）
     "RangeSelector",
     "HeaderedContentControl",
-    // 第七批：NavigationView 多形态差分矩阵（6 扩展场景）
+    // 第七批：NavigationView 多形态差分矩阵（7 扩展场景，含按需叠加滚动条溢出态）
     "NavigationViewLeftClosed",
     "NavigationViewLeftCompact",
     "NavigationViewLeftMinimal",
     "NavigationViewTop",
     "NavigationViewHierarchical",
     "NavigationViewChrome",
+    "NavigationViewOverflow",
 ];
 
 /// 把一个 WinUI 3 规范名解析为目录标识。
@@ -138,7 +139,8 @@ pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId>
         | "NavigationViewLeftMinimal"
         | "NavigationViewTop"
         | "NavigationViewHierarchical"
-        | "NavigationViewChrome" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
+        | "NavigationViewChrome"
+        | "NavigationViewOverflow" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
         "TitleBar" => None,
         other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
     }
@@ -2321,7 +2323,8 @@ fn emit_case(
         | "NavigationViewLeftMinimal"
         | "NavigationViewTop"
         | "NavigationViewHierarchical"
-        | "NavigationViewChrome" => {
+        | "NavigationViewChrome"
+        | "NavigationViewOverflow" => {
             let (default_w, default_h) = match case.control {
                 // 基础场景含 5 个主菜单项（Header + 3 项 + 分隔线），280px 高时 WinUI 会把
                 // 末尾的 Analytics 滚出可视区，两侧内容对不上；统一提到 360px 让全部菜单项可见。
@@ -2504,6 +2507,62 @@ fn emit_case(
                     .pane_title("Menu")
                     .header("Home")
                     .with_auto_suggest_box("Search")
+                    .selected_item(Some(1)),
+                    Vec::new(),
+                ),
+                "NavigationViewOverflow" => (
+                    unbound_widgets::NavigationViewDesc::new(
+                        nav_r,
+                        vec![
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(1, "Home")
+                                    .with_glyph("\u{E80F}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(2, "Library")
+                                    .with_glyph("\u{E8F1}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
+                                    .with_glyph("\u{E9D2}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(4, "Reports")
+                                    .with_glyph("\u{E8A5}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(5, "Projects")
+                                    .with_glyph("\u{E8B7}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(6, "Tasks")
+                                    .with_glyph("\u{E762}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(7, "Calendar")
+                                    .with_glyph("\u{E787}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(8, "Messages")
+                                    .with_glyph("\u{E715}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(9, "Contacts")
+                                    .with_glyph("\u{E77B}"),
+                            ),
+                            unbound_widgets::NavigationViewMenuItem::item(
+                                unbound_widgets::NavigationViewItem::new(10, "Archive")
+                                    .with_glyph("\u{E7B8}"),
+                            ),
+                        ],
+                    )
+                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                    .open_pane_length(220.0)
+                    .is_pane_open(true)
+                    .is_settings_visible(true)
+                    .is_back_button_visible(
+                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
+                    )
                     .selected_item(Some(1)),
                     Vec::new(),
                 ),
@@ -4175,6 +4234,34 @@ mod tests {
         assert_eq!(
             res.err().unwrap(),
             "unimplemented parity control: UnknownFutureWidget"
+        );
+    }
+
+    #[test]
+    fn test_navigation_view_overflow_emits_visible_scrollbar() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 360.0, 280.0);
+        let case = ParityCase::new("NavigationViewOverflow", "normal", "light");
+        let mut scene = Gallery::new();
+        let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
+        assert!(res.is_ok(), "NavigationViewOverflow emit failed: {res:?}");
+        // Left 窗格溢出时必须产出宽度为 2px 的静止态细滑块且半透明度 > 0。
+        let has_idle_thumb = scene.primitives.iter().any(|prim| {
+            prim.prim_type() == PrimType::RoundedRect
+                && (prim.size[0] - unbound_widgets::scroll::SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01
+                && prim.opacity() > 0.1
+        });
+        assert!(
+            has_idle_thumb,
+            "NavigationViewOverflow must emit a visible Win11 idle scrollbar thumb"
         );
     }
 }
