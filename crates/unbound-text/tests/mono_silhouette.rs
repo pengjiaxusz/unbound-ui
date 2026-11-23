@@ -57,6 +57,9 @@ fn coverage_stats(data: &[u8]) -> (f32, f32) {
 ///
 /// 判别力来自色彩本身：🖤 与 🎱 几乎全黑，取亮度得到的位图接近全 0；
 /// 基字形剪影把整块区域填满，平均覆盖率接近「包围盒填充率」。
+/// 依赖带基字形轮廓的 COLR/CPAL 字体（如 Windows 的 Segoe UI Emoji）；
+/// Linux 常见 CBDT/CBLC 纯位图字体无基字形轮廓，按设计回退至占位框。
+#[cfg(windows)]
 #[test]
 fn mono_presentation_draws_a_solid_silhouette_for_dark_emoji() {
     for text in ["\u{1F5A4}", "\u{1F3B1}"] {
@@ -119,10 +122,24 @@ fn mono_report_has_no_cross_backend_deviation() {
         !report.rgba_atlas_allocated,
         "the mono path must not allocate the RGBA atlas"
     );
+    #[cfg(windows)]
     assert_eq!(
         report.fallback_count, 0,
         "the emoji font must not record a fallback in mono mode"
     );
+    // 非 Windows 平台常见 CBDT/CBLC 纯位图字体（如 Noto Color Emoji）缺少基字形轮廓，
+    // Mono 模式下回退至占位框并记账属于预期行为。
+    #[cfg(not(windows))]
+    if report.fallback_count > 0 {
+        assert!(
+            report
+                .last_fallback_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("no base outline")),
+            "unexpected fallback in mono mode: {:?}",
+            report.last_fallback_reason
+        );
+    }
     // 只有「无 swash 构建 + 显式选 Swash 回退」才允许有已知差异。
     if cfg!(feature = "backend-swash") {
         assert_eq!(report.known_deviation, None);

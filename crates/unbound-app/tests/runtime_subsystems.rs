@@ -287,8 +287,21 @@ fn runtime_text_render_backend_switching_and_invalidation() {
     let mut settings = runtime.text_settings().clone();
     settings.raster_backend = unbound_text::RasterBackend::Cosmic;
     let tier = runtime.apply_text_settings(&settings);
-    assert_eq!(tier, unbound_text::InvalidationTier::Bitmap);
-    assert!(runtime.dirty().contains(unbound_app::DirtyFlags::ALL));
+    // Windows 默认后端为 DirectWrite，切换至 Cosmic 触发位图级失效；
+    // 非 Windows 默认后端本就是 Cosmic，重复应用无变更，改切相位档位验证位图级失效。
+    #[cfg(windows)]
+    {
+        assert_eq!(tier, unbound_text::InvalidationTier::Bitmap);
+        assert!(runtime.dirty().contains(unbound_app::DirtyFlags::ALL));
+    }
+    #[cfg(not(windows))]
+    {
+        assert_eq!(tier, unbound_text::InvalidationTier::None);
+        settings.phase_mode = unbound_text::PhaseMode::One;
+        let phase_tier = runtime.apply_text_settings(&settings);
+        assert_eq!(phase_tier, unbound_text::InvalidationTier::Bitmap);
+        assert!(runtime.dirty().contains(unbound_app::DirtyFlags::ALL));
+    }
 
     let report = runtime.text_render_report();
     assert_eq!(report.backend, unbound_text::RasterBackend::Cosmic);

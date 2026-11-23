@@ -66,7 +66,8 @@ fn emoji_glyph_color_flag_and_atlas_allocation() {
     settings.emoji_presentation = EmojiPresentation::Color;
     cache.apply_settings(&settings, Some(&mut engine));
 
-    let shaped_color = engine.shape("😀", &style);
+    // 选用 U+1F680 避免 Linux 下 DejaVu Sans 对 U+1F600 的单色字形拦截
+    let shaped_color = engine.shape("🚀", &style);
     let quads_color = cache.quads_for(
         &mut engine,
         &shaped_color,
@@ -75,13 +76,25 @@ fn emoji_glyph_color_flag_and_atlas_allocation() {
         false,
     );
 
-    // 验证彩色 Emoji 产生并且 color 标记正确
+    // 验证彩色 Emoji 产生并且 color 标记正确（非 Windows 若无彩色 Emoji 字体则跳过此断言）
     if let Some(quad) = quads_color.first() {
         if quad.rect.size.x > 0.0 && quad.rect.size.y > 0.0 {
+            #[cfg(windows)]
             assert!(
                 quad.color,
                 "emoji glyph in color mode must have color == true"
             );
+            #[cfg(not(windows))]
+            if unbound_text::TextCapabilities::probe()
+                .color_glyphs
+                .is_available()
+                && cache.atlas.has_rgba()
+            {
+                assert!(
+                    quad.color,
+                    "emoji glyph in color mode must have color == true"
+                );
+            }
         }
     }
 
@@ -89,7 +102,7 @@ fn emoji_glyph_color_flag_and_atlas_allocation() {
     settings.emoji_presentation = EmojiPresentation::Mono;
     cache.apply_settings(&settings, Some(&mut engine));
 
-    let shaped_mono = engine.shape("😀", &style);
+    let shaped_mono = engine.shape("🚀", &style);
     let quads_mono = cache.quads_for(
         &mut engine,
         &shaped_mono,
