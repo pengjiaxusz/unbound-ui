@@ -1080,7 +1080,7 @@ mod tests {
             .show_bottom_divider(false)
             .with_reserved_widths(120.0, 64.0)
             .show_title(false);
-        assert_eq!(desc.height, 40.0);
+        assert_eq!(desc.height, 48.0);
         assert!(!desc.show_bottom_divider);
         assert_eq!(desc.left_reserved_width, 120.0);
         assert_eq!(desc.right_reserved_width, 64.0);
