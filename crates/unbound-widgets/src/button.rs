@@ -242,8 +242,10 @@ pub struct ButtonDesc {
     pub focus_ring_gap: f32,
     /// 文本左对齐（适用于侧边栏菜单项、列表行按钮与下拉触发器）。
     pub left_align: bool,
-    /// 是否处于激活/选中态（渲染选中高亮表面与左侧指示条）。
+    /// 是否处于激活/选中态（渲染选中高亮表面）。
     pub active_selected: bool,
+    /// 选中态时是否在左侧绘制 3px 强调色指示条（仅导航项/单选列表项显式启用，默认 `false`）。
+    pub show_selection_indicator: bool,
     /// 左对齐时标签与按钮左沿的间距。
     pub label_inset: f32,
     /// 覆盖变体默认的颜色槽位。
@@ -278,6 +280,7 @@ impl ButtonDesc {
             focus_ring_gap: FOCUS_RING_GAP,
             left_align: false,
             active_selected: false,
+            show_selection_indicator: false,
             label_inset: 12.0,
             tokens_override: None,
         }
@@ -295,6 +298,13 @@ impl ButtonDesc {
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.active_selected = selected;
+        self
+    }
+
+    /// 控制选中态是否在左侧绘制 3px 强调色指示条。
+    #[must_use]
+    pub fn with_selection_indicator(mut self, show: bool) -> Self {
+        self.show_selection_indicator = show;
         self
     }
 
@@ -337,6 +347,7 @@ impl ButtonDesc {
             .with_font_size(12.5)
             .left_align()
             .selected(active)
+            .with_selection_indicator(true)
     }
 
     /// 侧边栏二级子菜单项。
@@ -413,6 +424,7 @@ impl ButtonDesc {
             .with_radius(4.0)
             .left_align()
             .selected(active)
+            .with_selection_indicator(true)
             .with_tokens(slot)
     }
 
@@ -999,7 +1011,7 @@ pub fn emit_button_with_tokens(
         ));
     }
 
-    if desc.active_selected && desc.left_align {
+    if desc.active_selected && desc.show_selection_indicator {
         let bar_h = (rect.size.y * 0.52).clamp(10.0, 16.0);
         let bar_rect = Rect::new(
             rect.origin.x + 2.0,
@@ -1473,5 +1485,33 @@ mod tests {
         assert_eq!(disabled_img.border_token_or_tex, 91);
         assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
         assert_eq!(enabled.primitives.len(), disabled.primitives.len());
+    }
+
+    #[test]
+    fn left_aligned_selected_button_omits_left_accent_bar_unless_opted_in() {
+        let has_left_accent_bar = |d: &ButtonDesc| {
+            let out = emit_button(1, d, ControlState::default(), &mut []);
+            out.primitives.iter().any(|p| {
+                p.prim_type() == PrimType::RoundedRect
+                    && p.fill_token_or_uv == u32::from(Token::PRIMARY.raw())
+                    && (p.size[0] - 3.0).abs() < 0.01
+            })
+        };
+
+        // 普通左对齐选中态按钮不应误画左侧 3px 强调色指示条
+        let plain = desc()
+            .with_variant(ButtonVariant::Subtle)
+            .left_align()
+            .selected(true);
+        assert!(!has_left_accent_bar(&plain));
+
+        // 显式开启指示条或导航/列表项预设仍保留左侧 3px 强调条
+        assert!(has_left_accent_bar(&plain.clone().with_selection_indicator(true)));
+        let mut nav = ButtonDesc::nav_item("Home", true);
+        nav.rect = Rect::new(0.0, 0.0, 160.0, 32.0);
+        assert!(has_left_accent_bar(&nav));
+        let mut item = ButtonDesc::list_item("Item", true);
+        item.rect = Rect::new(0.0, 0.0, 160.0, 32.0);
+        assert!(has_left_accent_bar(&item));
     }
 }

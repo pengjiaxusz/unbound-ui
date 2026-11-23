@@ -402,7 +402,12 @@ mod tests {
         let shuffled_indices = [7u32, 2, 5, 0, 9, 1, 8, 3, 6, 4];
         let mut pairs: Vec<(u64, u32)> = shuffled_indices
             .iter()
-            .map(|&idx| (SortKey::from_cull(prefix, 905, SubElement::Background, idx).raw(), idx))
+            .map(|&idx| {
+                (
+                    SortKey::from_cull(prefix, 905, SubElement::Background, idx).raw(),
+                    idx,
+                )
+            })
             .collect();
         radix_sort_by(&mut pairs, |p| p.0);
         let sorted_indices: Vec<u32> = pairs.iter().map(|p| p.1).collect();

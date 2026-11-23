@@ -2973,13 +2973,9 @@ impl Renderer {
             self.gpu
                 .device
                 .cmd_fill_buffer(cmd, self.keys_a.raw, keys_offset, bytes, u32::MAX);
-            self.gpu.device.cmd_fill_buffer(
-                cmd,
-                self.idx_a.raw,
-                idx_offset,
-                u64::from(n) * 4,
-                0,
-            );
+            self.gpu
+                .device
+                .cmd_fill_buffer(cmd, self.idx_a.raw, idx_offset, u64::from(n) * 4, 0);
         }
         Ok(())
     }

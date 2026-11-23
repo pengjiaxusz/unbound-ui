@@ -1627,6 +1627,13 @@ pub enum WidgetSpec {
         /// 地址栏交互状态快照（装箱：状态含两套文本编辑核心，直接内联会让整个枚举膨胀近 600 字节）。
         state: Box<unbound_widgets::AddressBarState>,
     },
+    /// 通用可拖拽调宽与列尾过滤表头控件。
+    ColumnHeaderBar {
+        /// 表头描述符。
+        desc: unbound_widgets::ColumnHeaderBarDesc,
+        /// 表头交互状态快照。
+        state: unbound_widgets::ColumnHeaderBarState,
+    },
     /// 停靠面板树。
     Dock {
         /// 停靠区状态快照。
@@ -2339,6 +2346,16 @@ impl<'a> ViewBuilder<'a> {
                     unbound_widgets::ADDRESS_BAR_HEIGHT
                 },
             )),
+            WidgetSpec::ColumnHeaderBar { desc, .. } => {
+                (desc.rect.width() > 0.0).then_some(Vec2::new(
+                    desc.rect.width(),
+                    if desc.rect.height() > 0.0 {
+                        desc.rect.height()
+                    } else {
+                        unbound_widgets::COLUMN_HEADER_BAR_HEIGHT
+                    },
+                ))
+            }
             WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
                 || desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -2867,6 +2884,36 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::AddressBar {
                 desc,
                 state: Box::new(state.clone()),
+            },
+        )
+    }
+
+    /// 声明式通用表头控件（支持列对齐、1px 竖分隔线、独立排序矢量箭头、边界拖拽调宽、列尾过滤按钮与横向滚动联动）。
+    pub fn column_header_bar(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::ColumnHeaderBarDesc,
+        state: &unbound_widgets::ColumnHeaderBarState,
+    ) -> NodeId {
+        let mut node_desc = RawNodeDesc::container();
+        if desc.rect.width() > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        } else {
+            node_desc = node_desc.width(Dim::percent(100.0)).flex_grow(1.0);
+            node_desc.min_width = Dim::px(0.0);
+        }
+        let height = if desc.rect.height() > 0.0 {
+            desc.rect.height()
+        } else {
+            unbound_widgets::COLUMN_HEADER_BAR_HEIGHT
+        };
+        node_desc = node_desc.height(Dim::px(height));
+        self.widget(
+            key,
+            node_desc,
+            WidgetSpec::ColumnHeaderBar {
+                desc,
+                state: state.clone(),
             },
         )
     }
@@ -6108,6 +6155,15 @@ impl<A: Application> AppRuntime<A> {
                             },
                         ))
                     }
+                    WidgetSpec::ColumnHeaderBar { desc, .. } => (desc.rect.width() > 0.0)
+                        .then_some(Vec2::new(
+                            desc.rect.width(),
+                            if desc.rect.height() > 0.0 {
+                                desc.rect.height()
+                            } else {
+                                unbound_widgets::COLUMN_HEADER_BAR_HEIGHT
+                            },
+                        )),
                     WidgetSpec::Minimap { desc, .. } => (desc.rect.width() > 0.0
                         || desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -7005,6 +7061,107 @@ impl<A: Application> AppRuntime<A> {
                             self.collector.pop_clip();
                         }
                     }
+                }
+                WidgetSpec::ColumnHeaderBar {
+                    desc,
+                    state: header_state,
+                } => {
+                    let mut desc = desc.clone();
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    if desc.scroll_x == 0.0 && header_state.scroll_x > 0.0 {
+                        desc.scroll_x = header_state.scroll_x;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+
+                    let resolve_sub_hit =
+                        |target: Option<u64>| -> Option<unbound_widgets::ColumnHeaderHitKind> {
+                            let key = target?;
+                            use unbound_widgets::{column_header_sub_node, ColumnHeaderHitKind};
+                            for idx in 0..desc.columns.len() {
+                                for kind in [
+                                    ColumnHeaderHitKind::ResizeHandle(idx),
+                                    ColumnHeaderHitKind::FilterButton(idx),
+                                    ColumnHeaderHitKind::Column(idx),
+                                ] {
+                                    if column_header_sub_node(entry.key, kind) == key {
+                                        return Some(kind);
+                                    }
+                                }
+                            }
+                            None
+                        };
+
+                    let mut effective_state = header_state.clone();
+                    if effective_state.hovered_hit.is_none() {
+                        effective_state.hovered_hit = resolve_sub_hit(self.ctx.hovered);
+                    }
+                    if effective_state.pressed_hit.is_none() {
+                        effective_state.pressed_hit = resolve_sub_hit(self.ctx.pressed);
+                    }
+
+                    let layout = unbound_widgets::compute_column_header_layout(&desc);
+                    let bar_clip = GpuClipNode::from_aabb([
+                        desc.rect.min().x,
+                        desc.rect.min().y,
+                        desc.rect.max().x,
+                        desc.rect.max().y,
+                    ]);
+                    self.collector.push_clip(bar_clip, desc.rect);
+
+                    let chrome_out = unbound_widgets::emit_column_header_bar_chrome(
+                        entry.key,
+                        &desc,
+                        &effective_state,
+                        state,
+                    );
+                    self.collector.push(entry.key, chrome_out);
+
+                    let mut header_glyphs = Vec::new();
+                    for cell in &layout.cells {
+                        if let Some(col) = desc.columns.get(cell.index) {
+                            let avail_w = cell.label_rect.width().max(0.0);
+                            if avail_w > 0.0 && !col.title.is_empty() {
+                                let elided = unbound_widgets::elide_text_with_measure(
+                                    &col.title,
+                                    avail_w,
+                                    unbound_widgets::ElideMode::End,
+                                    |candidate| {
+                                        text_ctx.measure_line(candidate, desc.font_size, 400).x
+                                    },
+                                );
+                                if !elided.display.is_empty() {
+                                    let align_x = match col.align {
+                                        unbound_widgets::ColumnHeaderAlign::Left => {
+                                            unbound_widgets::AlignX::Left
+                                        }
+                                        unbound_widgets::ColumnHeaderAlign::Center => {
+                                            unbound_widgets::AlignX::Center
+                                        }
+                                        unbound_widgets::ColumnHeaderAlign::Right => {
+                                            unbound_widgets::AlignX::Right
+                                        }
+                                    };
+                                    header_glyphs.extend(text_ctx.shape_line(
+                                        &elided.display,
+                                        cell.label_rect,
+                                        desc.font_size,
+                                        400,
+                                        align_x,
+                                        unbound_widgets::AlignY::Middle,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    let text_out = unbound_widgets::emit_column_header_bar_text_layer(
+                        &header_glyphs,
+                        state.disabled,
+                        desc.z,
+                    );
+                    self.collector.push(entry.key ^ 0x4348_5458_0001, text_out);
+                    self.collector.pop_clip();
                 }
                 WidgetSpec::Dock { state: dock_state } => {
                     let dock_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
@@ -9919,7 +10076,10 @@ mod tests {
             .find(|b| b.node == widget_key)
             .expect("context menu must register an acrylic backdrop request");
         assert_eq!(menu_backdrop.blur, unbound_widgets::MENU_BACKDROP_BLUR);
-        assert_eq!(menu_backdrop.corner_radii, [unbound_widgets::MENU_RADIUS; 4]);
+        assert_eq!(
+            menu_backdrop.corner_radii,
+            [unbound_widgets::MENU_RADIUS; 4]
+        );
         assert!(menu_backdrop.z >= PORTAL_Z_BASE as u16);
 
         // 精确计算各行中心点（与 Win11 4px 内边距、32px 项高与 9px 分隔线对齐）。

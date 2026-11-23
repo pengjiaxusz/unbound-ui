@@ -30,6 +30,7 @@ fn main() {
     const ALLOWED_BARE_MODS: &[&str] = &[
         "canonical",
         "catalog",
+        "column_header_bar",
         "diff",
         "ergonomics",
         "primitive",

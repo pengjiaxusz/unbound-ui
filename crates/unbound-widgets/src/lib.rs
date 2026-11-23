@@ -18,6 +18,7 @@
 // `emit_*` 发射器，不属于业务组件，因此不纳入展示目录。
 pub mod canonical;
 pub mod catalog;
+pub mod column_header_bar;
 pub mod diff;
 pub mod ergonomics;
 pub mod primitive;
@@ -80,6 +81,14 @@ pub use slot_fixture::{
     WINUI_DISABLED_OPACITY,
 };
 
+pub use column_header_bar::{
+    column_header_sub_node, compute_column_header_layout, emit_column_header_bar,
+    emit_column_header_bar_chrome, emit_column_header_bar_text_layer, ColumnHeaderAlign,
+    ColumnHeaderBarDesc, ColumnHeaderBarLayout, ColumnHeaderBarState, ColumnHeaderCellLayout,
+    ColumnHeaderEvent, ColumnHeaderHitKind, ColumnHeaderSpec, ColumnResizeDrag,
+    COLUMN_DEFAULT_MAX_WIDTH, COLUMN_DEFAULT_MIN_WIDTH, COLUMN_DIVIDER_WIDTH,
+    COLUMN_FILTER_BUTTON_WIDTH, COLUMN_HEADER_BAR_HEIGHT, COLUMN_RESIZE_HANDLE_WIDTH,
+};
 pub use shell::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
     emit_shell_icon_primitives, emit_widget_icon_primitives, AppBrandBadgeDesc, FeatureCardDesc,
