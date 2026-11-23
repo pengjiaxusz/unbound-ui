@@ -2114,7 +2114,7 @@ pub fn emit_canonical_refresh_fixture(
     let card_rect = refresh_rect;
 
     let refresh_icon_ink = Token::TEXT_DISABLED;
-    if !disabled {
+    if !state.disabled {
         crate::shell::emit_shell_icon_primitives(
             crate::shell::ShellIcon::Redo,
             ring_rect,
