@@ -38,4 +38,5 @@ echo "" >&2
 echo "安装完成后请重新运行：" >&2
 echo "  sh .pengj-templates/scripts/doctor.sh" >&2
 echo "  # 或：just doctor（如需修复本地钩子/链接，再显式追加 --fix）" >&2
+echo "  # 若需在新虚拟机 / CI 一键装齐：sh .pengj-templates/scripts/setup.sh（可先加 --dry-run 预览）" >&2
 exit 1
