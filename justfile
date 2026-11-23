@@ -23,13 +23,8 @@ default:
     @just --list
 
 # 环境自检：工具链、提交钩子与工作区链接（可用 .pengj-templates/scripts/doctor.d/ 扩展）
-[unix]
 doctor *ARGS:
-    @sh .pengj-templates/scripts/doctor.sh {{ARGS}}
-# 环境自检：工具链、提交钩子与工作区链接（可用 .pengj-templates/scripts/doctor.d/ 扩展）
-[windows]
-doctor *ARGS:
-    @pwsh -NoProfile -File .pengj-templates/scripts/doctor.ps1 {{ARGS}}
+    @pengj-templates-cli doctor --dir . {{ARGS}}
 # PENGJ_TEMPLATE_END
 
 # ---------------------------------------------------------------------------

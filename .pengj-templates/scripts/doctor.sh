@@ -1,286 +1,41 @@
 #!/bin/sh
-# .pengj-templates/scripts/doctor.sh - 项目环境自检.
-#
-# 只检查所选模板层实际用到的工具，再按文件名顺序运行 .pengj-templates/scripts/doctor.d/*.sh
-# 下的所有自定义检查。
-#
-# 用法：
-#   sh .pengj-templates/scripts/doctor.sh                 仅输出报告
-#   sh .pengj-templates/scripts/doctor.sh --fix           同时激活提交钩子并修正相关模式
-#   sh .pengj-templates/scripts/doctor.sh --install-cli   下载并安装 pengj-templates-cli
-#                                        （唯一会联网的步骤；不会被 --fix 隐含）
-#
-# 自定义检查：把 *.sh 放进 .pengj-templates/scripts/doctor.d/。每个脚本从项目根目录运行，
-# DOCTOR_ROOT 指向项目根目录，带 --fix 时设置 DOCTOR_FIX=1。
-# 退出码 0 为通过，非 0 为失败；输出按原样显示。
+# 由 pengj-templates（common 层）托管。
+# 仓库环境体检的无交互引导脚本：永不自动下载/安装，永不弹 y/n 阻塞输入。
 
-set -u
+set -eu
 
-fix=0
-install_cli=0
-for arg in "$@"; do
-    case "$arg" in
-        --fix) fix=1 ;;
-        --install-cli) install_cli=1 ;;
-        -h|--help)
-            echo "用法：sh .pengj-templates/scripts/doctor.sh [--fix] [--install-cli]"
-            exit 0
-            ;;
-        *)
-            echo "[doctor] 未知参数： $arg" >&2
-            exit 2
-            ;;
-    esac
-done
+PENGJ_BIN="${XDG_DATA_HOME:-$HOME/.local/share}/pengj-templates/bin"
+case ":$PATH:" in
+  *":$PENGJ_BIN:"*) ;;
+  *) PATH="$PATH:$PENGJ_BIN"; export PATH ;;
+esac
 
-root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-cd "$root" || exit 1
-export DOCTOR_ROOT="$root"
-if [ "$fix" = "1" ]; then
-    export DOCTOR_FIX=1
+if command -v just >/dev/null 2>&1 \
+  && command -v pengj-templates-cli >/dev/null 2>&1 \
+  && { [ -f justfile ] || [ -f Justfile ]; }; then
+  exec just doctor "$@"
 fi
 
-checks=0
-errors=0
-warnings=0
-
-ok()   { checks=$((checks + 1)); printf '[doctor] ok    %s\n' "$1"; }
-warn() { checks=$((checks + 1)); warnings=$((warnings + 1)); printf '[doctor] warn  %s\n' "$1"; }
-fail() { checks=$((checks + 1)); errors=$((errors + 1)); printf '[doctor] error %s\n' "$1"; }
-have() { command -v "$1" >/dev/null 2>&1; }
-is_windows() {
-    case "$(uname -s 2>/dev/null || echo unknown)" in
-        MINGW*|MSYS*|CYGWIN*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# --- built-in checks: only what the selected layers use ---------------------
-
-if have git; then
-    ok "git $(git --version | sed 's/^git version //')"
-else
-    fail "未找到 git"
+if command -v pengj-templates-cli >/dev/null 2>&1; then
+  exec pengj-templates-cli doctor --dir . "$@"
 fi
 
+echo "[doctor] 检测到缺失必要工具（本脚本不会自动下载或修改本机环境）：" >&2
+echo "" >&2
+echo "  - pengj-templates-cli（约 5–10 MB）" >&2
+echo "    默认安装路径：$PENGJ_BIN" >&2
+echo "    安装命令（Linux/macOS）：" >&2
+echo "      curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh" >&2
 
-if have just; then
-    ok "just $(just --version | sed 's/^just //')"
-else
-    fail "未找到 just；安装地址：https://github.com/casey/just#installation"
-fi
-if is_windows; then
-    if have pwsh; then
-        ok "pwsh $(pwsh --version)"
-    else
-        fail "未找到 pwsh；Windows 上的 just 配方需要 PowerShell 7"
-    fi
-fi
-
-
-
-if have cargo; then
-    ok "cargo $(cargo --version | sed 's/^cargo //')"
-else
-    fail "未找到 cargo；请安装 Rust 工具链"
-fi
-if have rustc; then
-    ok "rustc $(rustc --version | sed 's/^rustc //')"
-else
-    fail "未找到 rustc；请安装 Rust 工具链"
+if ! command -v just >/dev/null 2>&1; then
+  echo "" >&2
+  echo "  - just（约 3–5 MB；若直接调用 CLI 可选装）" >&2
+  echo "    常见安装位置：~/.local/bin、~/.cargo/bin 或系统包管理器目录" >&2
+  echo "    安装方式：brew install just / cargo install just / https://github.com/casey/just#installation" >&2
 fi
 
-
-
-if is_windows; then
-    if have bque; then
-        ok "bque $(bque --version 2>/dev/null | head -n 1)"
-    else
-        warn "未找到 bque；安装命令：irm https://github.com/pengjiaxusz/bque/releases/latest/download/install.ps1 | iex"
-    fi
-else
-    ok "当前平台不需要 bque"
-fi
-
-
-
-# --- pengj-templates-cli ---------------------------------------------------
-# 提交门禁要它跑检查，agent 层的工作区链接由它的 `repo init` 创建，所以两层都
-# 缺不了它：缺失是错误而不是警告。安装是唯一会联网的动作，只由 --install-cli
-# 显式触发——`--fix` 永远不联网。
-cli_release_base='https://github.com/pengjiaxusz/pengj-templates/releases/latest/download'
-if is_windows; then
-    cli_hint="irm $cli_release_base/install.ps1 | iex"
-else
-    cli_hint="curl -fsSL $cli_release_base/install.sh | sh"
-fi
-install_cli_tool() {
-    installer="${TMPDIR:-/tmp}/pengj-install-$$.sh"
-    if is_windows; then
-        have pwsh || return 1
-        pwsh -NoProfile -Command "irm $cli_release_base/install.ps1 | iex"
-        return $?
-    fi
-    if have curl; then
-        curl -fLs --connect-timeout 15 --max-time 120 -o "$installer" "$cli_release_base/install.sh" || return 1
-    elif have wget; then
-        wget -q --timeout=30 -O "$installer" "$cli_release_base/install.sh" || return 1
-    else
-        return 1
-    fi
-    sh "$installer"
-    installer_status=$?
-    rm -f "$installer"
-    return $installer_status
-}
-
-if have pengj-templates-cli; then
-    ok "pengj-templates-cli $(pengj-templates-cli --version 2>/dev/null | head -n 1)"
-elif [ "$install_cli" = "1" ]; then
-    if install_cli_tool; then
-        if have pengj-templates-cli; then
-            ok "pengj-templates-cli $(pengj-templates-cli --version 2>/dev/null | head -n 1)"
-        else
-            warn "pengj-templates-cli 已安装，但当前终端的 PATH 还没刷新；重开终端后再跑一次 doctor"
-        fi
-    else
-        fail "无法自动安装 pengj-templates-cli；请手动安装：{{ cli_hint }}"
-    fi
-else
-    fail "未找到 pengj-templates-cli；提交门禁与 agent 工作区链接都依赖它。安装：{{ cli_hint }}（或给本脚本加 --install-cli）"
-fi
-
-
-
-if have node; then
-    ok "node $(node --version 2>/dev/null)"
-else
-    warn "未找到 node；mcp-bootstrap 技能需要它（请安装 Node.js，或从 options.skills 中移除该技能）"
-fi
-
-
-
-# --- commit gate activation ------------------------------------------------
-
-if have git && git rev-parse --show-toplevel >/dev/null 2>&1; then
-    local_hooks=$(git config --local --get core.hooksPath 2>/dev/null || true)
-
-    if [ ! -f .githooks/pre-commit ] || [ ! -f .githooks/commit-msg ]; then
-        fail ".githooks 不完整；应包含 pre-commit 与 commit-msg"
-    elif [ "$local_hooks" = ".githooks" ]; then
-        ok "提交钩子已激活（core.hooksPath=.githooks）"
-    elif [ -n "$local_hooks" ]; then
-        warn "core.hooksPath 为 '$local_hooks'，并非 .githooks；提交门禁未在此生效"
-    elif [ "$fix" = "1" ]; then
-        # Activate through the zero-dependency installer shipped by the gate
-        # layer, but judge the outcome by the resulting git state: an
-        # informational line failing to print must not turn a successful
-        # activation into an error.
-        if [ -f .githooks/install.sh ]; then
-            sh .githooks/install.sh >/dev/null || true
-        fi
-        # Record the mode bit when the hooks are already tracked, so clones on
-        # Unix do not silently skip them.
-        git update-index --chmod=+x .githooks/pre-commit .githooks/commit-msg 2>/dev/null || true
-        if [ "$(git config --local --get core.hooksPath 2>/dev/null || true)" = ".githooks" ]; then
-            ok "提交钩子已激活（core.hooksPath=.githooks）"
-        else
-            fail "无法激活提交钩子；请运行：git config core.hooksPath .githooks"
-        fi
-    else
-        warn "提交钩子未激活；请运行 'sh .pengj-templates/scripts/doctor.sh --fix' 或 'git config core.hooksPath .githooks'"
-    fi
-
-    # git silently skips a hook without the executable bit on Unix
-    if ! is_windows; then
-        for hook in pre-commit commit-msg; do
-            if [ -f ".githooks/$hook" ] && [ ! -x ".githooks/$hook" ]; then
-                if [ "$fix" = "1" ]; then
-                    chmod +x ".githooks/$hook" && ok ".githooks/$hook 已具备可执行权限"
-                else
-                    warn ".githooks/$hook 不可执行；请带 --fix 运行"
-                fi
-            fi
-        done
-    fi
-else
-    warn "当前不是 git 工作树；跳过提交钩子检查"
-fi
-
-
-
-# --- agent client workspace links -----------------------------------------
-
-if [ -d .agents ]; then
-    if have pengj-templates-cli; then
-        if pengj-templates-cli repo status --dir . >/dev/null 2>&1; then
-            ok "工作区链接已就绪（agent 客户端）"
-        elif [ "$fix" = "1" ] && pengj-templates-cli repo init --dir . >/dev/null 2>&1 \
-            && pengj-templates-cli repo status --dir . >/dev/null 2>&1; then
-            ok "工作区链接已创建（agent 客户端）"
-        elif [ "$fix" = "1" ]; then
-            fail "无法创建工作区链接；请运行：pengj-templates-cli repo init"
-        else
-            fail "工作区链接未就绪；请运行 'just doctor --fix'"
-        fi
-    else
-        warn "未找到 pengj-templates-cli；没有它无法检查或创建工作区链接"
-    fi
-fi
-
-# --- shared build directory ------------------------------------------------
-
-# The shared directory is derived by the CLI, so the build recipes and this
-# check read the same value. Missing or unwritable is an error: silently
-# falling back to a per-worktree target/ is exactly the failure mode this
-# layer exists to kill. Exit 2 means the directory is fine but some
-# CARGO_TARGET_DIR in the environment points elsewhere.
-if have pengj-templates-cli; then
-    if [ "$fix" = "1" ]; then
-        pengj-templates-cli worktree check --dir . --fix >/dev/null 2>&1
-    else
-        pengj-templates-cli worktree check --dir . >/dev/null 2>&1
-    fi
-    worktree_code=$?
-    case "$worktree_code" in
-        0) ok "共享编译目录就绪（各工作树复用同一份编译目录）" ;;
-        2) warn "共享编译目录就绪，但环境里的 CARGO_TARGET_DIR 指向别处；裸跑 cargo 会落到另一个目录。请运行：pengj-templates-cli worktree check --dir ." ;;
-        *) fail "共享编译目录缺失或不可写；请运行：pengj-templates-cli worktree check --dir . --fix" ;;
-    esac
-else
-    if is_windows; then
-        worktree_cli_hint="irm https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.ps1 | iex"
-    else
-        worktree_cli_hint="curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/latest/download/install.sh | sh"
-    fi
-    fail "未找到 pengj-templates-cli；没有它无法推导或校验共享编译目录。安装：${worktree_cli_hint}"
-fi
-
-
-# --- custom checks ---------------------------------------------------------
-
-custom=0
-if [ -d .pengj-templates/scripts/doctor.d ]; then
-    for script in .pengj-templates/scripts/doctor.d/*.sh; do
-        [ -f "$script" ] || continue
-        custom=$((custom + 1))
-        name=$(basename "$script")
-        if sh "$script"; then
-            checks=$((checks + 1))
-            printf '[doctor] custom ok    %s\n' "$name"
-        else
-            checks=$((checks + 1))
-            errors=$((errors + 1))
-            printf '[doctor] custom error %s\n' "$name"
-        fi
-    done
-fi
-if [ "$custom" -eq 0 ]; then
-    printf '[doctor] 自定义检查：无（在 .pengj-templates/scripts/doctor.d/ 下添加 *.sh 脚本即可扩展本检查）\n'
-fi
-
-printf '[doctor] 共 %d 项检查：%d 个错误，%d 个警告\n' "$checks" "$errors" "$warnings"
-if [ "$errors" -gt 0 ]; then
-    exit 1
-fi
-exit 0
+echo "" >&2
+echo "安装完成后请重新运行：" >&2
+echo "  sh .pengj-templates/scripts/doctor.sh" >&2
+echo "  # 或：just doctor（如需修复本地钩子/链接，再显式追加 --fix）" >&2
+exit 1

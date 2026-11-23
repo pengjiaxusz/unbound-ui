@@ -9,4 +9,4 @@
 - [ ] `gate` 这项检查是绿的。
 
 
-> 这项检查跑在服务端，不依赖你的机器。想在推送前就发现同样的问题，本地门禁启用一次即可：`sh .githooks/install.sh`。
+> 这项检查跑在服务端，不依赖你的机器。想在推送前就发现同样的问题，本地门禁启用一次即可：`just doctor --fix`（或 `pengj-templates-cli gate hooks install`）。

@@ -80,15 +80,19 @@ function Find-CliCommand {
     $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 # Walk up to repository root (detect Cargo.toml)
     $curr = $scriptDir
-    for ($i = 0; $i -lt 6; $i++) {
+    # The script itself sits at <root>/<a>/<b>/<c>/scripts/<file>, so the repository
+    # root is more than 6 levels up in some checkouts; keep some headroom.
+    for ($i = 0; $i -lt 8; $i++) {
         if (Test-Path (Join-Path $curr "Cargo.toml")) {
-            $relBin = Join-Path $curr "target\release\pengj-templates-cli.exe"
-            if (Test-Path $relBin) {
-                return @{ Type = "bin"; Cmd = $relBin }
-            }
-            $dbgBin = Join-Path $curr "target\debug\pengj-templates-cli.exe"
-            if (Test-Path $dbgBin) {
-                return @{ Type = "bin"; Cmd = $dbgBin }
+            # Both artifacts can exist in development: pick the newest one, so a freshly built
+            # debug binary is not shadowed by a stale release binary (and vice versa).
+            $built = @(
+                (Join-Path $curr "target\release\pengj-templates-cli.exe")
+                (Join-Path $curr "target\debug\pengj-templates-cli.exe")
+            ) | Where-Object { Test-Path $_ } |
+                Sort-Object { (Get-Item $_).LastWriteTimeUtc } -Descending
+            if ($built.Count -gt 0) {
+                return @{ Type = "bin"; Cmd = $built[0] }
             }
             break
         }

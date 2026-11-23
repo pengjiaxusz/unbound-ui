@@ -5,34 +5,34 @@
 # 全工作区构建（Windows 走全局排队 + Idle 优先级）
 [windows]
 build *ARGS:
-    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo build --workspace {{ARGS}}
+    @$d = if (Get-Command pengj-templates-cli -ErrorAction SilentlyContinue) { pengj-templates-cli worktree target-dir --dir . 2>$null }; $env:CARGO_TARGET_DIR = if ($LASTEXITCODE -eq 0 -and $d) { $d } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }; bque run -- cargo build --workspace {{ARGS}}
 [unix]
 build *ARGS:
-    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo build --workspace {{ARGS}}
+    CARGO_TARGET_DIR="$(command -v pengj-templates-cli >/dev/null 2>&1 && pengj-templates-cli worktree target-dir --dir . 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-target}")" cargo build --workspace {{ARGS}}
 
 # 全工作区检查（clippy 警告视为错误）
 [windows]
 check *ARGS:
-    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
+    @$d = if (Get-Command pengj-templates-cli -ErrorAction SilentlyContinue) { pengj-templates-cli worktree target-dir --dir . 2>$null }; $env:CARGO_TARGET_DIR = if ($LASTEXITCODE -eq 0 -and $d) { $d } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }; bque run -- cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
 [unix]
 check *ARGS:
-    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
+    CARGO_TARGET_DIR="$(command -v pengj-templates-cli >/dev/null 2>&1 && pengj-templates-cli worktree target-dir --dir . 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-target}")" cargo clippy --workspace --all-targets --all-features -- -D warnings {{ARGS}}
 
 # 全工作区测试
 [windows]
 test *ARGS:
-    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque run -- cargo test --workspace --all-features {{ARGS}}
+    @$d = if (Get-Command pengj-templates-cli -ErrorAction SilentlyContinue) { pengj-templates-cli worktree target-dir --dir . 2>$null }; $env:CARGO_TARGET_DIR = if ($LASTEXITCODE -eq 0 -and $d) { $d } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }; bque run -- cargo test --workspace --all-features {{ARGS}}
 [unix]
 test *ARGS:
-    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo test --workspace --all-features {{ARGS}}
+    CARGO_TARGET_DIR="$(command -v pengj-templates-cli >/dev/null 2>&1 && pengj-templates-cli worktree target-dir --dir . 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-target}")" cargo test --workspace --all-features {{ARGS}}
 
 # 专项基准测试（自动挂起后台编译，提供纯净 CPU 环境）
 [windows]
 bench *ARGS:
-    @$env:CARGO_TARGET_DIR = (pengj-templates-cli worktree target-dir --dir .); bque bench -- cargo bench --workspace {{ARGS}}
+    @$d = if (Get-Command pengj-templates-cli -ErrorAction SilentlyContinue) { pengj-templates-cli worktree target-dir --dir . 2>$null }; $env:CARGO_TARGET_DIR = if ($LASTEXITCODE -eq 0 -and $d) { $d } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }; bque bench -- cargo bench --workspace {{ARGS}}
 [unix]
 bench *ARGS:
-    CARGO_TARGET_DIR="$(pengj-templates-cli worktree target-dir --dir .)" cargo bench --workspace {{ARGS}}
+    CARGO_TARGET_DIR="$(command -v pengj-templates-cli >/dev/null 2>&1 && pengj-templates-cli worktree target-dir --dir . 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-target}")" cargo bench --workspace {{ARGS}}
 
 
 # 代码就地格式化（轻量，不排队）
