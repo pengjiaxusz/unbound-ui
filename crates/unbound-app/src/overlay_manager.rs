@@ -165,7 +165,7 @@ mod tests {
         const MENU_KEY: u64 = 2000;
 
         let mut manager = OverlayManager::new();
-        let mut focus = FocusManager::new();
+        let mut focus = FocusManager::new(unbound_input::FocusConfig::default());
         manager.open(
             OverlayEntry::menu(
                 MENU_KEY,

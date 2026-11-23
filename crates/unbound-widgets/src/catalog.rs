@@ -21,10 +21,11 @@ use unbound_theme::Token;
 use unbound_world::virtualize::TreeRow;
 
 use crate::{
-    emit_address_bar, emit_address_bar_chrome, emit_address_bar_text_layer,
-    emit_address_bar_with_visual, emit_generic_data_table, emit_pipeline_view, emit_query_builder,
-    emit_schema_form, emit_shortcut_bar, emit_task_hud, emit_tree_row_divider, layout_form,
-    layout_tags, parse_markdown, AccordionDesc, AccordionSection, AccordionState, AccordionTokens,
+    emit_address_bar, emit_address_bar_chrome, emit_address_bar_dropdown_text_layer,
+    emit_address_bar_text_layer, emit_address_bar_with_dropdown, emit_address_bar_with_visual,
+    emit_generic_data_table, emit_pipeline_view, emit_query_builder, emit_schema_form,
+    emit_shortcut_bar, emit_task_hud, emit_tree_row_divider, layout_form, layout_tags,
+    parse_markdown, AccordionDesc, AccordionSection, AccordionState, AccordionTokens,
     AddressBarDesc, AddressBarState, AddressBarTextVisual, AlertDesc, AlertDialogDesc,
     AspectRatioBoxDesc, AvatarDesc, AvatarGroupDesc, BadgeDesc, BreadcrumbDesc, BreadcrumbState,
     BreadcrumbTokens, ButtonDesc, CalendarState, CanvasToolbarDesc, CanvasToolbarState, CardDesc,
@@ -3033,6 +3034,17 @@ where
                 false,
                 false,
                 desc.z,
+            );
+            let _dropdown_text_layer = emit_address_bar_dropdown_text_layer(&[], false, desc.z);
+            let _with_dropdown = emit_address_bar_with_dropdown(
+                node,
+                &desc,
+                &ab_state,
+                state,
+                &[],
+                &[],
+                &[],
+                &AddressBarTextVisual::default(),
             );
             emit_address_bar(node, &desc, &ab_state, state, &glyphs)
         }

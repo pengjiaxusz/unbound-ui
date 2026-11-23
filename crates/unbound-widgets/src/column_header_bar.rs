@@ -10,7 +10,7 @@
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
-use unbound_gpu::data::{GpuPayload, GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_gpu::data::{PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, PointerButton, PointerEvent};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -1239,7 +1239,7 @@ mod tests {
             .primitives
             .iter()
             .filter(|p| {
-                GpuPrimitiveInstance::unpack_type(p.prim_type_and_flags).2
+                unbound_gpu::data::GpuPrimitiveInstance::unpack_type(p.prim_type_and_flags).2
                     == SubElement::Border as u16
             })
             .count();
