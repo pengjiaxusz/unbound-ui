@@ -108,8 +108,12 @@ parity-review *ARGS:
 # 只跑差分：本框架侧离屏渲染 + ROI 四门禁，产出 target/parity/report.json
 # 本命令绝不重采 WinUI 3 参考图；参考图过期请先 `just parity capture --refresh --theme all`。
 # 示例：just parity diff --control Button --refresh / just parity diff --only-failed
+[windows]
 parity-diff *ARGS:
     @bque run -- cargo run -p showcase -- parity-diff --reference tools/winui-reference/captures --out target/parity {{ARGS}}
+[unix]
+parity-diff *ARGS:
+    @cargo run -p showcase -- parity-diff --reference tools/winui-reference/captures --out target/parity {{ARGS}}
 
 # 打开展台的 Pixel parity 报告页（参考图 / 本框架 / 热力图三列并排）
 [windows]
@@ -134,8 +138,12 @@ _parity-exe *ARGS:
     @& "{{justfile_directory()}}/tools/winui-reference/bin/x64/Release/net8.0-windows10.0.19041.0/win-x64/WinUiReference.exe" {{ARGS}}
 
 # 编译 Vulkan 着色器（glslc 逐个编译并校验，同样纳入排队）
+[windows]
 compile-shaders:
     @bque run -- bash scripts/compile-shaders.sh
+[unix]
+compile-shaders:
+    @bash scripts/compile-shaders.sh
 
 # 运行指定示例程序
 # 示例：just example 01_hello_counter
@@ -149,21 +157,34 @@ example NAME *ARGS:
     @"{{CARGO_TARGET_DIR}}/debug/examples/{{NAME}}" {{ARGS}}
 
 # 运行所有示例程序的无头自检套件
+[windows]
 test-examples:
     @bque run -- cargo test -p unbound-app --examples
+[unix]
+test-examples:
+    @cargo test -p unbound-app --examples
 
 # 运行文本渲染性能与构建裁剪基准测试套件（走 bque bench，秒级挂起后台编译）
+[windows]
 text-baseline *ARGS:
     @bque bench -- cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
+[unix]
+text-baseline *ARGS:
+    @cargo test -p unbound-text --test text_render_baseline --all-features --release -- --nocapture {{ARGS}}
 
 # app-guest 的 host_roundtrip 集成测试要加载真实 cdylib，而 `cargo test`
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 # 覆盖机制见托管块的 allow-duplicate-recipes。
 
 # 覆盖框架 test：先产出 app-guest cdylib 再跑测试
+[windows]
 test *ARGS:
     @bque run -- cargo build -p app-guest
     @bque run -- cargo test --workspace --all-features {{ARGS}}
+[unix]
+test *ARGS:
+    @cargo build -p app-guest
+    @cargo test --workspace --all-features {{ARGS}}
 
 # ---------- 共享编译目录（worktree 层） ----------
 
