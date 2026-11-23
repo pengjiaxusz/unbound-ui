@@ -18,11 +18,13 @@ use unbound_anim::{Spring, SpringPreset};
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
+use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::overlay::{place_anchored_popup_detailed, BackdropRequest, Placement};
 use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
+use crate::scroll::{emit_scrollbar, ScrollBarDesc, ScrollBarVisibility};
 use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
@@ -524,6 +526,8 @@ pub struct NavigationViewLayout {
     pub flyout_rows: Vec<NavigationViewRow>,
     /// 主菜单内容总高度（用于计算 `scroll_max`）。
     pub menu_content_height: f32,
+    /// 窗格展开动画进度（`0.0` = 紧凑态，`1.0` = 完全展开或 `Top` 模式）。
+    pub pane_expand_progress: f32,
 }
 
 /// `NavigationView` 发射输出（包含标准图元/语义与局部毛玻璃请求）。
@@ -560,6 +564,10 @@ pub struct NavigationViewState {
     pub scroll_offset: f32,
     /// 主菜单区最大滚动偏移（由布局回写）。
     pub scroll_max: f32,
+    /// 指针当前是否悬停在 Left 窗格菜单区滚动条热区（轨道或滑块）上。
+    pub scrollbar_hovered: bool,
+    /// Left 窗格菜单区滚动条滑块拖拽起始状态 `(start_pointer_y, start_scroll_offset)`。
+    pub scrollbar_drag: Option<(f32, f32)>,
     /// 搜索框当前文本。
     pub search_query: String,
     /// 搜索框是否请求聚焦（例如紧凑态点击搜索图标后自动展开并聚焦）。
@@ -591,6 +599,8 @@ impl Default for NavigationViewState {
             overflow_menu_open: false,
             scroll_offset: 0.0,
             scroll_max: 0.0,
+            scrollbar_hovered: false,
+            scrollbar_drag: None,
             search_query: String::new(),
             search_focused: false,
             animations_enabled: true,
@@ -881,6 +891,60 @@ impl NavigationViewState {
         }
     }
 
+    /// 更新 Left 窗格菜单区滚动条热区悬停状态（状态变化时返回 `true`）。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) -> bool {
+        if self.scrollbar_hovered != hovered {
+            self.scrollbar_hovered = hovered;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 处理指针移动：若正在拖拽滑块则更新滚动偏移，否则更新滚动条悬停展开态。
+    pub fn handle_pointer_move(
+        &mut self,
+        desc: &NavigationViewDesc,
+        layout: &NavigationViewLayout,
+        pos: Vec2,
+    ) -> bool {
+        if self.scrollbar_drag.is_some() {
+            return self.handle_pointer_drag(desc, layout, pos);
+        }
+        let hovered = desc
+            .menu_scrollbar_desc(layout, self, false)
+            .is_some_and(|bar| bar.is_visible() && bar.track_rect().contains_point(pos));
+        self.set_scrollbar_hovered(hovered)
+    }
+
+    /// 处理指针拖拽：拖拽 Left 窗格滚动条滑块时同步更新垂直滚动偏移。
+    pub fn handle_pointer_drag(
+        &mut self,
+        desc: &NavigationViewDesc,
+        layout: &NavigationViewLayout,
+        pos: Vec2,
+    ) -> bool {
+        let Some((start_pointer_y, start_offset)) = self.scrollbar_drag else {
+            return false;
+        };
+        let Some(bar) = desc.menu_scrollbar_desc(layout, self, false) else {
+            self.scrollbar_drag = None;
+            return false;
+        };
+        if !bar.is_visible() {
+            self.scrollbar_drag = None;
+            return false;
+        }
+        self.scroll_max = bar.max_offset();
+        self.scroll_offset = bar.offset_for_drag(start_offset, start_pointer_y, pos.y);
+        true
+    }
+
+    /// 处理指针释放：结束 Left 窗格滚动条滑块拖拽。
+    pub fn handle_pointer_up(&mut self, _pos: Vec2) -> bool {
+        self.scrollbar_drag.take().is_some()
+    }
+
     /// 计算供 `TitleBarDesc` 双向消费的同步状态。
     #[must_use]
     pub fn title_bar_sync(&self, desc: &NavigationViewDesc) -> NavigationViewTitleBarSync {
@@ -1017,6 +1081,24 @@ impl NavigationViewState {
         }
         if layout.search_rect.is_some_and(|r| r.contains_point(pos)) {
             return self.invoke_item(desc, NAVIGATION_VIEW_SEARCH_BUTTON_ID);
+        }
+
+        // 4.5 命中 Left 窗格菜单区叠加滚动条（优先于下方菜单行：滑块启动拖拽，轨道翻页）。
+        if let Some(bar) = desc.menu_scrollbar_desc(layout, self, false) {
+            if bar.is_visible() {
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scroll_max = bar.max_offset();
+                    self.scrollbar_drag = Some((pos.y, self.scroll_offset));
+                    self.scrollbar_hovered = true;
+                    return true;
+                }
+                if let Some(paged) = bar.page_offset_for_track_click(pos) {
+                    self.scroll_max = bar.max_offset();
+                    self.scroll_offset = paged;
+                    self.scrollbar_hovered = true;
+                    return true;
+                }
+            }
         }
 
         // 5. 命中主菜单与页脚条目。
@@ -1185,6 +1267,8 @@ pub struct NavigationViewDesc {
     pub selected_item_id: Option<u64>,
     /// 当前指针悬停条目标识。
     pub hovered_item_id: Option<u64>,
+    /// Left 窗格菜单区滚动条可见性策略（默认 [`ScrollBarVisibility::Auto`]）。
+    pub scrollbar_visibility: ScrollBarVisibility,
     /// 无障碍标签。
     pub label: String,
     /// 基础绘制深度。
@@ -1221,6 +1305,7 @@ impl NavigationViewDesc {
             footer_menu_items: Vec::new(),
             selected_item_id: None,
             hovered_item_id: None,
+            scrollbar_visibility: ScrollBarVisibility::Auto,
             label: "NavigationView".to_owned(),
             z: 610,
         }
@@ -1333,6 +1418,47 @@ impl NavigationViewDesc {
     pub const fn hovered_item(mut self, item_id: Option<u64>) -> Self {
         self.hovered_item_id = item_id;
         self
+    }
+
+    /// 设置 Left 窗格菜单区滚动条可见性策略。
+    #[must_use]
+    pub const fn scrollbar_visibility(mut self, visibility: ScrollBarVisibility) -> Self {
+        self.scrollbar_visibility = visibility;
+        self
+    }
+
+    /// 构造 Left 窗格菜单区的垂直按需叠加滚动条描述符。
+    ///
+    /// `Top` 模式（水平溢出走溢出按钮）与 `Minimal` 关闭态返回 `None`。
+    #[must_use]
+    pub fn menu_scrollbar_desc(
+        &self,
+        layout: &NavigationViewLayout,
+        state: &NavigationViewState,
+        disabled: bool,
+    ) -> Option<ScrollBarDesc> {
+        if layout.is_top
+            || (layout.display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open)
+        {
+            return None;
+        }
+        let active_z = if layout.overlay_rect.is_some() {
+            self.z + 22
+        } else {
+            self.z + 2
+        };
+        let mut bar = ScrollBarDesc::vertical(
+            layout.menu_viewport_rect,
+            layout.menu_content_height,
+            state.scroll_offset,
+        );
+        bar.visibility = self.scrollbar_visibility;
+        bar.z = active_z + 6;
+        bar.layer = CONTROL_LAYER;
+        bar.hovered = state.scrollbar_hovered;
+        bar.dragging = state.scrollbar_drag.is_some();
+        bar.disabled = disabled;
+        Some(bar)
     }
 
     /// 设置无障碍标签。
@@ -1561,25 +1687,33 @@ impl NavigationViewDesc {
 
         // Minimal 关闭态不排布窗格内行。
         if display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open {
+            layout.pane_expand_progress = 0.0;
             return layout;
         }
 
-        let pane_is_narrow = !state.is_pane_open;
+        // 依据实际窗格宽度计算动画展开进度 `t`，避免折叠第 0 帧按布尔开关硬切布局。
+        let span = self.open_pane_length - self.compact_pane_length;
+        let pane_expand_progress = if span > f32::EPSILON {
+            ((active_pane_rect.width() - self.compact_pane_length) / span).clamp(0.0, 1.0)
+        } else if state.is_pane_open {
+            1.0
+        } else {
+            0.0
+        };
+        layout.pane_expand_progress = pane_expand_progress;
+        let pane_is_collapsed = pane_expand_progress <= 0.01;
         let inner_x = active_pane_rect.origin.x + NAVIGATION_VIEW_PANE_PADDING;
         let inner_w = (active_pane_rect.width() - NAVIGATION_VIEW_PANE_PADDING * 2.0).max(1.0);
 
-        // 可选 AutoSuggestBox 搜索槽位。
+        // 可选 AutoSuggestBox 搜索槽位（随窗格宽度平滑过渡，避免第 0 帧瞬切）。
         if self.show_auto_suggest_box {
             let search_h = 32.0;
-            let search_w = if pane_is_narrow {
-                40.0
+            let inset_x = NAVIGATION_VIEW_SEARCH_INSET_X * pane_expand_progress;
+            let search_x = inner_x + inset_x;
+            let search_w = if pane_is_collapsed {
+                40.0_f32.min(inner_w)
             } else {
-                (inner_w - NAVIGATION_VIEW_SEARCH_INSET_X * 2.0).max(1.0)
-            };
-            let search_x = if pane_is_narrow {
-                inner_x
-            } else {
-                inner_x + NAVIGATION_VIEW_SEARCH_INSET_X
+                (inner_w - inset_x * 2.0).max(40.0_f32.min(inner_w))
             };
             layout.search_rect = Some(Rect::new(
                 search_x,
@@ -1610,7 +1744,7 @@ impl NavigationViewDesc {
         self.flatten_menu_items(
             &self.menu_items,
             0,
-            pane_is_narrow,
+            pane_is_collapsed,
             state,
             &mut content_y_cursor,
             &mut flat_main,
@@ -1667,7 +1801,7 @@ impl NavigationViewDesc {
                     });
                 }
                 NavigationViewMenuItem::Header(hdr) => {
-                    if !pane_is_narrow {
+                    if !pane_is_collapsed {
                         layout.rows.push(NavigationViewRow {
                             kind: NavigationViewRowKind::Header {
                                 content: hdr.content.clone(),
@@ -1697,7 +1831,7 @@ impl NavigationViewDesc {
         }
 
         // Compact 折叠态子菜单 Flyout 定位（防越界翻转）。
-        if pane_is_narrow {
+        if !state.is_pane_open {
             if let Some(parent_id) = state.open_flyout_parent_id {
                 self.layout_submenu_flyout(parent_id, Placement::RightStart, &mut layout);
             }
@@ -1779,6 +1913,7 @@ impl NavigationViewDesc {
     ) {
         let rect = self.rect;
         let bar_y = rect.origin.y + top_pad;
+        layout.pane_expand_progress = 1.0;
         layout.pane_rect = Rect::new(
             rect.origin.x,
             bar_y,
@@ -2123,6 +2258,14 @@ pub fn emit_navigation_view(
         z + 2
     };
 
+    let active_pane_rect = layout.overlay_rect.unwrap_or(layout.pane_rect);
+    let pane_right_edge = active_pane_rect.max().x;
+    let pane_t = if layout.is_top {
+        1.0
+    } else {
+        layout.pane_expand_progress
+    };
+
     // 5. 内置返回按钮与汉堡折叠按钮。
     if let Some(back_r) = layout.back_button_rect {
         let back_enabled = !disabled && (desc.is_back_enabled || layout.is_overlay);
@@ -2194,11 +2337,13 @@ pub fn emit_navigation_view(
                 active_z + 1,
             ));
         }
-        // 紧邻汉堡按钮右侧绘制 PaneTitle（展开态可见）。
-        if state.is_pane_open {
+        // 紧邻汉堡按钮右侧绘制 PaneTitle（随窗格展开进度平滑淡出/淡入并受右缘裁剪）。
+        if !layout.is_top && pane_t > 0.01 {
             if let Some(title) = desc.pane_title.as_deref() {
+                let title_x = toggle_r.max().x + NAVIGATION_VIEW_PANE_TITLE_INSET_X;
+                let max_right = (pane_right_edge - NAVIGATION_VIEW_PANE_PADDING).max(title_x);
                 let pt_r = Rect::new(
-                    toggle_r.max().x + NAVIGATION_VIEW_PANE_TITLE_INSET_X,
+                    title_x,
                     toggle_r.origin.y,
                     (desc.open_pane_length - 64.0).max(0.0),
                     toggle_r.height(),
@@ -2212,13 +2357,16 @@ pub fn emit_navigation_view(
                     AlignX::Left,
                     AlignY::Middle,
                 );
+                let clipped = clip_quads_to_right_edge(&pt_quads, max_right);
+                let start = out.primitives.len();
                 glyphs(
-                    &pt_quads,
+                    &clipped,
                     bar_ink,
                     active_z + 1,
                     &mut out.primitives,
                     &mut out.payloads,
                 );
+                apply_opacity_since(&mut out.primitives, start, pane_t);
             }
         }
         let key = navigation_view_row_node(node, NAVIGATION_VIEW_PANE_TOGGLE_ID);
@@ -2235,9 +2383,10 @@ pub fn emit_navigation_view(
         );
     }
 
-    // 6. 可选 AutoSuggestBox 搜索槽位。
+    // 6. 可选 AutoSuggestBox 搜索槽位（搜索图标锚定在左侧 48px 紧凑列固定偏移，0px 位移）。
     if let Some(search_r) = layout.search_rect {
-        let is_compact_icon = !layout.is_top && !state.is_pane_open;
+        let is_compact_icon = !layout.is_top && pane_t <= 0.01;
+        let box_start = out.primitives.len();
         out.primitives.push(outlined(
             search_r,
             4.0,
@@ -2260,13 +2409,19 @@ pub fn emit_navigation_view(
             0.0,
             active_z,
         ));
-        if is_compact_icon {
+        if !is_compact_icon && !layout.is_top {
+            apply_opacity_since(&mut out.primitives, box_start, pane_t);
+        }
+        // 紧凑态及动画过渡期发射搜索图标，始终锚定在左侧 48px 紧凑列固定偏移（inner_x + 12.0）。
+        if !layout.is_top && pane_t < 0.99 {
+            let fixed_icon_x = active_pane_rect.origin.x + NAVIGATION_VIEW_PANE_PADDING + 12.0;
             let icon_r = Rect::new(
-                search_r.origin.x + (search_r.width() - 16.0) * 0.5,
+                fixed_icon_x,
                 search_r.origin.y + (search_r.height() - 16.0) * 0.5,
                 16.0,
                 16.0,
             );
+            let icon_start = out.primitives.len();
             emit_shell_icon_primitives(
                 ShellIcon::Search,
                 icon_r,
@@ -2280,7 +2435,10 @@ pub fn emit_navigation_view(
                 &mut out.primitives,
                 &mut out.payloads,
             );
-        } else {
+            let icon_opacity = if is_compact_icon { 1.0 } else { 1.0 - pane_t };
+            apply_opacity_since(&mut out.primitives, icon_start, icon_opacity);
+        }
+        if !is_compact_icon {
             let label = if state.search_query.is_empty() {
                 desc.auto_suggest_placeholder.as_str()
             } else {
@@ -2301,8 +2459,14 @@ pub fn emit_navigation_view(
                 AlignX::Left,
                 AlignY::Middle,
             );
+            let clipped = if layout.is_top {
+                quads
+            } else {
+                clip_quads_to_right_edge(&quads, search_r.max().x.min(pane_right_edge))
+            };
+            let text_start = out.primitives.len();
             glyphs(
-                &quads,
+                &clipped,
                 if disabled {
                     Token::TEXT_DISABLED
                 } else if state.search_query.is_empty() {
@@ -2314,6 +2478,9 @@ pub fn emit_navigation_view(
                 &mut out.primitives,
                 &mut out.payloads,
             );
+            if !layout.is_top {
+                apply_opacity_since(&mut out.primitives, text_start, pane_t);
+            }
         }
         let key = navigation_view_row_node(node, NAVIGATION_VIEW_SEARCH_BUTTON_ID);
         let mut a11y = A11yNode::new(Role::Search, &desc.auto_suggest_placeholder, search_r)
@@ -2334,13 +2501,14 @@ pub fn emit_navigation_view(
     }
 
     // 7. 发射所有可见主菜单与页脚行。
-    let pane_is_narrow = !layout.is_top && !state.is_pane_open;
+    let row_clip_right = (!layout.is_top).then_some(pane_right_edge);
     for row in &layout.rows {
         emit_navigation_row(
             node,
             row,
             layout.is_top,
-            pane_is_narrow,
+            pane_t,
+            row_clip_right,
             effective_selected,
             hovered_id,
             state.focused_item_id,
@@ -2349,6 +2517,15 @@ pub fn emit_navigation_view(
             text_ctx,
             &mut out,
         );
+    }
+
+    // 7.5 Left 窗格菜单区按需叠加滚动条（Top 模式与未溢出态均不发射图元与命中区）。
+    if let Some(bar_desc) = desc.menu_scrollbar_desc(&layout, state, disabled) {
+        let bar_out = emit_scrollbar(node, &bar_desc);
+        if !bar_out.is_empty() {
+            out.primitives.extend(bar_out.output.primitives);
+            out.sub_hits.extend(bar_out.hits);
+        }
     }
 
     // 8. 顶部模式溢出 `...` 按钮与下拉菜单。
@@ -2443,7 +2620,8 @@ pub fn emit_navigation_view(
                 node,
                 row,
                 false,
-                false,
+                1.0,
+                None,
                 effective_selected,
                 hovered_id,
                 state.focused_item_id,
@@ -2475,7 +2653,8 @@ pub fn emit_navigation_view(
                 node,
                 row,
                 false,
-                false,
+                1.0,
+                None,
                 effective_selected,
                 hovered_id,
                 state.focused_item_id,
@@ -2514,13 +2693,50 @@ pub fn emit_navigation_view(
     }
 }
 
+/// 对 `primitives[start..]` 中新发射的图元叠乘不透明度（用于窗格展开/折叠平滑淡出与淡入）。
+fn apply_opacity_since(primitives: &mut [GpuPrimitiveInstance], start: usize, opacity: f32) {
+    let clamped = opacity.clamp(0.0, 1.0);
+    if (clamped - 1.0).abs() <= f32::EPSILON {
+        return;
+    }
+    for prim in &mut primitives[start..] {
+        let combined = (prim.opacity() * clamped).clamp(0.0, 1.0);
+        prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(prim.depth_u16(), combined);
+    }
+}
+
+/// 按窗格右缘水平裁剪字形四边形，确保折叠/展开中间帧文字自然裁切、不溢出窗格右缘。
+fn clip_quads_to_right_edge(quads: &[GlyphQuad], max_x: f32) -> Vec<GlyphQuad> {
+    let mut clipped = Vec::with_capacity(quads.len());
+    for quad in quads {
+        if quad.rect.origin.x >= max_x {
+            continue;
+        }
+        if quad.rect.max().x <= max_x {
+            clipped.push(*quad);
+            continue;
+        }
+        let keep_w = (max_x - quad.rect.origin.x).max(0.0);
+        if keep_w <= 0.0 {
+            continue;
+        }
+        let ratio = (keep_w / quad.rect.size.x.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let mut partial = *quad;
+        partial.rect.size.x = keep_w;
+        partial.uv[2] = partial.uv[0] + (partial.uv[2] - partial.uv[0]) * ratio;
+        clipped.push(partial);
+    }
+    clipped
+}
+
 /// 发射单行导航条目、分组标题、分隔线或 `Settings` 项（保持跨状态图元数恒定）。
 #[allow(clippy::too_many_arguments)]
 fn emit_navigation_row(
     parent_node: u64,
     row: &NavigationViewRow,
     is_top: bool,
-    pane_is_narrow: bool,
+    text_opacity: f32,
+    clip_right: Option<f32>,
     effective_selected: Option<u64>,
     hovered_id: Option<u64>,
     focused_id: Option<u64>,
@@ -2531,6 +2747,9 @@ fn emit_navigation_row(
 ) {
     match &row.kind {
         NavigationViewRowKind::Header { content } => {
+            if text_opacity <= 0.01 {
+                return;
+            }
             let label_r = Rect::new(
                 row.rect.origin.x + 12.0,
                 row.rect.origin.y,
@@ -2546,6 +2765,11 @@ fn emit_navigation_row(
                 AlignX::Left,
                 AlignY::Middle,
             );
+            let quads = match clip_right {
+                Some(max_x) => clip_quads_to_right_edge(&quads, max_x),
+                None => quads,
+            };
+            let start = out.primitives.len();
             glyphs(
                 &quads,
                 if disabled {
@@ -2557,6 +2781,7 @@ fn emit_navigation_row(
                 &mut out.primitives,
                 &mut out.payloads,
             );
+            apply_opacity_since(&mut out.primitives, start, text_opacity);
         }
         NavigationViewRowKind::Separator { opacity } => {
             let mut line = surface(
@@ -2591,7 +2816,8 @@ fn emit_navigation_row(
                 item.has_children(),
                 *is_expanded,
                 is_top,
-                pane_is_narrow,
+                text_opacity,
+                clip_right,
                 effective_selected == Some(item.id),
                 hovered_id == Some(item.id),
                 focused_id == Some(item.id),
@@ -2613,7 +2839,8 @@ fn emit_navigation_row(
                 false,
                 false,
                 is_top,
-                pane_is_narrow,
+                text_opacity,
+                clip_right,
                 effective_selected == Some(item.id),
                 hovered_id == Some(item.id),
                 focused_id == Some(item.id),
@@ -2636,7 +2863,8 @@ fn emit_navigation_row(
                 false,
                 false,
                 is_top,
-                pane_is_narrow,
+                text_opacity,
+                clip_right,
                 effective_selected == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 hovered_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 focused_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
@@ -2662,7 +2890,8 @@ fn emit_interactive_nav_item(
     has_children: bool,
     is_expanded: bool,
     is_top: bool,
-    icon_only: bool,
+    text_opacity: f32,
+    clip_right: Option<f32>,
     selected: bool,
     hovered: bool,
     focused: bool,
@@ -2671,6 +2900,7 @@ fn emit_interactive_nav_item(
     text_ctx: &mut TextCtx<'_>,
     out: &mut WidgetOutput,
 ) {
+    let collapsed = text_opacity <= 0.01;
     let row_fill = if disabled {
         Token::NONE
     } else if selected && !is_top {
@@ -2694,7 +2924,7 @@ fn emit_interactive_nav_item(
     } else {
         // 层级子项的强调条落在**子项自己的按钮左缘**（父项缩进宽度之后），
         // 而不是整条窗格的左缘：参考图父项 x=20、子项 x=51。
-        let indicator_indent = if icon_only {
+        let indicator_indent = if collapsed {
             0.0
         } else {
             depth as f32 * NAVIGATION_VIEW_CHILD_INDENT
@@ -2726,18 +2956,15 @@ fn emit_interactive_nav_item(
         Token::NAV_TEXT
     };
 
-    let indent = if is_top || icon_only {
+    let indent = if is_top || collapsed {
         0.0
     } else {
         depth as f32 * NAVIGATION_VIEW_CHILD_INDENT
     };
 
-    // 图标区域。
-    let icon_x = if icon_only {
-        rect.origin.x + (rect.width() - 16.0) * 0.5
-    } else {
-        rect.origin.x + 12.0 + indent
-    };
+    // 图标区域：一级图标始终锚定在左侧 48px 紧凑列固定偏移（rect.origin.x + 12.0 + indent），
+    // 无论窗格展开/折叠动画处于何种中间宽度，水平 X 坐标全程严格保持 0px 位移。
+    let icon_x = rect.origin.x + 12.0 + indent;
     if let Some(ic) = icon {
         let icon_r = Rect::new(
             icon_x,
@@ -2772,15 +2999,16 @@ fn emit_interactive_nav_item(
         }
     }
 
-    // 文本标签（非仅图标态）。
-    if !icon_only {
+    // 文本标签、子项折叠箭头与徽标：随窗格展开进度平滑淡出/淡入并受窗格右缘裁剪，`t <= 0.01` 时完全不画。
+    if !collapsed {
         let text_x = if icon.is_some() {
             // WinUI 的图标盒 16px 起点 +12，文字从图标盒右侧再让 16px（实测文字左缘 = 行左 + 45）。
             icon_x + 32.0
         } else {
             rect.origin.x + 12.0 + indent
         };
-        let mut right_edge = rect.max().x - 12.0;
+        let pane_right = clip_right.unwrap_or(rect.max().x);
+        let mut right_edge = (rect.max().x - 12.0).min(pane_right);
         if has_children {
             let chevron_r = Rect::new(
                 right_edge - 16.0,
@@ -2788,24 +3016,28 @@ fn emit_interactive_nav_item(
                 16.0,
                 16.0,
             );
-            let chevron = if is_expanded {
-                ShellIcon::ChevronUp
-            } else {
-                ShellIcon::ChevronDown
-            };
-            emit_shell_icon_primitives(
-                chevron,
-                chevron_r,
-                if disabled {
-                    Token::TEXT_DISABLED
+            if chevron_r.origin.x >= icon_x + 20.0 && chevron_r.max().x <= pane_right {
+                let chevron = if is_expanded {
+                    ShellIcon::ChevronUp
                 } else {
-                    Token::NAV_TEXT_MUTED
-                },
-                Token::SURFACE_RAISED,
-                z + 1,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
+                    ShellIcon::ChevronDown
+                };
+                let start = out.primitives.len();
+                emit_shell_icon_primitives(
+                    chevron,
+                    chevron_r,
+                    if disabled {
+                        Token::TEXT_DISABLED
+                    } else {
+                        Token::NAV_TEXT_MUTED
+                    },
+                    Token::SURFACE_RAISED,
+                    z + 1,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+                apply_opacity_since(&mut out.primitives, start, text_opacity);
+            }
             right_edge -= 22.0;
         }
         if let Some(badge_text) = badge {
@@ -2815,36 +3047,40 @@ fn emit_interactive_nav_item(
                 NAVIGATION_VIEW_BADGE_WIDTH,
                 NAVIGATION_VIEW_BADGE_HEIGHT,
             );
-            out.primitives.push(surface(
-                badge_r,
-                NAVIGATION_VIEW_BADGE_HEIGHT * 0.5,
-                if disabled {
-                    Token::CONTROL_DISABLED_BG
-                } else {
-                    Token::PRIMARY_SOFT
-                },
-                z + 1,
-            ));
-            let bq = text_ctx.shape_line_styled(
-                badge_text,
-                badge_r,
-                11.0,
-                600,
-                None,
-                AlignX::Center,
-                AlignY::Middle,
-            );
-            glyphs(
-                &bq,
-                if disabled {
-                    Token::TEXT_DISABLED
-                } else {
-                    Token::PRIMARY
-                },
-                z + 2,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
+            if badge_r.origin.x >= icon_x + 20.0 && badge_r.max().x <= pane_right {
+                let start = out.primitives.len();
+                out.primitives.push(surface(
+                    badge_r,
+                    NAVIGATION_VIEW_BADGE_HEIGHT * 0.5,
+                    if disabled {
+                        Token::CONTROL_DISABLED_BG
+                    } else {
+                        Token::PRIMARY_SOFT
+                    },
+                    z + 1,
+                ));
+                let bq = text_ctx.shape_line_styled(
+                    badge_text,
+                    badge_r,
+                    11.0,
+                    600,
+                    None,
+                    AlignX::Center,
+                    AlignY::Middle,
+                );
+                glyphs(
+                    &bq,
+                    if disabled {
+                        Token::TEXT_DISABLED
+                    } else {
+                        Token::PRIMARY
+                    },
+                    z + 2,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+                apply_opacity_since(&mut out.primitives, start, text_opacity);
+            }
             right_edge -= NAVIGATION_VIEW_BADGE_WIDTH + 6.0;
         }
         let text_r = Rect::new(
@@ -2863,7 +3099,13 @@ fn emit_interactive_nav_item(
             AlignX::Left,
             AlignY::Middle,
         );
+        let quads = match clip_right {
+            Some(max_x) => clip_quads_to_right_edge(&quads, max_x),
+            None => quads,
+        };
+        let start = out.primitives.len();
         glyphs(&quads, ink, z + 1, &mut out.primitives, &mut out.payloads);
+        apply_opacity_since(&mut out.primitives, start, text_opacity);
     }
 
     // 单项键盘焦点环（rect.inflate(3.0)，未聚焦时保持恒定图元数）。
@@ -2945,6 +3187,10 @@ impl UiWidget for NavigationViewDesc {
             WidgetInputEvent::PointerDown { pos, .. } => {
                 state.handle_pointer_down(&laid, &layout, *pos)
             }
+            WidgetInputEvent::PointerDrag { pos } => {
+                state.handle_pointer_drag(&laid, &layout, *pos)
+            }
+            WidgetInputEvent::PointerUp { pos } => state.handle_pointer_up(*pos),
             WidgetInputEvent::Wheel { delta } => state.scroll_by(-delta.y),
             WidgetInputEvent::KeyDown(chord) => state.handle_key_down(&laid, &layout, *chord),
             WidgetInputEvent::TextInput(text) if state.search_focused => {
