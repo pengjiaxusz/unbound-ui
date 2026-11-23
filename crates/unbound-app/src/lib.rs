@@ -6698,6 +6698,8 @@ impl<A: Application> AppRuntime<A> {
                                 AddressBarHitKind::RootChevron,
                                 AddressBarHitKind::OverflowButton,
                                 AddressBarHitKind::EditTrigger,
+                                AddressBarHitKind::EditClear,
+                                AddressBarHitKind::HistoryDropdownButton,
                                 AddressBarHitKind::SearchBox,
                                 AddressBarHitKind::SearchClear,
                             ] {
@@ -6714,6 +6716,18 @@ impl<A: Application> AppRuntime<A> {
                                     let chev_kind = AddressBarHitKind::SegmentChevron(seg.index);
                                     if address_bar_sub_node(entry.key, chev_kind) == key {
                                         return Some(chev_kind);
+                                    }
+                                }
+                            }
+                            if let Some(dd) = layout.compute_dropdown_layout(
+                                &desc,
+                                bar_state.editing,
+                                bar_state.dropdown_open,
+                            ) {
+                                for idx in 0..dd.item_rects.len() {
+                                    let item_kind = AddressBarHitKind::DropdownItem(idx);
+                                    if address_bar_sub_node(entry.key, item_kind) == key {
+                                        return Some(item_kind);
                                     }
                                 }
                             }
@@ -6738,24 +6752,14 @@ impl<A: Application> AppRuntime<A> {
 
                     // 路径区：施加独立 GPU 裁剪作用域；面包屑执行尾部省略，活动编辑态保留未省略原文并按 `scroll_x` 平移
                     let mut addr_glyphs = Vec::new();
+                    let mut addr_ghost_glyphs = Vec::new();
                     let mut edit_visual =
                         unbound_widgets::AddressBarTextVisual::default().edit_visual;
                     if bar_state.editing {
-                        let edit_text = if bar_state.edit_core.text().is_empty()
-                            && !bar_state.edit_buffer.is_empty()
-                        {
-                            bar_state.edit_buffer.as_str()
-                        } else {
-                            bar_state.edit_core.text()
-                        };
-                        let text_x = layout.root_icon_rect.max().x + 6.0;
-                        let edit_w = (layout.address_rect.max().x - text_x - 8.0).max(0.0);
-                        let edit_rect = Rect::new(
-                            text_x,
-                            layout.address_rect.origin.y,
-                            edit_w,
-                            layout.address_rect.size.y.max(0.0),
-                        );
+                        let edit_text = bar_state.current_edit_text();
+                        let show_edit_clear = !state.disabled && !edit_text.is_empty();
+                        let edit_rect = layout.edit_text_rect(show_edit_clear);
+                        let edit_w = edit_rect.size.x;
                         let scroll_x = bar_state.edit_core.scroll_x();
                         let scrolled_edit_rect = Rect::new(
                             edit_rect.origin.x - scroll_x,
@@ -6772,6 +6776,26 @@ impl<A: Application> AppRuntime<A> {
                                 unbound_widgets::AlignX::Left,
                                 unbound_widgets::AlignY::Middle,
                             ));
+                            if let Some(suffix) = desc.inline_completion_suffix(edit_text) {
+                                let prefix_w = text_ctx.measure_line(edit_text, 13.0, 400).x;
+                                let ghost_x = scrolled_edit_rect.origin.x + prefix_w;
+                                let ghost_w = (edit_rect.max().x - ghost_x).max(0.0);
+                                if ghost_w > 0.0 {
+                                    addr_ghost_glyphs.extend(text_ctx.shape_line(
+                                        suffix,
+                                        Rect::new(
+                                            ghost_x,
+                                            edit_rect.origin.y,
+                                            ghost_w,
+                                            edit_rect.size.y,
+                                        ),
+                                        13.0,
+                                        400,
+                                        unbound_widgets::AlignX::Left,
+                                        unbound_widgets::AlignY::Middle,
+                                    ));
+                                }
+                            }
                         }
                         edit_visual = unbound_widgets::compute_text_edit_visual(
                             &bar_state.edit_core,
@@ -6813,7 +6837,7 @@ impl<A: Application> AppRuntime<A> {
                     self.collector.push_clip(addr_clip, layout.address_rect);
                     let addr_text_out = unbound_widgets::emit_address_bar_text_layer(
                         &addr_glyphs,
-                        &[],
+                        &addr_ghost_glyphs,
                         &edit_visual,
                         bar_state.editing,
                         bar_state.edit_core.preedit().is_some(),
@@ -6823,6 +6847,67 @@ impl<A: Application> AppRuntime<A> {
                     self.collector
                         .push(entry.key ^ 0x4142_5458_0001, addr_text_out);
                     self.collector.pop_clip();
+
+                    // 下拉浮层条目文本：仅在历史或补全浮层展开时按独立裁剪作用域绘制
+                    if !state.disabled {
+                        if let Some(dd) = layout.compute_dropdown_layout(
+                            &desc,
+                            effective_state.editing,
+                            effective_state.dropdown_open,
+                        ) {
+                            if let Some((_, items)) =
+                                desc.active_dropdown_items(effective_state.editing)
+                            {
+                                let mut dd_glyphs = Vec::new();
+                                for (idx, &row_r) in dd.item_rects.iter().enumerate() {
+                                    if let Some(label) = items.get(idx) {
+                                        let text_r = Rect::new(
+                                            row_r.origin.x + 8.0,
+                                            row_r.origin.y,
+                                            (row_r.width() - 16.0).max(0.0),
+                                            row_r.height().max(0.0),
+                                        );
+                                        if text_r.width() > 0.0 && !label.is_empty() {
+                                            let elided = unbound_widgets::elide_text_with_measure(
+                                                label,
+                                                text_r.width(),
+                                                unbound_widgets::ElideMode::End,
+                                                |candidate| {
+                                                    text_ctx.measure_line(candidate, 12.5, 400).x
+                                                },
+                                            );
+                                            if !elided.display.is_empty() {
+                                                dd_glyphs.extend(text_ctx.shape_line(
+                                                    &elided.display,
+                                                    text_r,
+                                                    12.5,
+                                                    400,
+                                                    unbound_widgets::AlignX::Left,
+                                                    unbound_widgets::AlignY::Middle,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                                let dd_clip = GpuClipNode::from_aabb([
+                                    dd.popup_rect.min().x,
+                                    dd.popup_rect.min().y,
+                                    dd.popup_rect.max().x,
+                                    dd.popup_rect.max().y,
+                                ]);
+                                self.collector.push_clip(dd_clip, dd.popup_rect);
+                                let dd_text_out =
+                                    unbound_widgets::emit_address_bar_dropdown_text_layer(
+                                        &dd_glyphs,
+                                        state.disabled,
+                                        desc.z,
+                                    );
+                                self.collector
+                                    .push(entry.key ^ 0x4142_5458_0003, dd_text_out);
+                                self.collector.pop_clip();
+                            }
+                        }
+                    }
 
                     // 搜索区：施加独立 GPU 裁剪作用域，区分主文本与次级占位色字形，并绘制搜索态光标/选区/IME
                     if let Some(sr) = layout.search_rect {
