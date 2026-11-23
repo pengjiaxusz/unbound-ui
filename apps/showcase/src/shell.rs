@@ -704,10 +704,11 @@ impl GalleryApp {
         let editor = self.editor(id);
         let has_selection = editor.edit.selection().is_some();
         let has_text = !editor.text().is_empty();
-        let mut cut = MenuItem::action("Cut").with_shortcut("Ctrl+X");
-        let mut copy = MenuItem::action("Copy").with_shortcut("Ctrl+C");
-        let mut paste = MenuItem::action("Paste").with_shortcut("Ctrl+V");
-        let mut select_all = MenuItem::action("Select all").with_shortcut("Ctrl+A");
+        let mut cut = MenuItem::action(self.state.t("menu.cut")).with_shortcut("Ctrl+X");
+        let mut copy = MenuItem::action(self.state.t("menu.copy")).with_shortcut("Ctrl+C");
+        let mut paste = MenuItem::action(self.state.t("menu.paste")).with_shortcut("Ctrl+V");
+        let mut select_all =
+            MenuItem::action(self.state.t("menu.select_all")).with_shortcut("Ctrl+A");
         if !has_selection {
             cut = cut.disabled();
             copy = copy.disabled();
@@ -3733,7 +3734,7 @@ fn draw_top_bar(
     );
 
     // 客户端窗口按钮（ADR-0029 独立 WindowCaptionButtons 发射器）。
-    draw_window_controls(canvas, layout, window_maximized, atlas_clock);
+    draw_window_controls(canvas, state, layout, window_maximized, atlas_clock);
 }
 
 fn draw_top_bar_dropdowns(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
@@ -4169,6 +4170,7 @@ fn window_caption_buttons_desc(top_bar: Rect, window_maximized: bool) -> WindowC
 
 fn draw_window_controls(
     canvas: &mut Canvas<'_>,
+    state: &GalleryState,
     layout: &ShellLayout,
     window_maximized: bool,
     atlas_clock: u64,
@@ -4189,7 +4191,22 @@ fn draw_window_controls(
             &mut text_ctx,
         )
     };
-    for entry in &caption_out.entries {
+    for mut entry in caption_out.entries {
+        if let Some(a11y) = entry.output.a11y.as_mut() {
+            a11y.label = match entry.kind {
+                unbound_widgets::WindowCaptionKind::Minimize => {
+                    state.t("window.minimize").to_owned()
+                }
+                unbound_widgets::WindowCaptionKind::Maximize { maximized } => state
+                    .t(if maximized {
+                        "tooltip.window.restore"
+                    } else {
+                        "window.maximize"
+                    })
+                    .to_owned(),
+                unbound_widgets::WindowCaptionKind::Close => state.t("window.close").to_owned(),
+            };
+        }
         canvas.control_output(entry.node, &entry.output);
     }
 }
@@ -4660,15 +4677,29 @@ fn draw_knob_row(
         card as u8,
         row.index as u8,
     ));
+    let localized_label = spec.localized_label(state.locale);
     match spec {
-        KnobSpec::Toggle { label, .. } => {
-            widgets::toggle_switch(canvas, node, row.control, label, value > 0.5, false);
+        KnobSpec::Toggle { .. } => {
+            widgets::toggle_switch(
+                canvas,
+                node,
+                row.control,
+                localized_label,
+                value > 0.5,
+                false,
+            );
         }
-        KnobSpec::CheckBox { label, .. } => {
-            widgets::checkbox(canvas, node, row.control, label, value > 0.5, false);
+        KnobSpec::CheckBox { .. } => {
+            widgets::checkbox(
+                canvas,
+                node,
+                row.control,
+                localized_label,
+                value > 0.5,
+                false,
+            );
         }
         KnobSpec::Slider {
-            label,
             min,
             max,
             step,
@@ -4676,7 +4707,7 @@ fn draw_knob_row(
             ..
         } => {
             canvas.text(
-                label,
+                localized_label,
                 row.label.unwrap_or(row.row),
                 9.5,
                 palette.text_muted,
@@ -4700,12 +4731,12 @@ fn draw_knob_row(
             canvas.range(node, row.control, min, max, step);
         }
         KnobSpec::Segmented {
-            label,
             options,
             default_index,
+            ..
         } => {
             canvas.text(
-                label,
+                localized_label,
                 row.label.unwrap_or(row.row),
                 9.5,
                 palette.text_muted,
@@ -4722,9 +4753,21 @@ fn draw_knob_row(
                     ))
                 })
                 .collect();
+            let localized_options: Vec<&str> = options
+                .iter()
+                .map(|opt| KnobSpec::localized_option(opt, state.locale))
+                .collect();
             let selected = (value as usize).min(options.len().saturating_sub(1));
             let _ = default_index;
-            widgets::segmented(canvas, &ids, row.control, options, selected, false, None);
+            widgets::segmented(
+                canvas,
+                &ids,
+                row.control,
+                &localized_options,
+                selected,
+                false,
+                None,
+            );
         }
     }
 }
@@ -5033,13 +5076,16 @@ fn draw_search_overlay(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &S
                     info.title.to_string(),
                 )
             }
-            crate::state::SearchHit::Component(id) => (
-                target::id(Target::SearchComponent(id as u8)),
-                crate::pages::components::component_nav_label_localized(id, state.locale)
-                    .to_string(),
-                format!("Component · {}", id.module_name()),
-                format!("Component {}", id.module_name()),
-            ),
+            crate::state::SearchHit::Component(id) => {
+                let prefix = state.t("search.component_prefix");
+                (
+                    target::id(Target::SearchComponent(id as u8)),
+                    crate::pages::components::component_nav_label_localized(id, state.locale)
+                        .to_string(),
+                    format!("{prefix} · {}", id.module_name()),
+                    format!("{prefix} {}", id.module_name()),
+                )
+            }
         };
         // 键盘选中项优先高亮，鼠标悬停次之；两者都不再依赖当前页面。
         let selected = index == state.search_selection;

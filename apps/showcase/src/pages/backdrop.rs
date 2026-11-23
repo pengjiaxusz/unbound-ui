@@ -1,4 +1,5 @@
 //! 后景两轴对照页（Backdrop）。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 //!
 //! 页面同时暴露后景的两个正交维度：**材质种类**（无、跟随系统、标准云母、云母变体、
 //! 亚克力、沉浸式、亚克力自定义色调）与**来源**（自动、系统原生、引擎自绘）。两个
@@ -106,7 +107,12 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
         ((hint_top - rows_top - 2.0 * (row_header_h + 4.0) - row_gap) / 2.0).clamp(44.0, 76.0);
 
     let material_top = rows_top;
-    draw_row_header(ctx, material_top, "MATERIAL");
+    let locale = ctx.state.locale;
+    draw_row_header(
+        ctx,
+        material_top,
+        locale.pick("MATERIAL", "材质类型 (MATERIAL)"),
+    );
     let material_row_rect = Rect::new(
         rect.origin.x,
         material_top + row_header_h + 4.0,
@@ -131,10 +137,19 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
         } else {
             None
         };
-        let mut accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
+        let mut accessible_name = format!(
+            "{}: {} — {}",
+            locale.pick("Material", "材质"),
+            kind.label(),
+            kind.description()
+        );
         if illegal {
             let fallback = FallbackReason::NoSelfDrawnVariant { material: kind };
-            accessible_name.push_str(&format!(" — Invalid combination: {}", fallback.label()));
+            accessible_name.push_str(&format!(
+                " — {}: {}",
+                locale.pick("Invalid combination", "非法组合"),
+                fallback.label()
+            ));
         }
         material_a11y.push(accessible_name);
         material_meta.push((kind, selected, disabled, illegal, reason));
@@ -192,7 +207,7 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
     }
 
     let source_top = material_top + row_header_h + 4.0 + button_h + row_gap;
-    draw_row_header(ctx, source_top, "SOURCE");
+    draw_row_header(ctx, source_top, locale.pick("SOURCE", "渲染来源 (SOURCE)"));
     let source_row_rect = Rect::new(
         rect.origin.x,
         source_top + row_header_h + 4.0,
@@ -211,7 +226,14 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
         .unwrap_or(0);
     let source_a11y: Vec<String> = BackdropSource::ALL
         .iter()
-        .map(|source| format!("Source: {} — {}", source.label(), source.description()))
+        .map(|source| {
+            format!(
+                "{}: {} — {}",
+                locale.pick("Source", "来源"),
+                source.label(),
+                source.description()
+            )
+        })
         .collect();
     let mut source_cursor_x = source_row_rect.origin.x;
     let source_slots: Vec<crate::widgets::SegmentedSlot<'_>> = BackdropSource::ALL
@@ -264,7 +286,7 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
 
     // ---------- 提示行 ----------
     ctx.canvas.text(
-        &hint_text(combination),
+        &hint_text(combination, locale),
         Rect::new(
             rect.origin.x + 10.0,
             hint_top,
@@ -300,17 +322,18 @@ fn draw_readout(
     ctx.canvas
         .rect(info, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
 
+    let locale = ctx.state.locale;
     let build_text = windows_build
         .map(|build| format!("Build {build}"))
-        .unwrap_or_else(|| "Unknown".to_string());
+        .unwrap_or_else(|| locale.pick("Unknown", "未知").to_string());
     let availability_text = if native_available {
-        "Available".to_string()
+        locale.pick("Available", "可用").to_string()
     } else {
-        "Unavailable".to_string()
+        locale.pick("Unavailable", "不可用").to_string()
     };
     let fields = [
         (
-            "USER CHOICE",
+            locale.pick("USER CHOICE", "用户选择"),
             format!(
                 "{} · {}",
                 selection.material.label(),
@@ -319,7 +342,7 @@ fn draw_readout(
             true,
         ),
         (
-            "EFFECTIVE",
+            locale.pick("EFFECTIVE", "实际生效"),
             format!(
                 "{} · {}",
                 combination.material.label(),
@@ -327,10 +350,22 @@ fn draw_readout(
             ),
             false,
         ),
-        ("WINDOWS BUILD", build_text, false),
-        ("NATIVE AVAILABLE", availability_text, false),
+        (
+            locale.pick("WINDOWS BUILD", "Windows 构建号"),
+            build_text,
+            false,
+        ),
+        (
+            locale.pick("NATIVE AVAILABLE", "原生可用性"),
+            availability_text,
+            false,
+        ),
         // 色调是我们自己的选择，十六进制展示即可（位序为 AABBGGRR）。
-        ("ACCENT TINT", format!("#{accent_tint:08X}"), false),
+        (
+            locale.pick("ACCENT TINT", "亚克力强调色调"),
+            format!("#{accent_tint:08X}"),
+            false,
+        ),
     ];
     let column_gap = 14.0;
     let column_w = ((info.size.x - 24.0 - column_gap) / 2.0).max(120.0);
@@ -382,7 +417,7 @@ fn draw_readout(
             info.size.x - 24.0,
             reason_h,
         ),
-        "FALLBACK",
+        locale.pick("FALLBACK", "回退原因"),
         combination
             .fallback
             .as_ref()
@@ -396,7 +431,7 @@ fn draw_readout(
             info.size.x - 24.0,
             reason_h,
         ),
-        "UNAVAILABLE",
+        locale.pick("UNAVAILABLE", "不可用原因"),
         combination
             .unavailable
             .as_ref()
@@ -450,7 +485,7 @@ fn draw_reason_row(
         }
         None => {
             ctx.canvas.text(
-                "None",
+                ctx.state.locale.pick("None", "无"),
                 name,
                 10.0,
                 palette.text_muted,
@@ -511,8 +546,9 @@ fn draw_segment_annotations(ctx: &mut DemoCtx<'_, '_>, cell: Rect, info: Segment
     }
     let inner = (cell.size.x - 16.0).max(20.0);
     // 实验档在右上角加一枚小标记，让它在材质行里与常规档显式区分。
+    let locale = ctx.state.locale;
     if info.experimental && cell.size.x >= 150.0 {
-        let badge = "EXPERIMENTAL";
+        let badge = locale.pick("EXPERIMENTAL", "实验特性");
         let badge_glyph_width = ctx.canvas.labels.metrics(badge, 8.0).width;
         ctx.canvas.text(
             badge,
@@ -555,7 +591,7 @@ fn draw_segment_annotations(ctx: &mut DemoCtx<'_, '_>, cell: Rect, info: Segment
     }
     if info.selected && !info.disabled {
         ctx.canvas.text(
-            "SELECTED",
+            locale.pick("SELECTED", "已选中"),
             Rect::new(cell.origin.x + 8.0, cell.max().y - 16.0, inner, 12.0),
             8.5,
             palette.on_primary,
@@ -565,7 +601,7 @@ fn draw_segment_annotations(ctx: &mut DemoCtx<'_, '_>, cell: Rect, info: Segment
     }
     // 非法组合的角标：与「SELECTED」同一行、贴右边，宽度够时始终可见。
     if info.illegal && cell.size.x >= 160.0 {
-        let badge = "INVALID COMBO";
+        let badge = locale.pick("INVALID COMBO", "非法组合");
         let badge_width = ctx.canvas.labels.metrics(badge, 8.0).width;
         ctx.canvas.text(
             badge,
@@ -617,11 +653,12 @@ fn weighted_slot_widths(
 }
 
 /// 底部的提示行：说明当前实际生效的是哪条路径、为什么。
-fn hint_text(combination: BackdropCombination) -> String {
+fn hint_text(combination: BackdropCombination, locale: unbound_app::Locale) -> String {
     let mut hint = String::new();
     if let Some(unavailable) = &combination.unavailable {
         hint.push_str(&format!(
-            "Unavailable on this machine: {}.",
+            "{}{}.",
+            locale.pick("Unavailable on this machine: ", "当前机器不支持："),
             unavailable.description()
         ));
     }
@@ -634,15 +671,42 @@ fn hint_text(combination: BackdropCombination) -> String {
         return hint;
     }
     match (combination.material, combination.source) {
-        (MaterialKind::None, _) => {
-            "Backdrop disabled: the root surface uses the opaque theme colour.".to_string()
+        (MaterialKind::None, _) => locale
+            .pick(
+                "Backdrop disabled: the root surface uses the opaque theme colour.",
+                "后景已关闭：根表面使用不透明主题背景色。",
+            )
+            .to_string(),
+        (MaterialKind::AcrylicTint, BackdropSource::Native) => locale
+            .pick(
+                "Accent policy path active: the system compositor draws the tinted acrylic behind a transparent swapchain; this bypasses the DWM system material channel.",
+                "Accent Policy 路径生效：系统合成器在透明交换链后方绘制自定义色调 Acrylic，绕过 DWM 系统材质通道。",
+            )
+            .to_string(),
+        (_, BackdropSource::Native) => {
+            if locale.is_zh() {
+                format!(
+                    "原生路径生效：系统合成器在透明交换链后方绘制 {} 材质。",
+                    combination.material.label()
+                )
+            } else {
+                format!(
+                    "Native path active: the system compositor draws the {} material behind a transparent swapchain.",
+                    combination.material.label()
+                )
+            }
         }
-        (MaterialKind::AcrylicTint, BackdropSource::Native) => "Accent policy path active: the system compositor draws the tinted acrylic behind a transparent swapchain; this bypasses the DWM system material channel.".to_string(),
-        (_, BackdropSource::Native) => format!(
-            "Native path active: the system compositor draws the {} material behind a transparent swapchain.",
-            combination.material.label()
-        ),
-        (_, BackdropSource::SelfDrawn) => "Self-drawn path active: an approximation built from the primary wallpaper (cover fit, blurred, sampled at this window's screen rect); it cannot capture content behind the window.".to_string(),
-        (_, BackdropSource::Auto) => "Automatic source: the platform capability decides between the native and self-drawn paths.".to_string(),
+        (_, BackdropSource::SelfDrawn) => locale
+            .pick(
+                "Self-drawn path active: an approximation built from the primary wallpaper (cover fit, blurred, sampled at this window's screen rect); it cannot capture content behind the window.",
+                "自绘路径生效：基于主壁纸等比铺满模糊并按窗口屏幕区域采样近似（不采集窗口后方其他应用内容）。",
+            )
+            .to_string(),
+        (_, BackdropSource::Auto) => locale
+            .pick(
+                "Automatic source: the platform capability decides between the native and self-drawn paths.",
+                "自动来源：根据平台能力自动在原生与自绘路径之间择优选择。",
+            )
+            .to_string(),
     }
 }

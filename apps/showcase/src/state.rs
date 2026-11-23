@@ -729,6 +729,11 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
         ("window.minimize", "Minimise window", "最小化窗口"),
         ("window.maximize", "Maximise window", "最大化窗口"),
         ("window.close", "Close window", "关闭窗口"),
+        ("menu.cut", "Cut", "剪切"),
+        ("menu.copy", "Copy", "复制"),
+        ("menu.paste", "Paste", "粘贴"),
+        ("menu.select_all", "Select all", "全选"),
+        ("search.component_prefix", "Component", "组件"),
     ]);
     bundle
 }

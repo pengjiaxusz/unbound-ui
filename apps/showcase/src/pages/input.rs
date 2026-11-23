@@ -1,4 +1,5 @@
 //! 基础输入：按钮、选择控件、滑块与文本输入框。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 
 use accesskit::Role;
 use unbound_math::{Rect, Vec2};
@@ -228,12 +229,14 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
         ctx.part(1),
         main,
         match variant {
-            ButtonVariant::Primary => "Primary action",
-            ButtonVariant::Secondary => "Secondary",
-            ButtonVariant::Subtle => "Subtle action",
+            ButtonVariant::Primary => ctx.state.locale.pick("Primary action", "主操作按钮"),
+            ButtonVariant::Secondary => ctx.state.locale.pick("Secondary", "次要按钮"),
+            ButtonVariant::Subtle => ctx.state.locale.pick("Subtle action", "轻量操作"),
             ButtonVariant::Icon => "+",
-            ButtonVariant::OnHero => "On hero",
-            ButtonVariant::OnHeroSecondary => "On hero, secondary",
+            ButtonVariant::OnHero => ctx.state.locale.pick("On hero", "横幅主按钮"),
+            ButtonVariant::OnHeroSecondary => {
+                ctx.state.locale.pick("On hero, secondary", "横幅次按钮")
+            }
         },
         variant,
         !disabled,
@@ -242,14 +245,15 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
         ctx.canvas
             .stroke(main.inflate(2.0), 10.0, palette.focus_ring, 2.0);
     }
+    let locale = ctx.state.locale;
     let label = match visual {
-        crate::canvas::Visual::Hover => "hover",
-        crate::canvas::Visual::Pressed => "pressed",
-        crate::canvas::Visual::Disabled => "disabled",
-        crate::canvas::Visual::Idle => "normal",
+        crate::canvas::Visual::Hover => locale.pick("hover", "悬停"),
+        crate::canvas::Visual::Pressed => locale.pick("pressed", "按压"),
+        crate::canvas::Visual::Disabled => locale.pick("disabled", "禁用"),
+        crate::canvas::Visual::Idle => locale.pick("normal", "常规"),
     };
     ctx.canvas.text(
-        &format!("state: {label}"),
+        &format!("{}: {label}", locale.pick("state", "状态")),
         Rect::new(main.origin.x, main.max().y + 8.0, main.size.x, 16.0),
         10.0,
         palette.text_muted,
@@ -257,7 +261,11 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
         AlignY::Top,
     );
     ctx.canvas.text(
-        &format!("{} click(s)", ctx.state.demo.clicks),
+        &if locale.is_zh() {
+            format!("已点击 {} 次", ctx.state.demo.clicks)
+        } else {
+            format!("{} click(s)", ctx.state.demo.clicks)
+        },
         Rect::new(main.origin.x, main.max().y + 28.0, main.size.x, 20.0),
         12.0,
         palette.primary,
@@ -267,9 +275,9 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
 
     let row_y = rect.origin.y + 92.0;
     for (index, (label, variant)) in [
-        ("Primary", ButtonVariant::Primary),
-        ("Secondary", ButtonVariant::Secondary),
-        ("Subtle", ButtonVariant::Subtle),
+        (locale.pick("Primary", "主要"), ButtonVariant::Primary),
+        (locale.pick("Secondary", "次要"), ButtonVariant::Secondary),
+        (locale.pick("Subtle", "轻量"), ButtonVariant::Subtle),
     ]
     .iter()
     .enumerate()
@@ -290,7 +298,10 @@ pub fn buttons(ctx: &mut DemoCtx<'_, '_>, icons: bool) {
         );
     }
     ctx.canvas.text(
-        "Click any button to exercise the router → reducer → rebuild loop.",
+        locale.pick(
+            "Click any button to exercise the router → reducer → rebuild loop.",
+            "点击任意按钮以验证 路由器 → 归约器 → 场景重建 完整闭环。",
+        ),
         Rect::new(
             rect.origin.x + 24.0,
             rect.max().y - 30.0,
@@ -363,13 +374,16 @@ fn icon_buttons(ctx: &mut DemoCtx<'_, '_>) {
                 10 + index as u16,
                 cell,
                 Role::Button,
-                &format!("Icon {index}"),
+                &format!("{} {index}", ctx.state.locale.pick("Icon", "图标")),
                 selected,
             );
         }
     }
     ctx.canvas.text(
-        "Geometric icons · 2 px optical grid",
+        ctx.state.locale.pick(
+            "Geometric icons · 2 px optical grid",
+            "纯图元几何图标 · 2 px 光学网格",
+        ),
         Rect::new(
             rect.origin.x + 12.0,
             rect.max().y - 22.0,
@@ -410,16 +424,24 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         ctx.state.demo.toggle_a,
         disabled,
     );
+    let locale = ctx.state.locale;
     let check = Rect::new(left.origin.x, left.origin.y + row_h, left.size.x, row_h);
     widgets::checkbox(
         ctx.canvas,
         ctx.part(2),
         check,
-        "Notify on completion",
+        locale.pick("Notify on completion", "完成后发送通知"),
         ctx.state.demo.toggle_b,
         disabled,
     );
-    for (index, label) in ["Automatic", "Ask me", "Never"].iter().enumerate() {
+    for (index, label) in [
+        locale.pick("Automatic", "自动"),
+        locale.pick("Ask me", "每次询问"),
+        locale.pick("Never", "从不"),
+    ]
+    .iter()
+    .enumerate()
+    {
         let row = Rect::new(
             left.origin.x,
             left.origin.y + row_h * 2.0 + row_h * index as f32,
@@ -437,7 +459,10 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
     }
     if disabled {
         ctx.canvas.text(
-            "disabled: pointer events suppressed",
+            locale.pick(
+                "disabled: pointer events suppressed",
+                "已禁用：指针事件已屏蔽",
+            ),
             Rect::new(left.origin.x, left.max().y - 18.0, left.size.x, 14.0),
             9.5,
             palette.text_muted,
@@ -455,7 +480,7 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
     ctx.canvas
         .rect(panel, 12.0, palette.stage_bg, palette.card_border, 1.0, 0.0);
     ctx.canvas.text(
-        "Selection group",
+        locale.pick("Selection group", "分段选择组"),
         Rect::new(
             panel.origin.x + 14.0,
             panel.origin.y + 10.0,
@@ -467,7 +492,11 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         AlignX::Start,
         AlignY::Top,
     );
-    let pills = ["Day", "Week", "Month"];
+    let pills = [
+        locale.pick("Day", "按日"),
+        locale.pick("Week", "按周"),
+        locale.pick("Month", "按月"),
+    ];
     let pill_rect = Rect::new(
         panel.origin.x + 14.0,
         panel.origin.y + 36.0,
@@ -486,7 +515,11 @@ pub fn selection(ctx: &mut DemoCtx<'_, '_>, segmented: bool) {
         Some(ctx.state.demo.pill_spring.value),
     );
     ctx.canvas.text(
-        &format!("selected: {}", pills[ctx.state.demo.pill_choice.min(2)]),
+        &format!(
+            "{}: {}",
+            locale.pick("selected", "当前选中"),
+            pills[ctx.state.demo.pill_choice.min(2)]
+        ),
         Rect::new(
             panel.origin.x + 14.0,
             pill_rect.max().y + 10.0,
@@ -509,7 +542,14 @@ fn segmented_page(ctx: &mut DemoCtx<'_, '_>) {
         _ => 3,
     };
     let full_width = ctx.knob_on(1);
-    let all_options = ["Day", "Week", "Month", "Quarter", "Year"];
+    let locale = ctx.state.locale;
+    let all_options = [
+        locale.pick("Day", "日"),
+        locale.pick("Week", "周"),
+        locale.pick("Month", "月"),
+        locale.pick("Quarter", "季"),
+        locale.pick("Year", "年"),
+    ];
     let labels = &all_options[..count];
     let ids: Vec<u64> = (0..count as u16)
         .map(|index| ctx.part(30 + index))
@@ -530,7 +570,11 @@ fn segmented_page(ctx: &mut DemoCtx<'_, '_>) {
         Some(ctx.state.demo.pill_spring.value),
     );
     ctx.canvas.text(
-        &format!("SegmentedControl · {} options", count),
+        &if locale.is_zh() {
+            format!("SegmentedControl · {count} 个选项")
+        } else {
+            format!("SegmentedControl · {count} options")
+        },
         Rect::new(pill.origin.x, pill.max().y + 14.0, pill.size.x, 18.0),
         11.0,
         palette.text_muted,
@@ -548,7 +592,10 @@ fn segmented_page(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas
         .rect(indicator, 2.0, palette.primary, 0, 0.0, 0.0);
     ctx.canvas.text(
-        "selection indicator animates with unbound-anim",
+        locale.pick(
+            "selection indicator animates with unbound-anim",
+            "选中指示胶囊由 unbound-anim 物理弹簧驱动",
+        ),
         Rect::new(pill.origin.x, indicator.max().y + 6.0, pill.size.x, 16.0),
         9.5,
         palette.text_muted,
@@ -566,7 +613,12 @@ pub fn sliders(ctx: &mut DemoCtx<'_, '_>, progress: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
     let ticks = ctx.knob_on(0);
-    let labels = ["Volume", "Brightness", "Playback speed"];
+    let locale = ctx.state.locale;
+    let labels = [
+        locale.pick("Volume", "音量"),
+        locale.pick("Brightness", "亮度"),
+        locale.pick("Playback speed", "播放倍速"),
+    ];
     for (index, label) in labels.iter().enumerate() {
         let row_y = rect.origin.y + 18.0 + index as f32 * 58.0;
         ctx.canvas.text(
@@ -611,7 +663,10 @@ pub fn sliders(ctx: &mut DemoCtx<'_, '_>, progress: bool) {
         }
     }
     ctx.canvas.text(
-        "Pointer capture keeps the thumb tracking after it leaves the row.",
+        locale.pick(
+            "Pointer capture keeps the thumb tracking after it leaves the row.",
+            "指针捕获确保光标离开轨道行后滑块依然精准跟随。",
+        ),
         Rect::new(
             rect.origin.x + 18.0,
             rect.max().y - 24.0,
@@ -645,9 +700,9 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas,
         Rect::new(track.origin.x, rect.origin.y + 8.0, 90.0, 20.0),
         if indeterminate {
-            "Indeterminate"
+            ctx.state.locale.pick("Indeterminate", "不确定态")
         } else {
-            "Determinate"
+            ctx.state.locale.pick("Determinate", "确定态")
         },
         palette.primary,
         palette.primary_soft,
@@ -684,11 +739,12 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas
         .widget_output(WidgetCatalogId::ProgressBar, ctx.part(2), &ring_output);
 
+    let locale = ctx.state.locale;
     ctx.canvas.text(
         if paused {
-            "paused · progress frozen"
+            locale.pick("paused · progress frozen", "已暂停 · 进度已冻结")
         } else {
-            "paced by the animation clock"
+            locale.pick("paced by the animation clock", "由动画时钟实时驱动")
         },
         Rect::new(track.origin.x, track.max().y + 16.0, track.size.x, 16.0),
         10.0,
@@ -697,7 +753,10 @@ fn progress_bar(ctx: &mut DemoCtx<'_, '_>) {
         AlignY::Top,
     );
     ctx.canvas.text(
-        "bar + ring · one rounded-rect shader",
+        locale.pick(
+            "bar + ring · one rounded-rect shader",
+            "进度条 + 进度环 · 共用同一圆角矩形着色器",
+        ),
         Rect::new(track.origin.x, track.max().y + 38.0, track.size.x, 16.0),
         9.5,
         palette.text_muted,
@@ -769,8 +828,9 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
             );
         }
     }
+    let locale = ctx.state.locale;
     let display = if buffer.is_empty() {
-        "Project name"
+        locale.pick("Project name", "项目名称")
     } else {
         buffer
     };
@@ -819,7 +879,10 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
     }
     ctx.canvas.end_clip();
     ctx.canvas.text(
-        "Click, then type · Backspace deletes · Esc releases focus",
+        locale.pick(
+            "Click, then type · Backspace deletes · Esc releases focus",
+            "点击即可键入 · Backspace 删除 · Esc 释放焦点",
+        ),
         Rect::new(field.origin.x, field.max().y + 8.0, field.size.x, 16.0),
         9.5,
         palette.text_muted,
@@ -855,7 +918,10 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            "IME candidate strip · shaping happens before commit",
+            locale.pick(
+                "IME candidate strip · shaping happens before commit",
+                "IME 候选词条 · 提交前即实时塑形渲染",
+            ),
             Rect::new(ime.origin.x, ime.max().y + 8.0, rect.size.x - 40.0, 16.0),
             9.5,
             palette.text_muted,
@@ -867,13 +933,19 @@ pub fn text_field(ctx: &mut DemoCtx<'_, '_>, selection: bool) {
         widgets::badge(
             ctx.canvas,
             Rect::new(field.max().x - 78.0, field.origin.y + 12.0, 66.0, 20.0),
-            "read only",
+            locale.pick("read only", "只读"),
             palette.text_muted,
             palette.stage_bg,
         );
     }
     if !read_only {
-        ctx.control(1, field, Role::TextInput, "Project name", false);
+        ctx.control(
+            1,
+            field,
+            Role::TextInput,
+            locale.pick("Project name", "项目名称"),
+            false,
+        );
     }
 }
 
@@ -900,8 +972,13 @@ pub fn pinyin_sandbox(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas
         .rect(bar, 8.0, palette.card_bg, palette.primary, 1.5, 4.0);
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        &format!("Query: \"{query}\"   ·   Scheme: {}", scheme.label()),
+        &if locale.is_zh() {
+            format!("检索词：\"{query}\"   ·   双拼方案：{}", scheme.label())
+        } else {
+            format!("Query: \"{query}\"   ·   Scheme: {}", scheme.label())
+        },
         Rect::new(
             bar.origin.x + 12.0,
             bar.origin.y,

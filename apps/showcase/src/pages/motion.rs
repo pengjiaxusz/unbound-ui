@@ -241,14 +241,15 @@ pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
     );
     let toggle = Rect::new(rect.origin.x + 24.0, rect.max().y - 52.0, 150.0, 34.0);
     let replay = Rect::new(toggle.max().x + 10.0, toggle.origin.y, 108.0, 34.0);
+    let locale = ctx.state.locale;
     widgets::button(
         ctx.canvas,
         ctx.part(1),
         toggle,
         if ctx.state.demo.spring_high {
-            "Target A"
+            locale.pick("Target A", "切换至目标 A")
         } else {
-            "Target B"
+            locale.pick("Target B", "切换至目标 B")
         },
         ButtonVariant::Secondary,
         true,
@@ -257,17 +258,26 @@ pub fn springs(ctx: &mut DemoCtx<'_, '_>, easing: bool) {
         ctx.canvas,
         ctx.part(2),
         replay,
-        "Replay",
+        locale.pick("Replay", "重播"),
         ButtonVariant::Subtle,
         true,
     );
     ctx.canvas.text(
-        &format!(
-            "value {:.3} · velocity {:.2} · overshoot {:.2}",
-            spring.value,
-            spring.velocity,
-            spring.overshoot(0.0)
-        ),
+        &if locale.is_zh() {
+            format!(
+                "位置 {:.3} · 速度 {:.2} · 过冲 {:.2}",
+                spring.value,
+                spring.velocity,
+                spring.overshoot(0.0)
+            )
+        } else {
+            format!(
+                "value {:.3} · velocity {:.2} · overshoot {:.2}",
+                spring.value,
+                spring.velocity,
+                spring.overshoot(0.0)
+            )
+        },
         Rect::new(
             replay.max().x + 12.0,
             replay.origin.y,
@@ -296,7 +306,7 @@ fn easing_page(ctx: &mut DemoCtx<'_, '_>) {
     let node = ctx.part(1);
     let control = ctx.canvas.control_state(node, false, false);
     let mut desc = CurveEditorDesc::new(plot);
-    desc.label = "Easing curve".to_owned();
+    desc.label = ctx.state.locale.pick("Easing curve", "缓动曲线").to_owned();
     let output = emit_curve_editor(node, &desc, &ctx.state.demo.curve_editor, control);
     ctx.canvas
         .widget_output(WidgetCatalogId::CurveEditor, node, &output);
@@ -327,7 +337,12 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
     let focus_visible = ctx.knob_on(0);
-    let labels = ["Save", "Cancel", "Delete"];
+    let locale = ctx.state.locale;
+    let labels = [
+        locale.pick("Save", "保存"),
+        locale.pick("Cancel", "取消"),
+        locale.pick("Delete", "删除"),
+    ];
     let left = Rect::new(
         rect.origin.x + 16.0,
         rect.origin.y + 16.0,
@@ -376,7 +391,10 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
         ctx.control(10 + index as u16, button, Role::Button, label, selected);
     }
     ctx.canvas.text(
-        "Tab / Shift+Tab moves focus · Enter activates",
+        locale.pick(
+            "Tab / Shift+Tab moves focus · Enter activates",
+            "Tab / Shift+Tab 移动焦点 · Enter 触发激活",
+        ),
         Rect::new(left.origin.x, left.max().y - 22.0, left.size.x, 16.0),
         9.5,
         palette.text_muted,
@@ -393,7 +411,7 @@ pub fn a11y(ctx: &mut DemoCtx<'_, '_>, focus_rings: bool) {
     ctx.canvas
         .rect(tree, 10.0, palette.stage_bg, palette.card_border, 1.0, 0.0);
     ctx.canvas.text(
-        "Semantics tree",
+        locale.pick("Semantics tree", "无障碍语义树"),
         Rect::new(
             tree.origin.x + 12.0,
             tree.origin.y + 8.0,
@@ -529,7 +547,10 @@ fn focus_ring_page(ctx: &mut DemoCtx<'_, '_>) {
         );
     }
     ctx.canvas.text(
-        "focus ring · 2 px offset · never shifts layout",
+        ctx.state.locale.pick(
+            "focus ring · 2 px offset · never shifts layout",
+            "焦点环 · 2 px 外扩偏移 · 绝不引起布局抖动",
+        ),
         Rect::new(rect.origin.x, rect.max().y - 24.0, rect.size.x, 16.0),
         9.5,
         palette.text_muted,
@@ -549,24 +570,41 @@ pub fn telemetry(ctx: &mut DemoCtx<'_, '_>, graph: bool) {
     let gpu = ctx.knob_on(0);
     let window = ["1 s", "5 s", "10 s"][ctx.knob(1).min(2.0) as usize];
     let stats = &ctx.state.demo;
+    let locale = ctx.state.locale;
     let cards = [
         (
-            "Frame",
+            locale.pick("Frame", "帧耗时"),
             format!("{:.2} ms", stats.frame_ms),
-            "16.7 ms budget",
+            locale.pick("16.7 ms budget", "16.7 ms 预算"),
         ),
-        ("FPS", format!("{:.0}", stats.fps), window),
         (
-            "Primitives",
+            locale.pick("FPS", "帧率 (FPS)"),
+            format!("{:.0}", stats.fps),
+            window,
+        ),
+        (
+            locale.pick("Primitives", "图元数量"),
             format!("{}", stats.primitive_count),
-            "instances",
+            locale.pick("instances", "实例数"),
         ),
-        ("Draw calls", format!("{}", stats.draw_calls), "indirect"),
-        ("Upload", format!("{} B", stats.upload_bytes), "this frame"),
         (
-            "Frame budget",
+            locale.pick("Draw calls", "绘制调用"),
+            format!("{}", stats.draw_calls),
+            locale.pick("indirect", "间接绘制"),
+        ),
+        (
+            locale.pick("Upload", "上传字节"),
+            format!("{} B", stats.upload_bytes),
+            locale.pick("this frame", "本帧上传"),
+        ),
+        (
+            locale.pick("Frame budget", "帧预算占比"),
             "23 %".to_string(),
-            if gpu { "GPU timing on" } else { "CPU only" },
+            if gpu {
+                locale.pick("GPU timing on", "已开启 GPU 计时")
+            } else {
+                locale.pick("CPU only", "仅 CPU 计时")
+            },
         ),
     ];
     let columns = if rect.size.x > 520.0 { 3 } else { 2 };
@@ -689,7 +727,7 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
             chip,
             accesskit::Role::Button,
             if *label == "0" {
-                "Unlimited frame rate"
+                state.locale.pick("Unlimited frame rate", "无限制帧率")
             } else {
                 label
             },
@@ -722,12 +760,15 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
         let text = if focused {
             buffer
         } else if state.fps_limit == 0 {
-            "uncapped"
+            state.locale.pick("uncapped", "无限制")
         } else {
             ""
         };
         let display = if text.is_empty() {
-            "Custom FPS (min 60, 0 = ∞)"
+            state.locale.pick(
+                "Custom FPS (min 60, 0 = ∞)",
+                "自定义 FPS（最低 60，0 = 无限制）",
+            )
         } else {
             text
         };
@@ -807,7 +848,10 @@ pub fn fps_limit_bar(ctx: &mut DemoCtx<'_, '_>) {
             30,
             field,
             accesskit::Role::TextInput,
-            "Custom FPS limit, minimum 60, 0 is unlimited",
+            state.locale.pick(
+                "Custom FPS limit, minimum 60, 0 is unlimited",
+                "自定义帧率上限，最低 60，0 表示无限制",
+            ),
             focused,
         );
     }
@@ -874,11 +918,12 @@ fn frame_graph(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Top,
         );
     }
+    let locale = ctx.state.locale;
     ctx.canvas.text(
         match metric {
-            1 => "upload bytes / frame",
-            2 => "draw calls / frame",
-            _ => "frame time · rolling window",
+            1 => locale.pick("upload bytes / frame", "每帧上传字节数"),
+            2 => locale.pick("draw calls / frame", "每帧绘制调用数"),
+            _ => locale.pick("frame time · rolling window", "帧耗时 · 滚动窗口"),
         },
         Rect::new(
             plot.origin.x + 12.0,
@@ -942,13 +987,50 @@ pub fn about(ctx: &mut DemoCtx<'_, '_>) {
     );
     ctx.canvas
         .divider(rect.origin.x, rect.origin.y + 78.0, rect.size.x);
+    let locale = ctx.state.locale;
     let facts = [
-        ("Renderer", "Vulkan 1.3 · uber shader · 4 draw calls"),
-        ("Text", "MTSDF 512² atlas · CJK fallback"),
-        ("Layout", "Taffy flex + grid · measure cache"),
-        ("World", "DOD archetypes · quadtree virtualization"),
-        ("Platform", "Windows 11 · custom title bar · DPI aware"),
-        ("Verifier", "unbound-headless · rules + golden screenshots"),
+        (
+            locale.pick("Renderer", "渲染器"),
+            locale.pick(
+                "Vulkan 1.3 · uber shader · 4 draw calls",
+                "Vulkan 1.3 · 统一超级着色器 · 4 次绘制调用",
+            ),
+        ),
+        (
+            locale.pick("Text", "文本管线"),
+            locale.pick(
+                "MTSDF 512² atlas · CJK fallback",
+                "MTSDF 512² 字形图集 · 中日韩字体回退",
+            ),
+        ),
+        (
+            locale.pick("Layout", "布局引擎"),
+            locale.pick(
+                "Taffy flex + grid · measure cache",
+                "Taffy 弹性 + 网格布局 · 测量缓存",
+            ),
+        ),
+        (
+            locale.pick("World", "世界与虚拟化"),
+            locale.pick(
+                "DOD archetypes · quadtree virtualization",
+                "DOD 数据原型 · 四叉树空间虚拟化",
+            ),
+        ),
+        (
+            locale.pick("Platform", "平台层"),
+            locale.pick(
+                "Windows 11 · custom title bar · DPI aware",
+                "Windows 11 · 自定义标题栏 · DPI 感知",
+            ),
+        ),
+        (
+            locale.pick("Verifier", "无头校验器"),
+            locale.pick(
+                "unbound-headless · rules + golden screenshots",
+                "unbound-headless · 几何规则 + 基准截图",
+            ),
+        ),
     ];
     for (index, (label, value)) in facts.iter().enumerate() {
         let y = rect.origin.y + 92.0 + index as f32 * 25.0;
@@ -999,11 +1081,19 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
     set_global_pinyin_config(cfg);
     let matcher = PinyinMatcher::with_config(cfg);
 
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        &format!(
-            "Active Runtime Scheme: {}  ·  20,992 CJK + 6,592 Ext-A + Polyphones",
-            scheme.label()
-        ),
+        &if locale.is_zh() {
+            format!(
+                "当前生效双拼方案：{}  ·  20,992 常用汉字 + 6,592 扩展 A 区 + 多音字",
+                scheme.label()
+            )
+        } else {
+            format!(
+                "Active Runtime Scheme: {}  ·  20,992 CJK + 6,592 Ext-A + Polyphones",
+                scheme.label()
+            )
+        },
         Rect::new(
             rect.origin.x + 16.0,
             rect.origin.y + 10.0,
@@ -1077,7 +1167,11 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            &format!("Full: {full_py}   Shuangpin: {sp_code}   Shuangpin initial: '{init_char}'"),
+            &if locale.is_zh() {
+                format!("全拼：{full_py}   双拼：{sp_code}   双拼首字母：'{init_char}'")
+            } else {
+                format!("Full: {full_py}   Shuangpin: {sp_code}   Shuangpin initial: '{init_char}'")
+            },
             Rect::new(row_r.origin.x + 176.0, y + 4.0, row_r.size.x - 276.0, 30.0),
             11.0,
             palette.text_muted,
@@ -1087,7 +1181,7 @@ pub fn pinyin_engine(ctx: &mut DemoCtx<'_, '_>) {
         widgets::badge(
             ctx.canvas,
             Rect::new(row_r.max().x - 92.0, y + 9.0, 80.0, 20.0),
-            &format!("score {score}"),
+            &format!("{} {score}", locale.pick("score", "得分")),
             palette.primary,
             palette.primary_soft,
         );
