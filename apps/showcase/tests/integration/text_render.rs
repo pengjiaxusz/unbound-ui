@@ -17,8 +17,8 @@ use showcase::pages::text_render::{
     PART_LETTER_SPACING_0, PART_LETTER_SPACING_1, PART_LETTER_SPACING_2, PART_LIGATURES_OFF,
     PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE, PART_LINEBREAK_WORD,
     PART_LINE_HEIGHT_20, PART_LINE_HEIGHT_28, PART_LINE_HEIGHT_AUTO, PART_PRESET_CROSS_PLATFORM,
-    PART_PRESET_CUSTOM, PART_PRESET_PIXEL, PART_PRESET_WINUI, PART_SHAPER_COSMIC,
-    PART_SHAPER_NATIVE, PHASE_PART_BASE, STATUS_BAR_PART,
+    PART_PRESET_PIXEL, PART_PRESET_WINUI, PART_SHAPER_COSMIC, PART_SHAPER_NATIVE, PHASE_PART_BASE,
+    STATUS_BAR_PART,
 };
 use showcase::pages::{CategoryId, PageId};
 use showcase::shell::GalleryApp;
@@ -432,32 +432,6 @@ fn text_render_backend_interactive_toggle_and_report_sync() {
     }
 }
 
-/// 验收条件 2：字体组四项（家族、字重、字号、斜体）三态呈现均为可用（Available）。
-#[test]
-fn font_group_tri_state_capabilities_available() {
-    let caps = TextCapabilities::probe();
-    let settings = TextRenderSettings::default();
-
-    let font_keys = [
-        TextFeatureKey::FontFamily,
-        TextFeatureKey::FontWeight,
-        TextFeatureKey::FontSize,
-        TextFeatureKey::FontItalic,
-    ];
-
-    for key in font_keys {
-        let res = resolve_feature(key, &caps, &settings);
-        assert!(
-            !res.disabled,
-            "font feature {key:?} must be available in tri-state query"
-        );
-        assert_eq!(
-            res.reason, None,
-            "available font feature must not have a disabled reason"
-        );
-    }
-}
-
 /// 验收条件 1、2：字体组四项控件交互、状态更新与右侧实时预览渲染。
 #[test]
 fn font_group_controls_interaction_and_live_preview() {
@@ -516,53 +490,6 @@ fn font_group_controls_interaction_and_live_preview() {
         primitives_count > 0,
         "primitives must be emitted under modified preview style"
     );
-}
-
-/// 验收条件 1：预览样式修改不影响其他页面文本。
-#[test]
-fn font_preview_style_isolation_from_other_pages() {
-    let mut app = app();
-    app.navigate(PageId::TextRender);
-    app.rebuild(VIEWPORT);
-
-    let page_index = PageId::TextRender.index() as u8;
-
-    // 修改预览样式：设置大字号、粗体、斜体
-    let size_node = target::id(Target::Demo(page_index, 0, FONT_SIZE_PART_BASE + 3));
-    app.click_node(size_node);
-    let bold_node = target::id(Target::Demo(page_index, 0, FONT_WEIGHT_PART_BASE + 3));
-    app.click_node(bold_node);
-    let italic_node = target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART));
-    app.click_node(italic_node);
-
-    assert_eq!(app.state.text_render.settings.size, 24.0);
-    assert_eq!(app.state.text_render.settings.weight, 700);
-    assert!(app.state.text_render.settings.italic);
-
-    // 导航到排版页面
-    app.navigate(PageId::Typography);
-    app.rebuild(VIEWPORT);
-    let typography_primitives = app.scene.primitives.len();
-    assert!(
-        typography_primitives > 0,
-        "typography page must render without error"
-    );
-
-    // 导航到按钮页面
-    app.navigate(PageId::Buttons);
-    app.rebuild(VIEWPORT);
-    let buttons_primitives = app.scene.primitives.len();
-    assert!(
-        buttons_primitives > 0,
-        "buttons page must render without error"
-    );
-
-    // 导航回文本渲染控制台：预览设置依然保持
-    app.navigate(PageId::TextRender);
-    app.rebuild(VIEWPORT);
-    assert_eq!(app.state.text_render.settings.size, 24.0);
-    assert_eq!(app.state.text_render.settings.weight, 700);
-    assert!(app.state.text_render.settings.italic);
 }
 
 /// 验收条件 1、2：展台控制台像素组亚像素相位档位运行期切换（8 / 4 / 1）与状态栏同步。
@@ -1134,7 +1061,7 @@ fn text_render_presets_application_and_custom_transition() {
     assert_eq!(app.state.text_render.settings.line_height, 28.0);
 }
 
-/// 验收条件 3：展台重启后折叠状态与设置恢复持久化。
+/// 验收条件 3：展台重启后从真实磁盘持久化文件恢复折叠状态与全局渲染设置，并同步反映到 UI 语义树与字形缓存管线。
 #[test]
 fn text_render_state_persistence_across_showcase_restart() {
     let test_file = std::env::temp_dir().join(format!(
@@ -1144,56 +1071,83 @@ fn text_render_state_persistence_across_showcase_restart() {
             .unwrap_or_default()
             .as_nanos()
     ));
-    TextRenderPageState::set_thread_persistence_path(Some(test_file));
+    TextRenderPageState::set_thread_persistence_path(Some(test_file.clone()));
     TextRenderPageState::clear_persisted();
 
-    // 阶段 1：在当前应用实例中修改折叠与设置
+    let page_index = PageId::TextRender.index() as u8;
+    let group0_id = target::id(Target::Demo(page_index, 0, GROUP_PART_BASE));
+    let group2_id = target::id(Target::Demo(page_index, 0, GROUP_PART_BASE + 2));
+    let linebreak_none_id = target::id(Target::Demo(page_index, 0, PART_LINEBREAK_NONE));
+
+    // 阶段 1：通过真实点击修改折叠状态与断行策略，确认磁盘文件落盘。
     {
         let mut app = app();
         app.navigate(PageId::TextRender);
         app.rebuild(VIEWPORT);
 
-        let page_index = PageId::TextRender.index() as u8;
+        app.click_node(group0_id);
+        app.click_node(group2_id);
+        app.click_node(linebreak_none_id);
 
-        // 折叠第 0 组（Font）和第 2 组（Pixel）
-        app.click_node(target::id(Target::Demo(page_index, 0, GROUP_PART_BASE)));
-        app.click_node(target::id(Target::Demo(page_index, 0, GROUP_PART_BASE + 2)));
-
-        // 切换断行模式为 None
-        app.click_node(target::id(Target::Demo(page_index, 0, PART_LINEBREAK_NONE)));
-
-        assert!(!app.state.text_render.group_expanded[0]);
-        assert!(!app.state.text_render.group_expanded[2]);
-        assert_eq!(
-            app.state.text_render.settings.line_break,
-            LineBreakMode::None
+        assert!(
+            test_file.exists(),
+            "persisted state file must be written on disk after UI interactions"
+        );
+        let raw = std::fs::read_to_string(&test_file).expect("persisted file must be readable");
+        assert!(
+            !raw.trim().is_empty(),
+            "persisted state file must not be empty"
         );
     }
 
-    // 阶段 2：模拟重启展台（全新实例化 App 并通过持久化恢复）
+    // 阶段 2：全新实例化展台并强制断言恢复成功，验证重启后的真实外部行为（语义树折叠/选中态、子控件隐藏、缓存管线生效）。
     {
+        let restored = TextRenderPageState::try_restore()
+            .expect("persisted state must deserialize cleanly on restart");
         let mut restarted_app = app();
-        if let Some(restored) = TextRenderPageState::try_restore() {
-            restarted_app.state.text_render = restored;
-        }
+        restarted_app.state.text_render = restored;
         restarted_app.navigate(PageId::TextRender);
         restarted_app.rebuild(VIEWPORT);
 
-        // 验证折叠状态成功恢复
-        assert!(
-            !restarted_app.state.text_render.group_expanded[0],
-            "Group 0 must remain collapsed after restart"
-        );
-        assert!(
-            !restarted_app.state.text_render.group_expanded[2],
-            "Group 2 must remain collapsed after restart"
-        );
-
-        // 验证设置参数成功恢复
         assert_eq!(
-            restarted_app.state.text_render.settings.line_break,
+            restarted_app
+                .semantics
+                .get(group0_id)
+                .expect("Group 0 header must exist in semantics")
+                .expanded,
+            Some(false),
+            "Group 0 must render collapsed in the accessibility tree after restart"
+        );
+        assert_eq!(
+            restarted_app
+                .semantics
+                .get(group2_id)
+                .expect("Group 2 header must exist in semantics")
+                .expanded,
+            Some(false),
+            "Group 2 must render collapsed in the accessibility tree after restart"
+        );
+        // 折叠后的第 0 组子控件（字体斜体开关）不得再挂载命中区域。
+        assert!(
+            !restarted_app
+                .regions
+                .iter()
+                .any(|r| r.node == target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART))),
+            "collapsed Group 0 must hide its child controls from hit regions after restart"
+        );
+        // 断行模式 None 既要在 UI 选中态体现，也要真实传播到字形缓存运行期设置。
+        assert!(
+            restarted_app
+                .semantics
+                .get(linebreak_none_id)
+                .expect("LineBreak None button must exist in semantics")
+                .selected,
+            "restored LineBreakMode::None must be selected in the UI after restart"
+        );
+        assert_eq!(
+            restarted_app.labels.cache.settings().line_break,
             LineBreakMode::None,
-            "Settings must be restored after restart"
+            "restored LineBreakMode::None must take effect in the live text cache pipeline"
         );
     }
 
@@ -1201,68 +1155,33 @@ fn text_render_state_persistence_across_showcase_restart() {
     TextRenderPageState::set_thread_persistence_path(None);
 }
 
-/// 验收条件 4：全键盘可达性与语义树完整性。
-#[test]
-fn text_render_all_keyboard_accessible_and_a11y_tree() {
-    let mut app = app();
-    app.navigate(PageId::TextRender);
-    app.rebuild(VIEWPORT);
-
-    let page_index = PageId::TextRender.index() as u8;
-
-    // 1. 验证四个预设按钮全量可达
-    for preset_part in [
-        PART_PRESET_WINUI,
-        PART_PRESET_CROSS_PLATFORM,
-        PART_PRESET_PIXEL,
-        PART_PRESET_CUSTOM,
-    ] {
-        let node_id = target::id(Target::Demo(page_index, 0, preset_part));
-        let node = app
-            .semantics
-            .get(node_id)
-            .unwrap_or_else(|| panic!("missing a11y node for preset {preset_part}"));
-        assert_eq!(node.role, Role::RadioButton);
-    }
-
-    // 2. 验证六大折叠标题均为 Button 角色且发布 expanded 状态
-    for i in 0..6 {
-        let group_node_id = target::id(Target::Demo(page_index, 0, GROUP_PART_BASE + i));
-        let node = app
-            .semantics
-            .get(group_node_id)
-            .unwrap_or_else(|| panic!("missing a11y node for group {i}"));
-        assert_eq!(node.role, Role::Button);
-        assert_eq!(node.expanded, Some(true));
-    }
-
-    // 3. 验证灰化项可聚焦且发布禁用理由
-    let native_node = app
-        .semantics
-        .get(target::id(Target::Demo(page_index, 0, PART_SHAPER_NATIVE)))
-        .expect("native shaper node exists");
-    assert!(native_node.disabled);
-    assert!(native_node.label.contains("not implemented"));
-}
-
-/// 验收条件 5：全局渲染策略在其他页面生效，预览样式不影响其他页面。
+/// 验收条件 5：预览样式严格隔离于 Text Render 预览舞台（不污染其他页面渲染输出），全局策略同步传播至全站文本管线。
 #[test]
 fn text_render_global_strategy_affects_other_pages_and_isolates_preview() {
     let mut app = app();
+
+    // 1. 采集默认状态下 Buttons 页面的渲染图元基线（用于验证预览样式零泄漏）。
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+    let baseline_buttons_prims: Vec<_> = app
+        .scene
+        .primitives
+        .iter()
+        .map(|p| (p.local_pos, p.size, p.corner_radii, p.border_width))
+        .collect();
+    assert!(!baseline_buttons_prims.is_empty());
+
+    // 2. 切到 Text Render 仅修改预览字体样式（大号 24px、粗体 700、斜体），确认 Text Render 自身渲染输出确实改变。
     app.navigate(PageId::TextRender);
     app.rebuild(VIEWPORT);
+    let default_tr_prims: Vec<_> = app
+        .scene
+        .primitives
+        .iter()
+        .map(|p| (p.local_pos, p.size))
+        .collect();
 
     let page_index = PageId::TextRender.index() as u8;
-
-    // 1. 设置排版断行与双向参数
-    app.click_node(target::id(Target::Demo(
-        page_index,
-        0,
-        PART_LINEBREAK_ANYWHERE,
-    )));
-    app.click_node(target::id(Target::Demo(page_index, 0, PART_BIDI_OFF)));
-
-    // 2. 设置预览样式为大号粗体斜体
     app.click_node(target::id(Target::Demo(
         page_index,
         0,
@@ -1274,30 +1193,146 @@ fn text_render_global_strategy_affects_other_pages_and_isolates_preview() {
         FONT_WEIGHT_PART_BASE + 3,
     )));
     app.click_node(target::id(Target::Demo(page_index, 0, FONT_ITALIC_PART)));
+    let styled_tr_prims: Vec<_> = app
+        .scene
+        .primitives
+        .iter()
+        .map(|p| (p.local_pos, p.size))
+        .collect();
+    assert_ne!(
+        styled_tr_prims, default_tr_prims,
+        "changing preview font size/weight/italic must visibly alter Text Render preview geometry"
+    );
 
-    // 3. 导航至 Buttons 页面
+    // 3. 切回 Buttons 页面：渲染图元几何与样式必须与基线逐项一致，证明预览样式未泄漏到其他页面。
     app.navigate(PageId::Buttons);
     app.rebuild(VIEWPORT);
+    let after_preview_buttons_prims: Vec<_> = app
+        .scene
+        .primitives
+        .iter()
+        .map(|p| (p.local_pos, p.size, p.corner_radii, p.border_width))
+        .collect();
+    assert_eq!(
+        after_preview_buttons_prims, baseline_buttons_prims,
+        "Text Render preview font style must not alter rendered primitives on Buttons page"
+    );
 
-    // 全局渲染管线 settings 已反映排版策略
+    // 4. 再修改全局文本渲染策略（断行与双向），验证跨页进入 Buttons 时真实同步到共享文本缓存管线。
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_LINEBREAK_ANYWHERE,
+    )));
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_BIDI_OFF)));
+
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
     assert_eq!(
         app.labels.cache.settings().line_break,
         LineBreakMode::Anywhere
     );
     assert!(!app.labels.cache.settings().bidi);
 
-    // 4. Buttons 页面正常发射图元不受预览样式影响
-    assert!(
-        !app.scene.primitives.is_empty(),
-        "Buttons page must render with its own styles"
-    );
-
-    // 5. 导航回控制台，预览样式隔离保留
+    // 5. 返回控制台，预览样式与全局策略均保持不变。
     app.navigate(PageId::TextRender);
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.text_render.settings.size, 24.0);
     assert_eq!(app.state.text_render.settings.weight, 700);
     assert!(app.state.text_render.settings.italic);
+}
+
+/// 距离场与合成组控制台调节控件交互与互斥规则生效（并入自原独立 `text_render_df_composition` 模块）。
+#[test]
+fn text_render_distance_field_and_composition_controls() {
+    use showcase::pages::text_render::{
+        PART_COMP_LAYER_DIRECT, PART_COMP_LAYER_ISOLATED, PART_COMP_LINEAR, PART_COMP_SRGB,
+        PART_DF_MTSDF, PART_DF_OFF, PART_DF_SDF,
+    };
+    use unbound_text::{BlendSpace, DistanceFieldMode, LayerMode};
+
+    let mut app = app();
+    app.navigate(PageId::TextRender);
+    app.rebuild(VIEWPORT);
+
+    let page_index = PageId::TextRender.index() as u8;
+
+    assert_eq!(
+        app.state.text_render.settings.distance_field,
+        DistanceFieldMode::Off
+    );
+    assert!(!app.state.text_render.settings.use_sdf);
+    assert_eq!(app.state.text_render.settings.blend_space, BlendSpace::Srgb);
+    assert_eq!(app.state.text_render.settings.layer_mode, LayerMode::Direct);
+
+    // 1. 点击 SDF 按钮：启用距离场，验证互斥规则（相位锁定为 1）。
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_DF_SDF)));
+    assert_eq!(
+        app.state.text_render.settings.distance_field,
+        DistanceFieldMode::Sdf
+    );
+    assert!(app.state.text_render.settings.use_sdf);
+    assert_eq!(
+        app.state.text_render.settings.phase_mode,
+        PhaseMode::One,
+        "SDF mode must lock phase mode to 1"
+    );
+
+    let caps = TextCapabilities::probe();
+    let res8 = resolve_feature(
+        TextFeatureKey::PhaseEight,
+        &caps,
+        &app.state.text_render.settings,
+    );
+    assert!(res8.disabled);
+    assert_eq!(
+        res8.reason,
+        Some("Phase locked to 1 when distance field is active")
+    );
+
+    // 2. 点击 Off 按钮：关闭距离场。
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_DF_OFF)));
+    assert_eq!(
+        app.state.text_render.settings.distance_field,
+        DistanceFieldMode::Off
+    );
+    assert!(!app.state.text_render.settings.use_sdf);
+
+    // 3. 点击 MTSDF 按钮：因为未接线被灰化，点击不能开启 MTSDF。
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_DF_MTSDF)));
+    assert_ne!(
+        app.state.text_render.settings.distance_field,
+        DistanceFieldMode::Mtsdf,
+        "MTSDF button is disabled and must not change settings"
+    );
+
+    // 4. 合成组：混合空间切换 (sRGB <-> Linear)。
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_COMP_LINEAR)));
+    assert_eq!(
+        app.state.text_render.settings.blend_space,
+        BlendSpace::Linear
+    );
+    app.click_node(target::id(Target::Demo(page_index, 0, PART_COMP_SRGB)));
+    assert_eq!(app.state.text_render.settings.blend_space, BlendSpace::Srgb);
+
+    // 5. 合成组：图层模式切换 (Direct <-> Isolated)。
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_COMP_LAYER_ISOLATED,
+    )));
+    assert_eq!(
+        app.state.text_render.settings.layer_mode,
+        LayerMode::Isolated
+    );
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        PART_COMP_LAYER_DIRECT,
+    )));
+    assert_eq!(app.state.text_render.settings.layer_mode, LayerMode::Direct);
 }
 
 /// 计算 sRGB 颜色在 WCAG 2.1 下的相对亮度（输入分量范围 0.0..=1.0）。

@@ -6,15 +6,10 @@
 /// 进程级环境变量互斥锁，防止修改 `UNBOUND_TEXT_FORCE_DW_INIT_FAIL` 等钩子时与同二进制内其他测试并发竞态。
 pub(crate) static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-mod backdrop_accent_tint;
-mod backdrop_acrylic;
-mod backdrop_fallback;
-mod backdrop_immersive;
-mod backdrop_mica_alt;
+mod backdrop;
 mod frame_plan;
 mod gallery;
 mod runtime_migration;
 mod shell;
 mod text_render;
-mod text_render_df_composition;
 mod theme;

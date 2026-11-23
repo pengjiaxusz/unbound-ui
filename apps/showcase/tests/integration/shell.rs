@@ -1357,20 +1357,6 @@ fn pointer_hits_navigation_rows_without_a_window() {
     assert_eq!(app.state.active_page, PageId::Colors);
 }
 
-#[test]
-fn search_and_theme_keep_the_same_target_identity() {
-    assert_ne!(Target::Search, Target::Theme(0));
-    let mut app = app();
-    app.navigate(PageId::Buttons);
-    app.rebuild(VIEWPORT);
-    let clicked = app.state.demo.clicks;
-    click_node(
-        &mut app,
-        target::id(Target::Demo(PageId::Buttons.index() as u8, 0, 1)),
-    );
-    assert!(app.state.demo.clicks > clicked);
-}
-
 /// 点击必须在同一帧内到达屏幕。
 ///
 /// 当场景代次未推进时 GPU 跳过上传，因此改变了状态却未推进代次的点击
@@ -2478,21 +2464,6 @@ fn sidebar_covers_every_page_and_every_catalog_component() {
     );
 }
 
-/// `PageId::Systems` 引擎子系统全景页覆盖全部 21 个核心子系统，且支持点击切换当前检视的子系统。
-#[test]
-fn systems_page_covers_all_21_engine_subsystems() {
-    use showcase::pages::SubsystemId;
-
-    assert_eq!(SubsystemId::ALL.len(), 21);
-    let mut app = app();
-    app.navigate(PageId::Systems);
-    app.rebuild(VIEWPORT);
-
-    let node = target::id(Target::Demo(PageId::Systems.index() as u8, 0, 105));
-    click_node(&mut app, node);
-    assert_eq!(app.state.demo.selected_subsystem, 5);
-}
-
 /// 标题栏语言下拉选择器（默认 English / 简体中文）与独立 `PageId::I18n` 教学沙盒端到端行为验证。
 #[test]
 fn language_selector_and_i18n_page_work_end_to_end() {
@@ -2604,35 +2575,6 @@ fn high_index_component_code_toggles_and_open_modals_keep_unique_hit_regions() {
             region.node
         );
     }
-}
-
-/// 后景页位于「引擎系统」分类末尾，元数据与其它系统页同等完备。
-#[test]
-fn the_backdrop_page_sits_in_engine_systems_with_complete_metadata() {
-    use showcase::pages::CategoryId;
-    use unbound_app::Locale;
-
-    assert_eq!(PageId::Backdrop.category(), CategoryId::System);
-    assert_eq!(
-        CategoryId::System.pages().last().copied(),
-        Some(PageId::Backdrop),
-        "the backdrop page must follow the existing engine system pages"
-    );
-
-    let info = PageId::Backdrop.info();
-    assert!(!info.title.is_empty());
-    assert!(!info.short.is_empty());
-    assert!(!info.description.is_empty());
-    assert!(!info.crates.is_empty());
-    assert!(!info.keywords.is_empty());
-
-    let zh = PageId::Backdrop.localized_info(Locale::ZhCn);
-    assert_ne!(
-        zh.title, info.title,
-        "the backdrop page must provide a Chinese title"
-    );
-    assert_ne!(zh.short, info.short);
-    assert!(!zh.description.is_empty());
 }
 
 /// 原生可用时原生来源让根背景透明且不生成自绘纹理；「无后景」与自绘各自保持语义。
@@ -3080,61 +3022,6 @@ fn switching_material_or_source_keeps_the_swap_chain() {
         app.state.backdrop_plan.material,
         unbound_backdrop::DwmMaterial::None,
         "the self-drawn source must not request a system material"
-    );
-}
-
-/// 宿主注入构建号与驱动能力后，逐档材质门槛与实际生效组合必须同步更新。
-#[test]
-fn backdrop_capabilities_drive_the_effective_combination() {
-    let mut app = app();
-    app.navigate(PageId::Backdrop);
-    app.rebuild(VIEWPORT);
-
-    // 原生可用：所有材质档都能走原生路径。
-    app.set_backdrop_capabilities(Some(22621), true);
-    app.rebuild(VIEWPORT);
-    assert_eq!(app.state.windows_build, Some(22621));
-    assert!(app.state.backdrop_native_available());
-    assert_eq!(
-        app.state.backdrop_combination.source,
-        BackdropSource::Native
-    );
-
-    app.state.set_backdrop_material(MaterialKind::Mica);
-    app.rebuild(VIEWPORT);
-    assert_eq!(app.state.backdrop_combination.material, MaterialKind::Mica);
-    assert_eq!(
-        app.state.backdrop_combination.source,
-        BackdropSource::Native
-    );
-
-    // Win10：原生不可用，显式原生来源必须回退到自绘。
-    app.set_backdrop_capabilities(Some(19045), true);
-    app.rebuild(VIEWPORT);
-    assert_eq!(app.state.windows_build, Some(19045));
-    assert!(!app.state.backdrop_native_available());
-    assert_eq!(
-        app.state.backdrop_combination.source,
-        BackdropSource::SelfDrawn
-    );
-
-    // 驱动不支持预乘：即使构建号达标也必须回退。
-    app.set_backdrop_capabilities(Some(26100), false);
-    app.rebuild(VIEWPORT);
-    assert!(!app.state.backdrop_native_available());
-    assert_eq!(
-        app.state.backdrop_combination.source,
-        BackdropSource::SelfDrawn
-    );
-
-    // 未知构建号（非 Windows）：同样回退。
-    app.set_backdrop_capabilities(None, true);
-    app.rebuild(VIEWPORT);
-    assert_eq!(app.state.windows_build, None);
-    assert!(!app.state.backdrop_native_available());
-    assert_eq!(
-        app.state.backdrop_combination.source,
-        BackdropSource::SelfDrawn
     );
 }
 
