@@ -120,8 +120,9 @@ pub fn parse_gnome_picture_uri(raw: &str) -> Option<PathBuf> {
         .strip_prefix("file://")
         .map(percent_decode_path)
         .unwrap_or_else(|| trimmed.to_owned());
+    let is_posix_abs = stripped.starts_with('/');
     let path = PathBuf::from(stripped);
-    path.is_absolute().then_some(path)
+    (path.is_absolute() || is_posix_abs).then_some(path)
 }
 
 /// 解析 KDE Plasma `plasma-org.kde.plasma.desktop-appletsrc` 中的 `Image=` 壁纸路径。
@@ -140,8 +141,9 @@ pub fn parse_kde_wallpaper_config(content: &str) -> Option<PathBuf> {
             .strip_prefix("file://")
             .map(percent_decode_path)
             .unwrap_or_else(|| value.to_owned());
+        let is_posix_abs = stripped.starts_with('/');
         let path = PathBuf::from(stripped);
-        if path.is_absolute() {
+        if path.is_absolute() || is_posix_abs {
             return Some(path);
         }
     }
