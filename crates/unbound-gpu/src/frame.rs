@@ -28,7 +28,9 @@ use crate::data::{
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
 use crate::device::{Buffer, FrameSync, Gpu, GpuError, MemoryKind};
-use crate::pipeline::{ExternalTextureSlots, Pipelines, COLOR_FORMAT, DEPTH_FORMAT};
+use crate::pipeline::{
+    ExternalTextureSlots, GraphicsPipelineSet, Pipelines, COLOR_FORMAT, DEPTH_FORMAT,
+};
 use crate::pool::{PersistentPool, PoolHandle};
 use crate::ring::TransientRing;
 
@@ -935,6 +937,8 @@ pub struct Renderer {
     ///
     /// 必须传入图像句柄，因为仅图像本体可执行布局转换（视图不携带布局信息）。
     external_color: Option<(vk::Image, vk::ImageView, u32, u32)>,
+    /// 借用颜色附件的像素格式（默认 [`COLOR_FORMAT`]，窗口交换链可回退为 `R8G8B8A8_SRGB`）。
+    external_color_format: vk::Format,
     /// 借用图像是否为交换链图像（渲染后须转换至 `PRESENT_SRC_KHR` 交给呈现引擎）。
     ///
     /// 直接以 `COLOR_ATTACHMENT_OPTIMAL` 呈现会触发 `VUID-VkPresentInfoKHR-pImageIndices-01430`；
@@ -1317,6 +1321,7 @@ impl Renderer {
             managed_external: HashMap::new(),
             deferred_external_destroys: DeferredDestroyQueue::new(),
             external_color: None,
+            external_color_format: COLOR_FORMAT,
             external_present: false,
             external_ready: vk::Semaphore::null(),
             external_signal: vk::Semaphore::null(),
@@ -1934,16 +1939,25 @@ impl Renderer {
 
         self.mark(cmd, 1, vk::PipelineStageFlags::COMPUTE_SHADER);
 
+        let active_format = if self.external_color.is_some() {
+            self.external_color_format
+        } else {
+            COLOR_FORMAT
+        };
+        let active_graphics = self
+            .pipelines
+            .graphics_for_format(&self.gpu, active_format)?;
+
         let n = scene.primitives.len() as u32;
         if let Some(split_z) = backdrop_overlay_split_z(scene.backdrops) {
             // ---- 6a. 底层场景 Pass（z < split_z）-----------------------------
             self.record_cull_sort_indirect(cmd, scene, n, frame_slot, 0, u32::from(split_z), true)?;
             self.begin_rendering(cmd, frame_slot, true);
-            self.record_graphics(cmd, scene, frame_slot);
+            self.record_graphics(cmd, scene, frame_slot, active_graphics);
             self.end_rendering(cmd);
 
             // ---- 6b. 毛玻璃背景虚化（仅采样底层场景，再按圆角合成） -----------
-            self.record_backdrop(cmd, scene)?;
+            self.record_backdrop(cmd, scene, active_graphics.backdrop)?;
 
             // 在同一帧槽位复用排序/间接缓冲前，等待前一次绘制消费完毕。
             let reuse_barrier = [vk::MemoryBarrier2::default()
@@ -1984,15 +1998,15 @@ impl Renderer {
                 false,
             )?;
             self.begin_rendering(cmd, frame_slot, false);
-            self.record_graphics(cmd, scene, frame_slot);
+            self.record_graphics(cmd, scene, frame_slot, active_graphics);
             self.end_rendering(cmd);
         } else {
             // 无浮层切分请求：单 Pass 绘制全部图元，再按需执行全场景毛玻璃虚化。
             self.record_cull_sort_indirect(cmd, scene, n, frame_slot, 0, 0, true)?;
             self.begin_rendering(cmd, frame_slot, true);
-            self.record_graphics(cmd, scene, frame_slot);
+            self.record_graphics(cmd, scene, frame_slot, active_graphics);
             self.end_rendering(cmd);
-            self.record_backdrop(cmd, scene)?;
+            self.record_backdrop(cmd, scene, active_graphics.backdrop)?;
         }
 
         // 交换链图像必须以 `PRESENT_SRC_KHR` 布局交给呈现引擎，否则 `vkQueuePresentKHR` 会报错。
@@ -2032,6 +2046,7 @@ impl Renderer {
         &mut self,
         cmd: vk::CommandBuffer,
         scene: &SceneUpload<'_>,
+        backdrop_pipeline: vk::Pipeline,
     ) -> Result<(), GpuError> {
         if scene.backdrops.is_empty() {
             return Ok(());
@@ -2392,11 +2407,7 @@ impl Renderer {
                     .layer_count(1)
                     .color_attachments(&color_attachment),
             );
-            device.cmd_bind_pipeline(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipelines.backdrop,
-            );
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, backdrop_pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -2722,6 +2733,7 @@ impl Renderer {
             scene,
             color_image,
             color_view,
+            COLOR_FORMAT,
             width,
             height,
             image_available,
@@ -2750,6 +2762,7 @@ impl Renderer {
             scene,
             color_image,
             color_view,
+            COLOR_FORMAT,
             width,
             height,
             image_available,
@@ -2776,6 +2789,7 @@ impl Renderer {
             scene,
             acquired.image,
             acquired.view,
+            acquired.format,
             width,
             height,
             acquired.available,
@@ -2790,6 +2804,7 @@ impl Renderer {
         scene: &SceneUpload<'_>,
         color_image: vk::Image,
         color_view: vk::ImageView,
+        color_format: vk::Format,
         width: u32,
         height: u32,
         image_available: vk::Semaphore,
@@ -2802,11 +2817,13 @@ impl Renderer {
         // 边界的驱动上还可能丢失设备。此处统一扩容，不依赖每个调用方记得处理。
         self.ensure_depth_size(width, height)?;
         self.external_color = Some((color_image, color_view, width, height));
+        self.external_color_format = color_format;
         self.external_ready = image_available;
         self.external_signal = render_finished;
         self.external_present = present;
         let result = self.render(scene);
         self.external_color = None;
+        self.external_color_format = COLOR_FORMAT;
         self.external_ready = vk::Semaphore::null();
         self.external_signal = vk::Semaphore::null();
         self.external_present = false;
@@ -3141,6 +3158,7 @@ impl Renderer {
         cmd: vk::CommandBuffer,
         scene: &SceneUpload<'_>,
         frame_slot: usize,
+        graphics: GraphicsPipelineSet,
     ) {
         let device = &self.gpu.device;
         let commands_offset = self.frame_slices.commands_offset(frame_slot);
@@ -3199,10 +3217,10 @@ impl Renderer {
             };
 
             // Pass A：不透明核心预 Pass，纯深度写入；配合 `GREATER_OR_EQUAL` 让最近核心占领深度缓冲以触发 Early-Z 剔除。
-            draw(self.pipelines.opaque_core);
+            draw(graphics.opaque_core);
 
             // Pass B：单次带混合的 uber 绘制。
-            draw(self.pipelines.uber_normal);
+            draw(graphics.uber_normal);
 
             self.stats.draw_calls = 2;
         }

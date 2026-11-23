@@ -26,6 +26,10 @@ pub struct Surface {
     #[cfg(windows)]
     #[allow(dead_code)]
     win32_surface: Option<ash::khr::win32_surface::Instance>,
+    /// Wayland 专用加载器。需在表面存活期间保持有效，因为表面由其函数指针创建。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[allow(dead_code)]
+    wayland_surface: Option<ash::khr::wayland_surface::Instance>,
 }
 
 impl core::fmt::Debug for Surface {
@@ -75,10 +79,105 @@ impl Surface {
         })
     }
 
+    /// 为 Wayland 显示与表面句柄创建 Vulkan 表面。
+    ///
+    /// `display` 为 `wl_display*`，`surface` 为 `wl_surface*`。
+    ///
+    /// # Safety
+    /// `display` 与 `surface` 必须指向存活的 Wayland 原生对象，且在整个表面生命周期内保持有效。
+    ///
+    /// # Errors
+    /// 缺少必需实例扩展或 Vulkan 创建表面失败时返回错误。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    pub unsafe fn new_wayland(
+        gpu: &Gpu,
+        display: *mut core::ffi::c_void,
+        surface: *mut core::ffi::c_void,
+    ) -> Result<Self, GpuError> {
+        const REQUIRED: [&str; 2] = ["VK_KHR_surface", "VK_KHR_wayland_surface"];
+        let missing: Vec<&'static str> = REQUIRED
+            .into_iter()
+            .filter(|name| {
+                !gpu.enabled_instance_extensions
+                    .iter()
+                    .any(|enabled| enabled == name)
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(GpuError::UnsupportedFeatures(missing));
+        }
+
+        let khr_surface = ash::khr::surface::Instance::new(&gpu.entry, &gpu.instance);
+        let wayland_surface = ash::khr::wayland_surface::Instance::new(&gpu.entry, &gpu.instance);
+        let create_info = vk::WaylandSurfaceCreateInfoKHR::default()
+            .display(display)
+            .surface(surface);
+        // SAFETY: 调用方保证 `display` 与 `surface` 指向有效 Wayland 句柄。
+        let vk_surface = unsafe { wayland_surface.create_wayland_surface(&create_info, None) }
+            .map_err(GpuError::from)?;
+        Ok(Self {
+            surface: vk_surface,
+            khr_surface,
+            wayland_surface: Some(wayland_surface),
+        })
+    }
+
+    /// 基于标准 `raw-window-handle` 的显示与窗口句柄创建跨平台 Vulkan 表面。
+    ///
+    /// 自动按平台分发至 Win32 或 Wayland 表面加载器，复用既有实例扩展校验路径。
+    ///
+    /// # Safety
+    /// 传入的显示与窗口句柄必须在返回表面的整个生命周期内保持有效。
+    ///
+    /// # Errors
+    /// 句柄类型不受当前平台支持、缺少必需实例扩展或 Vulkan 建链失败时返回错误。
+    pub unsafe fn from_raw_handles(
+        gpu: &Gpu,
+        display: raw_window_handle::RawDisplayHandle,
+        window: raw_window_handle::RawWindowHandle,
+    ) -> Result<Self, GpuError> {
+        #[cfg(windows)]
+        {
+            let _ = display;
+            match window {
+                raw_window_handle::RawWindowHandle::Win32(handle) => {
+                    Self::new_win32(gpu, handle.hwnd.get())
+                }
+                other => Err(GpuError::Allocation(format!(
+                    "unsupported window handle on Windows: {other:?}"
+                ))),
+            }
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+        {
+            match (display, window) {
+                (
+                    raw_window_handle::RawDisplayHandle::Wayland(d),
+                    raw_window_handle::RawWindowHandle::Wayland(w),
+                ) => {
+                    // SAFETY: 由调用方契约保证句柄在表面存活期内有效。
+                    unsafe { Self::new_wayland(gpu, d.display.as_ptr(), w.surface.as_ptr()) }
+                }
+                (d, w) => Err(GpuError::Allocation(format!(
+                    "unsupported display/window handle pair on Unix: ({d:?}, {w:?})"
+                ))),
+            }
+        }
+        #[cfg(not(any(
+            windows,
+            all(unix, not(target_os = "macos"), not(target_os = "android"))
+        )))]
+        {
+            let _ = (gpu, display, window);
+            Err(GpuError::Allocation(
+                "windowed presentation is not implemented for this platform".into(),
+            ))
+        }
+    }
+
     /// 从原始窗口句柄创建表面。
     ///
-    /// 在 Windows 上句柄须为 `HWND`。其他平台尚未接入对应加载器，
-    /// 因此会显式返回错误而非静默无操作。
+    /// 在 Windows 上句柄须为 `HWND`，在 Linux/Unix 上支持 Wayland 显示与表面指针。
     ///
     /// # Errors
     /// 透传 Vulkan 调用错误。
@@ -88,11 +187,20 @@ impl Surface {
             let RawWindowHandle::Win32 { hwnd } = raw_handle;
             Self::new_win32(gpu, hwnd)
         }
-        #[cfg(not(windows))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+        {
+            let RawWindowHandle::Wayland { display, surface } = raw_handle;
+            // SAFETY: 句柄由存活的 Wayland 窗口提供。
+            unsafe { Self::new_wayland(gpu, display, surface) }
+        }
+        #[cfg(not(any(
+            windows,
+            all(unix, not(target_os = "macos"), not(target_os = "android"))
+        )))]
         {
             let _ = (gpu, raw_handle);
             Err(GpuError::Allocation(
-                "windowed presentation is implemented for Win32 only".into(),
+                "windowed presentation is not implemented for this platform".into(),
             ))
         }
     }
@@ -214,6 +322,14 @@ pub enum RawWindowHandle {
         /// 窗口句柄。
         hwnd: isize,
     },
+    /// Wayland `wl_display*` 与 `wl_surface*`。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    Wayland {
+        /// `wl_display` 原始指针。
+        display: *mut core::ffi::c_void,
+        /// `wl_surface` 原始指针。
+        surface: *mut core::ffi::c_void,
+    },
 }
 
 /// 低延迟呈现路径等待画面上屏的超时时间。
@@ -237,6 +353,8 @@ pub struct AcquiredImage {
     pub view: vk::ImageView,
     /// 图像本体句柄。渲染器需要用它执行布局转换：仅凭图像视图无法转换布局。
     pub image: vk::Image,
+    /// 交换链图像的实际像素格式（`B8G8R8A8_SRGB` 或回退的 `R8G8B8A8_SRGB`）。
+    pub format: vk::Format,
     /// 当呈现引擎交出图像所有权时触发。
     ///
     /// 渲染提交在访问该图像前必须等待此信号量。
@@ -303,6 +421,48 @@ pub enum PresentOutcome {
 /// 相邻值 `1000111000` 是 `VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR`，与本模式无关。
 const PRESENT_MODE_FIFO_LATEST_READY: vk::PresentModeKHR =
     vk::PresentModeKHR::from_raw(1_000_361_000);
+
+/// 窗口交换链表面格式协商：优先 `B8G8R8A8_SRGB`，缺失时回退 `R8G8B8A8_SRGB`。
+///
+/// 离屏 `RenderTarget` 始终锁定 [`crate::pipeline::COLOR_FORMAT`]（`B8G8R8A8_SRGB`）；
+/// 窗口交换链在部分 Wayland / WSLg 驱动（如 Mesa `dzn` 或 `llvmpipe`）仅暴露
+/// `R8G8B8A8_SRGB` 时允许优雅回退，由 [`crate::pipeline::Pipelines::graphics_for_format`]
+/// 懒缓存对应的 4 条窗口管线变体。同格式下优先匹配 `SRGB_NONLINEAR` 色彩空间。
+#[must_use]
+pub(crate) fn select_surface_format(
+    formats: &[vk::SurfaceFormatKHR],
+) -> Option<vk::SurfaceFormatKHR> {
+    const CANDIDATES: [vk::Format; 2] = [crate::pipeline::COLOR_FORMAT, vk::Format::R8G8B8A8_SRGB];
+    for candidate in CANDIDATES {
+        if let Some(exact) = formats
+            .iter()
+            .find(|f| f.format == candidate && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR)
+        {
+            return Some(*exact);
+        }
+        if let Some(fallback_cs) = formats.iter().find(|f| f.format == candidate) {
+            return Some(*fallback_cs);
+        }
+    }
+    None
+}
+
+/// 根据表面能力推导交换链图像用途标志。
+///
+/// `COLOR_ATTACHMENT | TRANSFER_DST` 为渲染器基本需求；`TRANSFER_SRC` 仅在表面声明的
+/// `supported_usage_flags` 支持时按需启用，避免在不支持回读的 Wayland / WSLg 表面上建链失败。
+#[must_use]
+pub(crate) const fn resolve_swapchain_image_usage(
+    supported_usage_flags: vk::ImageUsageFlags,
+) -> vk::ImageUsageFlags {
+    let base =
+        vk::ImageUsageFlags::COLOR_ATTACHMENT.as_raw() | vk::ImageUsageFlags::TRANSFER_DST.as_raw();
+    if supported_usage_flags.contains(vk::ImageUsageFlags::TRANSFER_SRC) {
+        vk::ImageUsageFlags::from_raw(base | vk::ImageUsageFlags::TRANSFER_SRC.as_raw())
+    } else {
+        vk::ImageUsageFlags::from_raw(base)
+    }
+}
 
 /// 将策略模式映射为 Vulkan 呈现模式。
 ///
@@ -505,20 +665,16 @@ impl Swapchain {
         // 交换链图像将作为渲染器的颜色附件，其格式必须与管线的 `COLOR_FORMAT` 严格匹配：
         // 针对某附件格式创建的图形管线不可用于其他格式，通道顺序不同也会导致红蓝反转。
         // 格式为 sRGB，使硬件自动对着色器的线性输出执行编码。
-        let chosen = formats
-            .iter()
-            .find(|f| f.format == crate::pipeline::COLOR_FORMAT)
-            .copied()
-            .ok_or_else(|| {
-                let available: Vec<String> =
-                    formats.iter().map(|f| format!("{:?}", f.format)).collect();
-                GpuError::Allocation(format!(
-                    "the surface does not expose the renderer's colour format {:?}; \
-                     it offers {:?}",
-                    crate::pipeline::COLOR_FORMAT,
-                    available
-                ))
-            })?;
+        let chosen = select_surface_format(&formats).ok_or_else(|| {
+            let available: Vec<String> =
+                formats.iter().map(|f| format!("{:?}", f.format)).collect();
+            GpuError::Allocation(format!(
+                "the surface exposes neither {:?} nor {:?}; it offers {:?}",
+                crate::pipeline::COLOR_FORMAT,
+                vk::Format::R8G8B8A8_SRGB,
+                available
+            ))
+        })?;
 
         // `VK_EXT_swapchain_maintenance1` 仅在扩展与特性同时启用时可用：未启用特性时使用呈现围栏或呈现缩放属于非法用法。
         let has_maintenance1 = gpu
@@ -627,12 +783,9 @@ impl Swapchain {
             .image_color_space(chosen.color_space)
             .image_extent(extent)
             .image_array_layers(1)
-            .image_usage(
-                // `TRANSFER_SRC` 允许标准 Vulkan 截图层拷出已呈现帧，便于在无桌面会话时检查窗口路径。
-                vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::TRANSFER_SRC,
-            )
+            .image_usage(resolve_swapchain_image_usage(
+                capabilities.supported_usage_flags,
+            ))
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .queue_family_indices(&queue_family_indices)
             .pre_transform(capabilities.current_transform)
@@ -864,6 +1017,7 @@ impl Swapchain {
                         view,
                         available: semaphore,
                         image: self.images[index as usize],
+                        format: self.format,
                         render_finished: self.render_finished_semaphores[slot],
                     },
                     suboptimal,
@@ -1062,6 +1216,64 @@ mod tests {
             "a missing instance extension must be an error, not an abort"
         );
         gpu.destroy();
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[test]
+    fn new_wayland_reports_missing_instance_extensions() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        // 无头测试设备未启用 Wayland 表面扩展，必须在调用 ash 加载器前返回可诊断错误。
+        assert!(
+            matches!(
+                unsafe { Surface::new_wayland(&gpu, core::ptr::null_mut(), core::ptr::null_mut()) },
+                Err(GpuError::UnsupportedFeatures(_))
+            ),
+            "a missing Wayland instance extension must return UnsupportedFeatures"
+        );
+        gpu.destroy();
+    }
+
+    #[test]
+    fn surface_format_negotiation_prefers_bgra8_and_falls_back_to_rgba8() {
+        let bgra = vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_SRGB,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        };
+        let rgba = vk::SurfaceFormatKHR {
+            format: vk::Format::R8G8B8A8_SRGB,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        };
+        let unorm = vk::SurfaceFormatKHR {
+            format: vk::Format::B8G8R8A8_UNORM,
+            color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        };
+
+        // 两者都在时优先命中 `B8G8R8A8_SRGB`（即使 `R8G8B8A8_SRGB` 排在前面）。
+        assert_eq!(select_surface_format(&[rgba, bgra]), Some(bgra));
+        // 仅暴露 `R8G8B8A8_SRGB` 时优雅回退。
+        assert_eq!(select_surface_format(&[unorm, rgba]), Some(rgba));
+        // 两者都缺失时返回 `None`。
+        assert_eq!(select_surface_format(&[unorm]), None);
+    }
+
+    #[test]
+    fn swapchain_image_usage_enables_transfer_src_only_when_supported() {
+        let without = resolve_swapchain_image_usage(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+        );
+        assert!(without.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT));
+        assert!(without.contains(vk::ImageUsageFlags::TRANSFER_DST));
+        assert!(!without.contains(vk::ImageUsageFlags::TRANSFER_SRC));
+
+        let with = resolve_swapchain_image_usage(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+        );
+        assert!(with.contains(vk::ImageUsageFlags::TRANSFER_SRC));
     }
 
     #[test]
