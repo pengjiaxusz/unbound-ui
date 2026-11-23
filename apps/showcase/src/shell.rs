@@ -21,6 +21,7 @@ use unbound_widgets::navigation_view::{
     NavigationViewMenuItem, NavigationViewPaneDisplayMode, NavigationViewRowKind,
     NavigationViewState, NavigationViewTitleBarSync, NAVIGATION_VIEW_COMPACT_PANE_LENGTH,
 };
+use unbound_widgets::scroll::{scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis};
 use unbound_widgets::{
     emit_window_caption_buttons, ControlState, ShellIcon, WidgetCatalogId, WidgetOutput,
     WindowCaptionButtonControlStates, WindowCaptionButtons, WindowCaptionButtonsLayout,
@@ -39,6 +40,12 @@ use crate::widgets::{self, Icon};
 const NAV_OPEN_PANE_LENGTH: f32 = 248.0;
 /// `NavigationView` 控件的稳定节点标识（高位标签避开 `target.rs` 的 1..=26）。
 const NAV_VIEW_NODE: u64 = 94u64 << 56;
+/// `NavigationView` 垂直滚动条滑块子命中节点标识。
+pub const NAV_SCROLLBAR_THUMB_NODE: u64 =
+    scrollbar_thumb_node(NAV_VIEW_NODE, ScrollbarAxis::Vertical);
+/// `NavigationView` 垂直滚动条轨道子命中节点标识。
+pub const NAV_SCROLLBAR_TRACK_NODE: u64 =
+    scrollbar_track_node(NAV_VIEW_NODE, ScrollbarAxis::Vertical);
 /// 顶栏与页脚悬停工具提示的稳定节点标识（高位标签避开 `target.rs` 与 `NAV_VIEW_NODE`）。
 const TOP_BAR_TOOLTIP_NODE: u64 = 95u64 << 56;
 /// 编辑器上下文菜单容器的临时节点标识（子热区会重映射回 `Target::EditorMenuItem`）。
@@ -1167,6 +1174,24 @@ impl GalleryApp {
             .nav_view
             .scroll_offset
             .clamp(0.0, self.nav_view.scroll_max);
+        let active_nav_pane = pre_nav_layout
+            .overlay_rect
+            .unwrap_or(pre_nav_layout.pane_rect);
+        let hover_on_nav_bar = matches!(
+            hover,
+            Some(id) if id == NAV_SCROLLBAR_THUMB_NODE || id == NAV_SCROLLBAR_TRACK_NODE
+        );
+        let pane_hovered = active_nav_pane.contains_point(self.pointer)
+            || nav_hovered.is_some()
+            || hover_on_nav_bar;
+        self.nav_view.set_pane_hovered(pane_hovered);
+        let bar_hovered = hover_on_nav_bar
+            || nav_desc
+                .menu_scrollbar_desc(&pre_nav_layout, &self.nav_view, false)
+                .is_some_and(|bar| {
+                    bar.is_visible() && bar.track_rect().contains_point(self.pointer)
+                });
+        self.nav_view.set_scrollbar_hovered(bar_hovered);
         let nav_sync = self.nav_view.title_bar_sync(&nav_desc);
 
         let raw_nav_width = pre_nav_layout.pane_rect.width();
@@ -1456,6 +1481,30 @@ impl GalleryApp {
     ///
     pub fn pointer_move(&mut self, position: Vec2) {
         self.pointer = position;
+        let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+        if self.nav_view.scrollbar_drag.is_some() {
+            if self
+                .nav_view
+                .handle_pointer_drag(&nav_desc, &self.nav_layout, position)
+            {
+                self.state.bump();
+            }
+        } else {
+            let active_pane_rect = self
+                .nav_layout
+                .overlay_rect
+                .unwrap_or(self.nav_layout.pane_rect);
+            let pane_changed = self
+                .nav_view
+                .set_pane_hovered(active_pane_rect.contains_point(position));
+            let bar_hovered = nav_desc
+                .menu_scrollbar_desc(&self.nav_layout, &self.nav_view, false)
+                .is_some_and(|bar| bar.is_visible() && bar.track_rect().contains_point(position));
+            let bar_changed = self.nav_view.set_scrollbar_hovered(bar_hovered);
+            if pane_changed || bar_changed {
+                self.state.bump();
+            }
+        }
         if let Some(grab) = self.scroll_drag {
             if let Some(bar) = self.scrollbar {
                 let scroll = bar.scroll_for(position.y - grab);
@@ -1603,6 +1652,15 @@ impl GalleryApp {
         // 若在此处走 `begin_press_target`，选区会在菜单打开前就被折叠。
         if button == PointerButton::Left {
             if let Some(node) = target {
+                if node == NAV_SCROLLBAR_THUMB_NODE || node == NAV_SCROLLBAR_TRACK_NODE {
+                    if self
+                        .nav_view
+                        .handle_pointer_down(&nav_desc, &self.nav_layout, position)
+                    {
+                        self.state.bump();
+                    }
+                    return;
+                }
                 self.pending_focus = Some(node);
                 if let Some(target) = target::decode(node) {
                     self.begin_press_target(target, position);
@@ -1618,6 +1676,9 @@ impl GalleryApp {
     ///
     pub fn pointer_up(&mut self, position: Vec2) {
         self.pointer = position;
+        if self.nav_view.handle_pointer_up(position) {
+            self.state.bump();
+        }
         if let Some((id, _)) = self.drag_editor.take() {
             let _ = self.editor_event(id, unbound_widgets::text_input::TextInputEvent::PointerUp);
         }
@@ -1636,6 +1697,9 @@ impl GalleryApp {
     /// 否则外壳会一直保留幽灵拖拽，直到用户恰好点击别处。
     ///
     pub fn cancel_interactions(&mut self) {
+        if self.nav_view.handle_pointer_up(self.pointer) {
+            self.state.bump();
+        }
         self.scroll_drag = None;
         self.list_scroll_drag = None;
         self.dragging_range = None;
@@ -2085,6 +2149,9 @@ impl GalleryApp {
         let Some(node) = node else {
             return false;
         };
+        if node == NAV_SCROLLBAR_THUMB_NODE || node == NAV_SCROLLBAR_TRACK_NODE {
+            return true;
+        }
         matches!(
             target::decode(node),
             Some(Target::ContentScrollbar | Target::Knob(..) | Target::Demo(..))
@@ -4377,7 +4444,9 @@ fn draw_navigation_view_pane(
     let menu_clip = unbound_input::ClipRect::new(nav_layout.menu_viewport_rect);
     let mut remapped_hits = Vec::with_capacity(nav_output.sub_hits.len());
     for mut hit in nav_output.sub_hits.iter().cloned() {
-        if let Some(&(item_id, is_main)) = row_map.get(&hit.node) {
+        if hit.node == NAV_SCROLLBAR_THUMB_NODE || hit.node == NAV_SCROLLBAR_TRACK_NODE {
+            remapped_hits.push(hit);
+        } else if let Some(&(item_id, is_main)) = row_map.get(&hit.node) {
             hit.node = item_id;
             if is_main && nav_layout.menu_viewport_rect.height() > 0.0 {
                 hit = hit.with_clip(menu_clip);

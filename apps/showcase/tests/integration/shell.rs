@@ -3499,3 +3499,142 @@ fn tooltip_demo_page_uses_win11_shell_and_renders_plain_and_rich_content_bilingu
         rich_zh.label
     );
 }
+
+/// Showcase 侧边 `NavigationView` 垂直叠加滚动条端到端交互闭环：
+/// 命中区保留、悬停展开 6px 粗轨、点击轨道翻页不误触行点击、拖拽滑块与松手/失焦释放，
+/// 以及紧凑折叠态未悬停隐藏与悬停显现。
+#[test]
+fn nav_view_scrollbar_supports_hover_expand_track_page_thumb_drag_and_compact_auto_hide() {
+    use showcase::shell::{NAV_SCROLLBAR_THUMB_NODE, NAV_SCROLLBAR_TRACK_NODE};
+    use unbound_theme::Token;
+    use unbound_widgets::scroll::{SCROLLBAR_THUMB_IDLE_WIDTH, SCROLLBAR_THUMB_WIDTH};
+
+    let mut app = app();
+    app.nav_view.animations_enabled = false;
+    app.rebuild(VIEWPORT);
+    assert!(
+        app.nav_view.scroll_max > 0.0,
+        "expanded showcase navigation menu must overflow vertically"
+    );
+
+    // 1. 展开态保留滚动条滑块与轨道命中区，静止态渲染 2px 细指示条。
+    let thumb_rect = rect_of(&app, NAV_SCROLLBAR_THUMB_NODE);
+    let track_rect = rect_of(&app, NAV_SCROLLBAR_TRACK_NODE);
+    assert!(
+        track_rect.contains_rect(&thumb_rect),
+        "nav scrollbar thumb hit must lie within track hit"
+    );
+    let find_thumb_width = |app: &App, track: Rect| -> f32 {
+        app.scene
+            .primitives
+            .iter()
+            .find(|p| {
+                p.fill_token_or_uv == u32::from(Token::CONTROL_TRACK_STROKE.raw())
+                    && p.local_pos[0] >= track.origin.x - 0.5
+                    && p.local_pos[0] + p.size[0] <= track.max().x + 0.5
+                    && p.local_pos[1] >= track.origin.y - 0.5
+                    && p.local_pos[1] + p.size[1] <= track.max().y + 0.5
+            })
+            .expect("nav scrollbar thumb primitive must be emitted within track")
+            .size[0]
+    };
+    assert!(
+        (find_thumb_width(&app, track_rect) - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.05,
+        "idle nav scrollbar thumb must render at 2px"
+    );
+
+    // 2. 指针悬停滚动条热区触发 6px 粗滑块展开重绘，移出后恢复 2px 静止态。
+    app.pointer_move(track_rect.center());
+    assert!(app.nav_view.scrollbar_hovered);
+    app.sync(VIEWPORT);
+    assert!(
+        (find_thumb_width(&app, track_rect) - SCROLLBAR_THUMB_WIDTH).abs() < 0.05,
+        "hovering nav scrollbar must expand thumb to 6px"
+    );
+
+    app.pointer_move(Vec2::new(800.0, 200.0));
+    assert!(!app.nav_view.scrollbar_hovered);
+    app.sync(VIEWPORT);
+    assert!(
+        (find_thumb_width(&app, track_rect) - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.05,
+        "leaving nav scrollbar must collapse thumb back to 2px"
+    );
+
+    // 3. 点击滑块下方轨道立即翻页，且不误触发下方导航行页面切换。
+    let page_before = app.state.active_page;
+    let below_thumb = Vec2::new(track_rect.center().x, track_rect.max().y - 4.0);
+    app.pointer_down(below_thumb, 1.0);
+    app.pointer_up(below_thumb, 1.1);
+    app.sync(VIEWPORT);
+    assert!(
+        app.nav_view.scroll_offset > 0.0,
+        "clicking nav scrollbar track below thumb must page down"
+    );
+    assert_eq!(
+        app.state.active_page, page_before,
+        "clicking nav scrollbar track must not activate underlying nav row"
+    );
+
+    // 4. 拖拽滑块实时更新滚动偏移，松手释放拖拽态。
+    let thumb_after_page = rect_of(&app, NAV_SCROLLBAR_THUMB_NODE);
+    app.pointer_down(thumb_after_page.center(), 2.0);
+    assert!(app.nav_view.scrollbar_drag.is_some());
+    let offset_before_drag = app.nav_view.scroll_offset;
+    app.pointer_move(Vec2::new(
+        thumb_after_page.center().x,
+        track_rect.max().y + 120.0,
+    ));
+    assert!(
+        app.nav_view.scroll_offset > offset_before_drag,
+        "dragging nav scrollbar thumb down must advance scroll offset"
+    );
+    app.pointer_up(
+        Vec2::new(thumb_after_page.center().x, track_rect.max().y),
+        2.1,
+    );
+    assert!(app.nav_view.scrollbar_drag.is_none());
+    app.sync(VIEWPORT);
+
+    // 5. 拖拽途中触发失焦/取消交互：立即释放拖拽捕获，后续移动不再改变偏移。
+    let thumb_at_bottom = rect_of(&app, NAV_SCROLLBAR_THUMB_NODE);
+    app.pointer_down(thumb_at_bottom.center(), 3.0);
+    assert!(app.nav_view.scrollbar_drag.is_some());
+    app.cancel_interactions();
+    assert!(app.nav_view.scrollbar_drag.is_none());
+    let offset_after_cancel = app.nav_view.scroll_offset;
+    app.pointer_move(Vec2::new(thumb_at_bottom.center().x, track_rect.origin.y));
+    assert_eq!(app.nav_view.scroll_offset, offset_after_cancel);
+
+    // 6. 紧凑折叠态：指针移出窗格时自动隐藏滚动条，悬停窗格后按需显现并可展开。
+    let compact_vp = (900.0, 520.0);
+    app.pointer_move(Vec2::new(500.0, 260.0));
+    app.nav_view.scrollbar_recent_scroll_timer = 0.0;
+    app.rebuild(compact_vp);
+    assert!(app.nav_view.scroll_max > 0.0);
+    assert!(
+        !app.regions
+            .iter()
+            .any(|r| r.node == NAV_SCROLLBAR_THUMB_NODE || r.node == NAV_SCROLLBAR_TRACK_NODE),
+        "compact collapsed showcase pane must hide scrollbar when unhovered"
+    );
+
+    let compact_pane_center = app.nav_layout.pane_rect.center();
+    app.pointer_move(compact_pane_center);
+    assert!(app.nav_view.pane_hovered);
+    app.sync(compact_vp);
+    assert!(
+        app.regions
+            .iter()
+            .any(|r| r.node == NAV_SCROLLBAR_TRACK_NODE),
+        "hovering compact collapsed showcase pane must reveal scrollbar track hit"
+    );
+
+    app.pointer_move(Vec2::new(500.0, 260.0));
+    app.sync(compact_vp);
+    assert!(
+        !app.regions
+            .iter()
+            .any(|r| r.node == NAV_SCROLLBAR_THUMB_NODE || r.node == NAV_SCROLLBAR_TRACK_NODE),
+        "leaving compact collapsed showcase pane must hide scrollbar again"
+    );
+}
