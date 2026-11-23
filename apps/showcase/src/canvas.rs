@@ -997,6 +997,181 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// 发射 Win11 Fluent 默认纯文本工具提示（支持自动换行与窗口边界防溢出）。
+    ///
+    /// 遵循 `OverlayKind::Tooltip` 契约：鼠标穿透（`hit: None`）、不可聚焦，
+    /// 统一使用 `4.0px` 圆角、`Token::OVERLAY_BG`、`1.0px Token::CARD_BORDER` 与
+    /// WinUI 3 非对称内边距（`9, 6, 9, 8`）。
+    pub fn emit_tooltip_plain(
+        &mut self,
+        node: u64,
+        anchor_node: u64,
+        anchor: Rect,
+        viewport: Rect,
+        text: &str,
+        placement: unbound_widgets::overlay::Placement,
+    ) -> unbound_widgets::tooltip::TooltipLayout {
+        use unbound_widgets::tooltip::{
+            TooltipDesc, TOOLTIP_FONT_SIZE, TOOLTIP_LINE_HEIGHT, TOOLTIP_MAX_WIDTH, TOOLTIP_PADDING,
+        };
+
+        let max_content_w = (TOOLTIP_MAX_WIDTH - TOOLTIP_PADDING.horizontal()).max(1.0);
+        let single = self.labels.measure(text, TOOLTIP_FONT_SIZE);
+        let needs_wrap = single.x > max_content_w;
+        let content_size = if !needs_wrap {
+            Vec2::new(
+                single.x.clamp(16.0, max_content_w),
+                single.y.max(TOOLTIP_LINE_HEIGHT),
+            )
+        } else {
+            let probe =
+                self.labels
+                    .layout_wrapped(text, Vec2::ZERO, TOOLTIP_FONT_SIZE, max_content_w);
+            let bounds = quads_bounds(&probe).unwrap_or(Rect::new(
+                0.0,
+                0.0,
+                max_content_w,
+                TOOLTIP_LINE_HEIGHT,
+            ));
+            Vec2::new(
+                bounds.max().x.clamp(16.0, max_content_w),
+                bounds.max().y.max(TOOLTIP_LINE_HEIGHT),
+            )
+        };
+        let desc = TooltipDesc::rich(anchor, viewport, content_size)
+            .with_label(text)
+            .with_placement(placement);
+        let layout = desc.layout();
+        let quads = if !needs_wrap {
+            self.layout_text(
+                text,
+                layout.content_rect,
+                TOOLTIP_FONT_SIZE,
+                AlignX::Start,
+                AlignY::Center,
+            )
+            .0
+        } else {
+            let origin = Vec2::new(
+                self.snap_value(layout.content_rect.origin.x),
+                self.snap_value(layout.content_rect.origin.y),
+            );
+            self.labels.layout_wrapped(
+                text,
+                origin,
+                TOOLTIP_FONT_SIZE,
+                layout.content_rect.width().max(1.0),
+            )
+        };
+        let (output, _) =
+            desc.render_with_glyphs(node, anchor_node, ControlState::default(), &quads);
+        self.widget_output(WidgetCatalogId::ToolTip, node, &output);
+        layout
+    }
+
+    /// 发射富内容工具提示（ADR-0030），将闭包内生成的纯展示图元合并到 Win11 气泡外壳中。
+    ///
+    /// 底层通过 [`TooltipDesc::render_with_content`] 自动剥离任何子命中区与焦点标记，
+    /// 严格保证 `OverlayKind::Tooltip` 鼠标穿透与不抢焦点契约。
+    pub fn emit_tooltip_rich(
+        &mut self,
+        node: u64,
+        anchor_node: u64,
+        desc: &unbound_widgets::tooltip::TooltipDesc,
+        build_content: impl FnOnce(&mut Self, Rect, u16) -> WidgetOutput,
+    ) -> unbound_widgets::tooltip::TooltipLayout {
+        let layout = desc.layout();
+        let (output, _) = desc.render_with_content(
+            node,
+            anchor_node,
+            ControlState::default(),
+            |content_rect, content_z| build_content(self, content_rect, content_z),
+        );
+        self.widget_output(WidgetCatalogId::ToolTip, node, &output);
+        layout
+    }
+
+    /// 发射带 `Kbd` 快捷键徽章的富内容工具提示（文案 + 右侧按键帽组合）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_tooltip_with_shortcut(
+        &mut self,
+        node: u64,
+        anchor_node: u64,
+        anchor: Rect,
+        viewport: Rect,
+        text: &str,
+        shortcut_keys: &[&str],
+        placement: unbound_widgets::overlay::Placement,
+    ) -> unbound_widgets::tooltip::TooltipLayout {
+        use unbound_theme::Token;
+        use unbound_widgets::kbd::{emit_kbd_chord, KbdChordDesc, KbdSize};
+        use unbound_widgets::primitive::glyphs as emit_glyphs;
+        use unbound_widgets::tooltip::{
+            TooltipDesc, TOOLTIP_FONT_SIZE, TOOLTIP_LINE_HEIGHT, TOOLTIP_MAX_WIDTH, TOOLTIP_PADDING,
+        };
+
+        if shortcut_keys.is_empty() {
+            return self.emit_tooltip_plain(node, anchor_node, anchor, viewport, text, placement);
+        }
+
+        let probe_chord = KbdChordDesc::from_keys(Vec2::ZERO, shortcut_keys).with_size(KbdSize::Sm);
+        let kbd_bounds = probe_chord.bounds();
+        let gap = 8.0;
+        let max_content_w = (TOOLTIP_MAX_WIDTH - TOOLTIP_PADDING.horizontal()).max(1.0);
+        let text_w = self.labels.measure(text, TOOLTIP_FONT_SIZE).x;
+        let content_w = (text_w + gap + kbd_bounds.width()).clamp(40.0, max_content_w);
+        let content_h = kbd_bounds.height().max(TOOLTIP_LINE_HEIGHT);
+        let a11y_label = format!("{text} ({})", probe_chord.formatted_text());
+        let desc = TooltipDesc::rich(anchor, viewport, Vec2::new(content_w, content_h))
+            .with_label(a11y_label)
+            .with_placement(placement);
+
+        self.emit_tooltip_rich(
+            node,
+            anchor_node,
+            &desc,
+            |canvas, content_rect, content_z| {
+                let mut child = WidgetOutput::default();
+                let text_rect = Rect::new(
+                    content_rect.origin.x,
+                    content_rect.origin.y,
+                    (content_rect.width() - kbd_bounds.width() - gap).max(0.0),
+                    content_rect.height(),
+                );
+                let (text_quads, _) = canvas.layout_text(
+                    text,
+                    text_rect,
+                    TOOLTIP_FONT_SIZE,
+                    AlignX::Start,
+                    AlignY::Center,
+                );
+                emit_glyphs(
+                    &text_quads,
+                    Token::TEXT_PRIMARY,
+                    content_z,
+                    &mut child.primitives,
+                    &mut child.payloads,
+                );
+
+                let kbd_x = (content_rect.max().x - kbd_bounds.width()).max(content_rect.origin.x);
+                let kbd_y =
+                    content_rect.origin.y + (content_rect.height() - kbd_bounds.height()) * 0.5;
+                let mut chord = KbdChordDesc::from_keys(Vec2::new(kbd_x, kbd_y), shortcut_keys)
+                    .with_size(KbdSize::Sm);
+                chord.z = content_z;
+                let mut kbd_quads = Vec::new();
+                for (key, cap_rect) in chord.keys.iter().zip(chord.keycap_rects()) {
+                    let (q, _) =
+                        canvas.layout_text(key, cap_rect, 10.0, AlignX::Center, AlignY::Center);
+                    kbd_quads.extend(q);
+                }
+                let kbd_out = emit_kbd_chord(0, &chord, ControlState::default(), &kbd_quads);
+                child.append_child_primitives(kbd_out);
+                child
+            },
+        )
+    }
+
     /// 截至目前发射的字形。
     #[must_use]
     pub fn glyph_count(&self) -> usize {
@@ -1136,6 +1311,56 @@ mod tests {
             radii_of(node, 1),
             [12.0; 4],
             "the outer shape is the second slot"
+        );
+    }
+
+    #[test]
+    fn emit_tooltip_rich_preserves_win11_shell_and_pointer_passthrough() {
+        use unbound_theme::Token;
+        use unbound_widgets::overlay::Placement;
+        use unbound_widgets::tooltip::TooltipDesc;
+
+        let mut scene = Gallery::new();
+        let mut labels = Labels::new();
+        let palette = palette();
+        let mut canvas = canvas(&mut scene, &mut labels, &palette);
+        let anchor = Rect::new(120.0, 140.0, 80.0, 28.0);
+        let viewport = canvas.viewport;
+        let desc = TooltipDesc::rich(anchor, viewport, Vec2::new(140.0, 32.0))
+            .with_label("Rich Tooltip")
+            .with_placement(Placement::Top);
+
+        let layout = canvas.emit_tooltip_rich(999, 1, &desc, |_c, content_r, z| {
+            let mut child = WidgetOutput::default();
+            child.primitives.push(unbound_widgets::primitive::surface(
+                content_r,
+                2.0,
+                Token::SURFACE_RAISED,
+                z,
+            ));
+            child.hit = Some(HitRegion::ui(777, u32::from(z), content_r));
+            child.focusable = true;
+            child
+        });
+        assert!(viewport.contains_rect(&layout.outer_rect));
+        let out = canvas.finish();
+        assert!(
+            out.regions.is_empty(),
+            "rich tooltip must never register any hit region"
+        );
+        assert!(
+            out.focus_order.is_empty(),
+            "rich tooltip must never enter focus order"
+        );
+        assert!(out.emitted_widgets.contains(&WidgetCatalogId::ToolTip));
+        // 校验边框采用 Token::CARD_BORDER 与 4.0px 圆角，无亮蓝 Token::PRIMARY 边框。
+        let has_card_border = scene.primitives.iter().any(|p| {
+            p.border_token_or_tex == u32::from(Token::CARD_BORDER.raw())
+                && (unbound_math::f16::unpack_radii(p.corner_radii)[0] - 4.0).abs() < 0.05
+        });
+        assert!(
+            has_card_border,
+            "tooltip shell must use CARD_BORDER and 4px radius"
         );
     }
 }
