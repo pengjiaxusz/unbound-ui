@@ -734,7 +734,7 @@ impl WaylandState {
                     .find(|m| m.current)
                     .or_else(|| info.modes.first())
                     .map_or((1920, 1080, None), |m| {
-                        let hz = (m.refresh_rate > 0).then(|| m.refresh_rate as f32 / 1000.0);
+                        let hz = (m.refresh_rate > 0).then_some(m.refresh_rate as f32 / 1000.0);
                         (
                             m.dimensions.0.max(1) as u32,
                             m.dimensions.1.max(1) as u32,
@@ -1680,7 +1680,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
 
         // 3. 派发所有顶层窗口的待处理事件。
         for idx in 0..wl.windows.len() {
-            let events: Vec<PlatformEvent> = wl.windows[idx].pending_events.drain(..).collect();
+            let events: Vec<PlatformEvent> = std::mem::take(&mut wl.windows[idx].pending_events);
             let ev_now = Instant::now();
             for ev in events {
                 let derived = apply(&mut wl.windows[idx].state, &ev, ev_now);
@@ -1709,7 +1709,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             let Some(pentry) = wl.popups.get_mut(&pid) else {
                 continue;
             };
-            let events: Vec<PlatformEvent> = pentry.pending_events.drain(..).collect();
+            let events: Vec<PlatformEvent> = std::mem::take(&mut pentry.pending_events);
             let ev_now = Instant::now();
             for ev in events {
                 let derived = apply(&mut pentry.state, &ev, ev_now);
