@@ -87,9 +87,12 @@ pub use shell::{
     SidebarSectionHeaderDesc, WidgetIcon,
 };
 pub use title_bar::{
-    TitleBarChrome, TitleBarDesc, WindowCaptionButton, WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH,
-    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT,
-    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH,
+    emit_window_caption_buttons, TitleBarChrome, TitleBarDesc, WindowCaptionButton,
+    WindowCaptionButtonControlStates, WindowCaptionButtonEntry, WindowCaptionButtons,
+    WindowCaptionButtonsLayout, WindowCaptionButtonsOutput, WindowCaptionFrameHitContract,
+    WindowCaptionKind, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID,
+    TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID,
+    TITLE_BAR_MIN_DRAG_WIDTH,
 };
 
 /// 声明所有业务组件模块并派生穷举目录。

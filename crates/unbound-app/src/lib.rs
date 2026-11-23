@@ -2010,8 +2010,8 @@ impl<'a> ViewBuilder<'a> {
         desc: unbound_widgets::TitleBarDesc,
         slots: TitleBarSlots<'_>,
     ) -> NodeId {
-        let maximized = desc.maximized_override.unwrap_or(self.ctx.window_maximized);
         let focused = self.ctx.window_focused;
+        let caption = desc.caption_buttons(focused);
         let root_key = desc.id;
         self.title_bar_bindings.insert(
             root_key,
@@ -2077,10 +2077,7 @@ impl<'a> ViewBuilder<'a> {
                 center_desc.min_width = Dim::px(0.0);
                 bar.container(mix_key(root_key, 4), center_desc, build_center);
             }
-            let caption_count = u32::from(desc.show_minimize)
-                + u32::from(desc.show_maximize)
-                + u32::from(desc.show_close);
-            let caption_min_w = caption_count as f32 * unbound_widgets::TITLE_BAR_CAPTION_WIDTH;
+            let caption_min_w = caption.total_width();
             let mut right_desc = RawNodeDesc::container()
                 .row()
                 .align(unbound_abi::Align::Center)
@@ -2098,54 +2095,37 @@ impl<'a> ViewBuilder<'a> {
                     actions_desc.min_width = Dim::px(0.0);
                     right.container(mix_key(root_key, 6), actions_desc, build_actions);
                 }
-                let mut caption_row_desc = RawNodeDesc::container()
-                    .row()
-                    .align(unbound_abi::Align::Center)
-                    .gap(0.0);
-                // 窗口控制按钮（最小化/最大化/关闭）严禁被 Flex 压缩或挤出视口右边界。
-                caption_row_desc.flex_shrink = 0.0;
-                right.container(mix_key(root_key, 7), caption_row_desc, |btns| {
-                    if desc.show_minimize {
-                        btns.add_with_layout(
-                            desc.minimize_id,
-                            RawNodeDesc::container()
-                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                .height(Dim::px(desc.height)),
-                            unbound_widgets::WindowCaptionButton::new(
-                                unbound_widgets::WindowCaptionKind::Minimize,
-                                desc.height,
-                            )
-                            .focused(focused),
-                        );
-                    }
-                    if desc.show_maximize {
-                        btns.add_with_layout(
-                            desc.maximize_id,
-                            RawNodeDesc::container()
-                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                .height(Dim::px(desc.height)),
-                            unbound_widgets::WindowCaptionButton::new(
-                                unbound_widgets::WindowCaptionKind::Maximize { maximized },
-                                desc.height,
-                            )
-                            .focused(focused),
-                        );
-                    }
-                    if desc.show_close {
-                        btns.add_with_layout(
-                            desc.close_id,
-                            RawNodeDesc::container()
-                                .width(Dim::px(unbound_widgets::TITLE_BAR_CAPTION_WIDTH))
-                                .height(Dim::px(desc.height)),
-                            unbound_widgets::WindowCaptionButton::new(
-                                unbound_widgets::WindowCaptionKind::Close,
-                                desc.height,
-                            )
-                            .focused(focused),
-                        );
-                    }
-                });
+                right.window_caption_buttons(mix_key(root_key, 7), caption);
             });
+        })
+    }
+
+    /// 挂载独立的窗口控制按钮组（[`unbound_widgets::WindowCaptionButtons`]，ADR-0029）。
+    ///
+    /// 供标准标题栏与自定义顶栏共同复用：按 Win11 规范无间隔横向排布可见按钮、禁止 Flex 压缩，
+    /// 并自动跟随 `AppContext::window_maximized` 同步最大化/还原图标。
+    pub fn window_caption_buttons(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::WindowCaptionButtons,
+    ) -> NodeId {
+        let window_maximized = self.ctx.window_maximized;
+        let mut caption_row_desc = RawNodeDesc::container()
+            .row()
+            .align(unbound_abi::Align::Center)
+            .gap(0.0);
+        // 窗口控制按钮（最小化/最大化/关闭）严禁被 Flex 压缩或挤出视口右边界。
+        caption_row_desc.flex_shrink = 0.0;
+        self.container(key, caption_row_desc, |btns| {
+            for (button_id, widget) in desc.buttons(window_maximized) {
+                btns.add_with_layout(
+                    button_id,
+                    RawNodeDesc::container()
+                        .width(Dim::px(desc.button_width))
+                        .height(Dim::px(desc.height)),
+                    widget,
+                );
+            }
         })
     }
 

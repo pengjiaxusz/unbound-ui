@@ -11,7 +11,7 @@ use unbound_gpu::surface::{AcquireOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
 use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
-use unbound_math::{Rect, Vec2};
+use unbound_math::Vec2;
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{
     install_custom_frame, FrameHitMetrics, WindowBackdropMaterial,
@@ -1408,28 +1408,18 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         if let Some(metrics) = &self.frame_metrics {
             let effective_scale = self.runtime.context().effective_scale();
-            metrics.set_scale_factor(os_scale);
-            // 保持 FrameHitMetrics 的 title_bar_height 为 0：标题栏拖拽与双击最大化
-            // 全部由 UI 层冒泡兜底产出 `WindowCommand`，Win32 不再争夺标题栏内部交互。
-            metrics.set_title_bar_height(0.0);
-            // 仅把「最大化」按钮热区交给 Win32：`HTMAXBUTTON` 是 Win11 Snap Layout
-            // 悬停贴靠菜单的唯一钩子。最小化 / 关闭必须留在客户区，否则 Windows 会把
-            // 点击转成 `WM_NCLBUTTONUP` + `SC_MINIMIZE` / `SC_CLOSE`，应用层再也拦不到关闭。
+            // 统一遵循 ADR-0029 热区契约：仅提交最大化按钮矩形供 Win11 Snap Layout
+            //（`HTMAXBUTTON`），最小化与关闭清零留给框架 UI 事件层分发。
             let (_, max_id, _) = self.runtime.primary_title_bar_buttons().unwrap_or((
                 unbound_widgets::TITLE_BAR_MINIMIZE_ID,
                 unbound_widgets::TITLE_BAR_MAXIMIZE_ID,
                 unbound_widgets::TITLE_BAR_CLOSE_ID,
             ));
-            let max_rect = self
-                .runtime
-                .widget_rect(max_id)
-                .map(|rect| {
-                    FrameHitMetrics::ui_rect_to_frame_logical(rect, effective_scale, os_scale)
-                })
-                .unwrap_or(Rect::ZERO);
-            metrics.set_maximize_button_rect(max_rect);
-            metrics.set_minimize_button_rect(Rect::ZERO);
-            metrics.set_close_button_rect(Rect::ZERO);
+            metrics.apply_caption_hit_contract(
+                self.runtime.widget_rect(max_id),
+                effective_scale,
+                os_scale,
+            );
         }
 
         let keep_animating =

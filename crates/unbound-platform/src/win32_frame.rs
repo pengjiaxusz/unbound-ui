@@ -170,6 +170,27 @@ impl FrameHitMetrics {
         );
     }
 
+    /// 应用统一窗口控制按钮热区契约（ADR-0029）。
+    ///
+    /// 仅将最大化按钮矩形换算至系统逻辑像素并写入 `HTMAXBUTTON`（支持 Win11 Snap Layout），
+    /// 同时强制将 `title_bar_height`、最小化与关闭按钮矩形清零，确保标题栏拖拽、
+    /// 最小化与关闭始终经框架事件层分发。
+    pub fn apply_caption_hit_contract(
+        &self,
+        maximize_rect_ui: Option<Rect>,
+        effective_scale: f32,
+        os_scale: f32,
+    ) {
+        self.set_scale_factor(os_scale);
+        self.set_title_bar_height(0.0);
+        let max_rect = maximize_rect_ui
+            .map(|rect| Self::ui_rect_to_frame_logical(rect, effective_scale, os_scale))
+            .unwrap_or(Rect::ZERO);
+        self.set_maximize_button_rect(max_rect);
+        self.set_minimize_button_rect(Rect::ZERO);
+        self.set_close_button_rect(Rect::ZERO);
+    }
+
     /// 测试逻辑坐标点是否落入以原子 i32 存储的矩形内。
     #[cfg_attr(not(windows), allow(dead_code))]
     fn contains_logical(
@@ -925,6 +946,26 @@ mod tests {
         );
         assert!((identity.origin.x - 600.0).abs() < 0.01);
         assert!((identity.size.x - 46.0 / dpi_scale).abs() < 0.01);
+    }
+
+    #[test]
+    fn apply_caption_hit_contract_exposes_only_maximize_rect_and_clears_others() {
+        let metrics = FrameHitMetrics::new();
+        // 先写入脏数据模拟旧实现误填全部三枚按钮与标题栏高度。
+        metrics.set_title_bar_height(40.0);
+        metrics.set_minimize_button_rect(Rect::new(100.0, 0.0, 46.0, 32.0));
+        metrics.set_close_button_rect(Rect::new(192.0, 0.0, 46.0, 32.0));
+
+        metrics.apply_caption_hit_contract(Some(Rect::new(800.0, 0.0, 46.0, 32.0)), 1.5, 1.0);
+
+        assert_eq!(metrics.title_bar_height.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.max_btn_left.load(Ordering::Acquire), 1200);
+        assert_eq!(metrics.max_btn_right.load(Ordering::Acquire), 1269);
+        assert_eq!(metrics.max_btn_bottom.load(Ordering::Acquire), 48);
+        assert_eq!(metrics.min_btn_right.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.min_btn_bottom.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.close_btn_right.load(Ordering::Acquire), 0);
+        assert_eq!(metrics.close_btn_bottom.load(Ordering::Acquire), 0);
     }
 
     #[test]
