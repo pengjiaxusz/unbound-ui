@@ -26,5 +26,10 @@ rustc-hash.workspace = true
 slotmap.workspace = true
 smallvec.workspace = true
 
+# 非 Windows 平台在单包执行 `unbound-widgets` 测试时，默认特性 `backend-native`
+# 不会编译 DirectWrite，需在开发依赖中显式启用 `backend-swash` 保证字形光栅化可用。
+[target.'cfg(not(windows))'.dev-dependencies]
+unbound-text = { workspace = true, features = ["backend-swash"] }
+
 [lints]
 workspace = true
