@@ -1639,6 +1639,13 @@ pub enum WidgetSpec {
         /// 气泡框描述符。
         desc: unbound_widgets::PopoverDesc,
     },
+    /// 纯展示富内容工具提示浮层外壳（严格保持鼠标穿透与不抢焦点）。
+    TooltipShell {
+        /// 锚点节点键。
+        anchor_key: u64,
+        /// 工具提示描述符。
+        desc: unbound_widgets::TooltipDesc,
+    },
     /// 右键上下文菜单。
     ContextMenu {
         /// 调用 `ViewBuilder::context_menu` 时传入的有效菜单键（用于回传点击激活项索引）。
@@ -1748,6 +1755,8 @@ pub struct ViewBuilder<'a> {
     focus: &'a mut FocusManager,
     declared_overlays: &'a mut FxHashSet<u64>,
     overlay_pending_ranges: &'a mut Vec<(u64, NodeId, usize, usize)>,
+    /// 当前是否处于 `OverlayKind::Tooltip` 构建作用域内（用于强制剥离命中区与焦点）。
+    in_tooltip_overlay: bool,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -1823,7 +1832,13 @@ impl<'a> ViewBuilder<'a> {
     }
 
     /// 追加控件的输出。
-    pub fn push(&mut self, key: u64, output: WidgetOutput) {
+    pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
+        if self.in_tooltip_overlay {
+            // 工具提示浮层严格保持纯展示与鼠标穿透，绝不注册命中区域或焦点节点。
+            output.hit = None;
+            output.sub_hits.clear();
+            output.focusable = false;
+        }
         self.collector.push(key, output);
     }
 
@@ -2321,6 +2336,7 @@ impl<'a> ViewBuilder<'a> {
                 || desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
             WidgetSpec::Popover { desc, .. } => Some(desc.size),
+            WidgetSpec::TooltipShell { desc, .. } => Some(desc.size),
             WidgetSpec::ContextMenu { desc, .. } => {
                 Some(Vec2::new(desc.rect.width(), desc.rect.height()))
             }
@@ -2908,8 +2924,11 @@ impl<'a> ViewBuilder<'a> {
             .saturating_add(100)
             .saturating_add((stack_idx as u16).saturating_mul(32));
 
+        let is_tooltip = entry.kind == unbound_widgets::overlay::OverlayKind::Tooltip;
         let parent_saved = core::mem::replace(&mut self.parent, self.world.root());
         let z_saved = core::mem::replace(&mut self.z_base, overlay_z);
+        let next_in_tooltip = self.in_tooltip_overlay || is_tooltip;
+        let in_tooltip_saved = core::mem::replace(&mut self.in_tooltip_overlay, next_in_tooltip);
         let depth_saved = self.depth;
         self.depth = self.depth.saturating_add(1);
 
@@ -2932,6 +2951,7 @@ impl<'a> ViewBuilder<'a> {
         let pending_end = self.pending.len();
 
         self.depth = depth_saved;
+        self.in_tooltip_overlay = in_tooltip_saved;
         self.z_base = z_saved;
         self.parent = parent_saved;
 
@@ -2981,6 +3001,66 @@ impl<'a> ViewBuilder<'a> {
                 },
             );
             build(ov);
+        })
+    }
+
+    /// 声明式纯展示富内容工具提示浮层（ADR-0030）：
+    ///
+    /// 挂载于 [`unbound_widgets::overlay::OverlayEntry::tooltip`]（`OverlayKind::Tooltip`），
+    /// 允许在闭包内自由组合图标、标题、正文、`Kbd` 快捷键徽章等任意展示型子组件树；
+    /// 运行时强制保持鼠标穿透（不注册任何命中区域）且不抢占键盘焦点。
+    pub fn tooltip_with(
+        &mut self,
+        key: u64,
+        anchor_key: u64,
+        mut desc: unbound_widgets::TooltipDesc,
+        build: impl FnOnce(&mut Self),
+    ) -> NodeId {
+        let effective_key = self.scoped_key(key);
+        let effective_anchor = self.scoped_key(anchor_key);
+        if desc.anchor.width() <= 0.0 && desc.anchor.height() <= 0.0 {
+            if let Some(r) = self.widget_rect(effective_anchor) {
+                desc.anchor = r;
+            }
+        }
+        if desc.viewport.width() <= 0.0 && desc.viewport.height() <= 0.0 {
+            desc.viewport = self.viewport_rect();
+        }
+        let bounds = desc.rect();
+        let padding = desc.padding;
+        let entry = unbound_widgets::overlay::OverlayEntry::tooltip(
+            effective_key,
+            effective_anchor,
+            bounds,
+        );
+        self.overlay_layer(key, entry, |ov| {
+            let bg_key = mix_key(effective_key, 0x544F_4F4C);
+            let bg_desc = RawNodeDesc::container().absolute().bounds(
+                0.0,
+                0.0,
+                bounds.width().max(1.0),
+                bounds.height().max(1.0),
+            );
+            ov.widget(
+                bg_key,
+                bg_desc,
+                WidgetSpec::TooltipShell {
+                    anchor_key: effective_anchor,
+                    desc,
+                },
+            );
+            // 应用 WinUI 3 非对称内边距，使闭包内展示型子组件自动排布于 `content_rect` 中。
+            let content_key = mix_key(effective_key, 0x544F_4F43);
+            let content_desc = RawNodeDesc::container()
+                .column()
+                .size(bounds.width().max(1.0), bounds.height().max(1.0))
+                .padding(unbound_abi::Edges::ltrb(
+                    padding.left,
+                    padding.top,
+                    padding.right,
+                    padding.bottom,
+                ));
+            ov.container(content_key, content_desc, build);
         })
     }
 
@@ -4398,6 +4478,8 @@ pub struct AppRuntime<A: Application> {
     window_owner_id: unbound_platform::WindowId,
     /// 当前已同步至原生弹出窗宿主的越界浮层集合：`overlay_key -> config`。
     active_native_popups: FxHashMap<u64, unbound_platform::PopupWindowConfig>,
+    /// 本帧归属于 `OverlayKind::Tooltip` 浮层的 `pending` 索引集合（发射后强制剥离命中区与焦点）。
+    tooltip_pending_indices: FxHashSet<usize>,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -4468,6 +4550,7 @@ impl<A: Application> AppRuntime<A> {
             window_screen_origin: (0, 0),
             window_owner_id: unbound_platform::WindowId(0),
             active_native_popups: FxHashMap::default(),
+            tooltip_pending_indices: FxHashSet::default(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -5516,6 +5599,7 @@ impl<A: Application> AppRuntime<A> {
             focus: &mut self.focus,
             declared_overlays: &mut declared_overlays,
             overlay_pending_ranges: &mut overlay_pending_ranges,
+            in_tooltip_overlay: false,
         };
         self.app.view(&self.state, &mut view);
         view.render_open_select_popups();
@@ -5818,6 +5902,7 @@ impl<A: Application> AppRuntime<A> {
         declared_overlays: &FxHashSet<u64>,
         overlay_pending_ranges: &[(u64, NodeId, usize, usize)],
     ) {
+        self.tooltip_pending_indices.clear();
         let _ = self.overlays.sync_declared_overlays(
             declared_overlays,
             &self.seen_keys,
@@ -5843,7 +5928,7 @@ impl<A: Application> AppRuntime<A> {
                 }
             }
         }
-        let mut surviving: Vec<(usize, usize, usize)> = Vec::new();
+        let mut surviving: Vec<(usize, usize, usize, bool)> = Vec::new();
         for &(overlay_key, overlay_node, start, end) in overlay_pending_ranges {
             if let Some(order) = self
                 .overlays
@@ -5852,7 +5937,13 @@ impl<A: Application> AppRuntime<A> {
                 .iter()
                 .position(|e| e.node == overlay_key)
             {
-                surviving.push((order, start, end.min(slots.len())));
+                let is_tooltip = self
+                    .overlays
+                    .stack()
+                    .entries()
+                    .get(order)
+                    .is_some_and(|e| e.kind == unbound_widgets::overlay::OverlayKind::Tooltip);
+                surviving.push((order, start, end.min(slots.len()), is_tooltip));
             } else {
                 self.seen_keys.remove(&overlay_key);
                 self.node_keys.remove(&overlay_key);
@@ -5861,10 +5952,13 @@ impl<A: Application> AppRuntime<A> {
                 }
             }
         }
-        surviving.sort_by_key(|&(order, _, _)| order);
-        for (_, start, end) in surviving {
+        surviving.sort_by_key(|&(order, _, _, _)| order);
+        for (_, start, end, is_tooltip) in surviving {
             for slot in slots.iter_mut().take(end).skip(start) {
                 if let Some(item) = slot.take() {
+                    if is_tooltip {
+                        self.tooltip_pending_indices.insert(base_pending.len());
+                    }
                     base_pending.push(item);
                 }
             }
@@ -6004,6 +6098,7 @@ impl<A: Application> AppRuntime<A> {
                         || desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
                     WidgetSpec::Popover { desc, .. } => Some(desc.size),
+                    WidgetSpec::TooltipShell { desc, .. } => Some(desc.size),
                     WidgetSpec::ContextMenu { desc, .. } => {
                         Some(Vec2::new(desc.rect.width(), desc.rect.height()))
                     }
@@ -6074,7 +6169,11 @@ impl<A: Application> AppRuntime<A> {
         self.scroll_regions.clear();
         self.active_context_menus.clear();
         let pending = core::mem::take(&mut self.pending);
-        for entry in &pending {
+        for (entry_idx, entry) in pending.iter().enumerate() {
+            let is_tooltip_entry = self.tooltip_pending_indices.contains(&entry_idx);
+            let regions_before = self.collector.regions.len();
+            let hit_owners_before = self.collector.hit_owners.len();
+            let focus_before = self.collector.focus_order.len();
             let rect = self
                 .world
                 .get(entry.node)
@@ -6902,6 +7001,17 @@ impl<A: Application> AppRuntime<A> {
                     }
                     self.collector.push(entry.key, pop.output);
                 }
+                WidgetSpec::TooltipShell { anchor_key, desc } => {
+                    let mut desc = desc.clone();
+                    desc.z = entry.z_base.saturating_add(desc.z.min(100));
+                    let (mut out, _) =
+                        unbound_widgets::emit_tooltip(entry.key, *anchor_key, &desc, state);
+                    // 工具提示浮层外壳严格保持鼠标穿透与不可聚焦。
+                    out.hit = None;
+                    out.sub_hits.clear();
+                    out.focusable = false;
+                    self.collector.push(entry.key, out);
+                }
                 WidgetSpec::ContextMenu {
                     owner_key,
                     anchor_key,
@@ -7317,6 +7427,13 @@ impl<A: Application> AppRuntime<A> {
                         );
                     }
                 }
+            }
+            if is_tooltip_entry {
+                // 强制守住 ADR-0030 纯展示契约：Tooltip 浮层及其所有富内容子组件
+                // 绝不拦截指针命中、绝不进入键盘焦点顺序。
+                self.collector.regions.truncate(regions_before);
+                self.collector.hit_owners.truncate(hit_owners_before);
+                self.collector.focus_order.truncate(focus_before);
             }
         }
         self.pending = pending;

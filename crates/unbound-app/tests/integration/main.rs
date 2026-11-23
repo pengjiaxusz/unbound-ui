@@ -17,3 +17,4 @@ mod router_navigation;
 mod runtime_headless;
 mod runtime_subsystems;
 mod settings_and_select;
+mod tooltip_rich;
