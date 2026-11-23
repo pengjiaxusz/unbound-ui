@@ -241,11 +241,6 @@ impl FrameBufferSlices {
     }
 
     #[inline]
-    pub(crate) const fn idx_dynamic_offset(&self, slot: usize) -> u32 {
-        self.idx_offset(slot) as u32
-    }
-
-    #[inline]
     pub(crate) const fn sort_scratch_offset(&self, slot: usize) -> u64 {
         ((slot % self.frame_count) as u64) * self.sort_scratch_stride
     }
@@ -1263,8 +1258,18 @@ impl Renderer {
             frame_depths.push(DepthAttachment::new(&gpu, width, height)?);
         }
 
-        // SAFETY: 缓冲区为持久化资源且当前尚无在飞任务；动态范围等于单帧切片步长。
-        unsafe { pipelines.bind_sorted_indices_range(&gpu, &idx_a, frame_slices.idx_stride) };
+        // SAFETY: 缓冲区为持久化资源且当前尚无在飞任务；各帧槽位绑定各自的对齐切片。
+        for slot in 0..frame_slices.frame_count {
+            unsafe {
+                pipelines.bind_sorted_indices_range(
+                    &gpu,
+                    slot,
+                    &idx_a,
+                    frame_slices.idx_offset(slot),
+                    frame_slices.idx_stride,
+                );
+            }
+        }
 
         let ring = TransientRing::new(ring_bytes as u32, gpu.frames_in_flight());
 
@@ -1741,6 +1746,7 @@ impl Renderer {
             crate::pipeline::ComputeStage::Cull,
             &mut pc,
             n.div_ceil(256),
+            frame_slot,
         );
         self.stats.compute_dispatches += 1;
 
@@ -1786,6 +1792,7 @@ impl Renderer {
                     crate::pipeline::ComputeStage::SortHist,
                     &mut hist,
                     blocks,
+                    frame_slot,
                 );
                 self.pipeline_barrier(cmd);
 
@@ -1796,7 +1803,13 @@ impl Renderer {
                     scratch_bda5: self.sort_scratch.address + scratch_offset,
                     ..Default::default()
                 };
-                self.dispatch(cmd, crate::pipeline::ComputeStage::SortScan, &mut scan, 1);
+                self.dispatch(
+                    cmd,
+                    crate::pipeline::ComputeStage::SortScan,
+                    &mut scan,
+                    1,
+                    frame_slot,
+                );
                 self.pipeline_barrier(cmd);
 
                 let mut scatter = PushConstants {
@@ -1815,6 +1828,7 @@ impl Renderer {
                     crate::pipeline::ComputeStage::SortScatter,
                     &mut scatter,
                     blocks,
+                    frame_slot,
                 );
                 self.stats.sort_dispatches += 3;
                 self.stats.compute_dispatches += 3;
@@ -1835,7 +1849,13 @@ impl Renderer {
             scratch_bda3: self.counters.address + counters_offset,
             ..Default::default()
         };
-        self.dispatch(cmd, crate::pipeline::ComputeStage::Indirect, &mut pc, 1);
+        self.dispatch(
+            cmd,
+            crate::pipeline::ComputeStage::Indirect,
+            &mut pc,
+            1,
+            frame_slot,
+        );
         self.stats.compute_dispatches += 1;
 
         // 计算阶段写入了绘制命令与批次数；必须通过屏障显式对 `DRAW_INDIRECT` 阶段可见，
@@ -1891,6 +1911,7 @@ impl Renderer {
                 crate::pipeline::ComputeStage::Scatter,
                 &mut pc,
                 upload.patch_count,
+                frame_slot,
             );
             self.stats.compute_dispatches += 1;
             let barrier = vk::MemoryBarrier2::default()
@@ -2897,6 +2918,7 @@ impl Renderer {
         stage: crate::pipeline::ComputeStage,
         pc: &mut PushConstants,
         groups: u32,
+        frame_slot: usize,
     ) {
         let groups = groups.max(1);
         // SAFETY: 向自有命令缓冲区录制；`pc` 为 128B。
@@ -2912,8 +2934,8 @@ impl Renderer {
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipelines.compute_layout,
                 0,
-                &[self.pipelines.set],
-                &[0],
+                &[self.pipelines.set_for_frame(frame_slot)],
+                &[],
             );
             device.cmd_push_constants(
                 cmd,
@@ -3121,7 +3143,6 @@ impl Renderer {
         frame_slot: usize,
     ) {
         let device = &self.gpu.device;
-        let idx_dynamic_offset = self.frame_slices.idx_dynamic_offset(frame_slot);
         let commands_offset = self.frame_slices.commands_offset(frame_slot);
         let counters_offset = self.frame_slices.counters_offset(frame_slot);
         // 视口尺寸跟随实际绘制的目标附件。
@@ -3153,8 +3174,8 @@ impl Renderer {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipelines.graphics_layout,
                 0,
-                &[self.pipelines.set],
-                &[idx_dynamic_offset],
+                &[self.pipelines.set_for_frame(frame_slot)],
+                &[],
             );
             device.cmd_push_constants(
                 cmd,
@@ -4919,7 +4940,6 @@ mod tests {
 
         assert_eq!(slices.idx_offset(0), 0);
         assert!(slices.idx_offset(1) >= 4096 * 4);
-        assert_eq!(slices.idx_dynamic_offset(1) as u64, slices.idx_offset(1));
         assert_eq!(slices.idx_offset(1) % 256, 0);
 
         assert_eq!(slices.sort_scratch_offset(0), 0);

@@ -147,13 +147,14 @@ pub struct DummyTexture {
     pub view: vk::ImageView,
 }
 
-/// 所有图形/计算管线以及全局唯一的 Bindless 描述符集。
+/// 所有图形/计算管线以及按在飞帧槽位分配的 Bindless 描述符集。
 pub struct Pipelines {
     pub graphics_layout: vk::PipelineLayout,
     pub compute_layout: vk::PipelineLayout,
     pub set_layout: vk::DescriptorSetLayout,
     pub descriptor_pool: vk::DescriptorPool,
-    pub set: vk::DescriptorSet,
+    /// 按在飞帧槽位预分配的主描述符集列表，每帧槽位绑定各自的已排序索引缓冲切片。
+    pub sets: Vec<vk::DescriptorSet>,
     pub uber_normal: vk::Pipeline,
     pub uber_additive: vk::Pipeline,
     pub opaque_core: vk::Pipeline,
@@ -215,6 +216,7 @@ impl Pipelines {
 
         // 描述符集布局
         // binding 0/1：Bindless 图集图层（R8 与 RGBA8）；binding 2：供顶点着色器读取的已排序图元索引。
+        // 采用非动态 STORAGE_BUFFER，避免与 UPDATE_AFTER_BIND 混用触发 VUID-03001 验证错误。
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -228,7 +230,7 @@ impl Pipelines {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
@@ -584,32 +586,33 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?;
 
-        // 描述符池与描述符集
+        // 描述符池与按在飞帧槽位分配的主描述符集
+        let frame_count = gpu.frames_in_flight().max(1);
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(MAX_ATLAS_LAYERS + MAX_RGBA_BINDLESS_SLOTS),
+                .descriptor_count((MAX_ATLAS_LAYERS + MAX_RGBA_BINDLESS_SLOTS) * frame_count),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
-                .descriptor_count(4),
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(frame_count),
         ];
         let descriptor_pool = device
             .create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
                     .flags(vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND)
-                    .max_sets(1)
+                    .max_sets(frame_count)
                     .pool_sizes(&pool_sizes),
                 None,
             )
             .map_err(GpuError::from)?;
-        let layouts = [set_layout];
-        let set = device
+        let layouts = vec![set_layout; frame_count as usize];
+        let sets = device
             .allocate_descriptor_sets(
                 &vk::DescriptorSetAllocateInfo::default()
                     .descriptor_pool(descriptor_pool)
                     .set_layouts(&layouts),
             )
-            .map_err(GpuError::from)?[0];
+            .map_err(GpuError::from)?;
 
         // 采样器与占位纹理
         let sampler = device
@@ -634,7 +637,7 @@ impl Pipelines {
             compute_layout,
             set_layout,
             descriptor_pool,
-            set,
+            sets,
             uber_normal,
             uber_additive,
             opaque_core,
@@ -673,21 +676,32 @@ impl Pipelines {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(self.set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&image_infos),
-            vk::WriteDescriptorSet::default()
-                .dst_set(self.set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&rgba_infos),
-        ];
-        // SAFETY: 描述符属于 `self.set` 且图像均处于存活状态。
+        let mut writes = Vec::with_capacity(self.sets.len() * 2);
+        for &set in &self.sets {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_infos),
+            );
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&rgba_infos),
+            );
+        }
+        // SAFETY: 所有描述符均属于 `self.sets` 且占位图像均处于存活状态。
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         Ok(())
+    }
+
+    /// 返回指定在飞帧槽位对应的主描述符集（按槽位总数回环）。
+    #[must_use]
+    pub fn set_for_frame(&self, frame_slot: usize) -> vk::DescriptorSet {
+        self.sets[frame_slot % self.sets.len()]
     }
 
     /// 安装真实图集并重绑 Bindless 描述符槽位。
@@ -730,19 +744,24 @@ impl Pipelines {
                     .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             })
             .collect();
-        let writes = [
-            vk::WriteDescriptorSet::default()
-                .dst_set(self.set)
-                .dst_binding(0)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&r8),
-            vk::WriteDescriptorSet::default()
-                .dst_set(self.set)
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .image_info(&rgba),
-        ];
-        // SAFETY: 描述符属于 `self.set`，且只要持有 `Arc`，对应图像即保持存活。
+        let mut writes = Vec::with_capacity(self.sets.len() * 2);
+        for &set in &self.sets {
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(0)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&r8),
+            );
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(1)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&rgba),
+            );
+        }
+        // SAFETY: 所有描述符均属于 `self.sets`，且只要持有 `Arc`，对应图像即保持存活。
         unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         self.atlases = Some(atlases);
         Ok(())
@@ -772,14 +791,20 @@ impl Pipelines {
             .sampler(sampler)
             .image_view(view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)];
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(self.set)
-            .dst_binding(1)
-            .dst_array_element(slot)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&info);
-        // SAFETY: 描述符属于 `self.set`；调用方保证视图与采样器的生命周期长于槽位。
-        unsafe { gpu.device.update_descriptor_sets(&[write], &[]) };
+        let writes: Vec<vk::WriteDescriptorSet> = self
+            .sets
+            .iter()
+            .map(|&set| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(1)
+                    .dst_array_element(slot)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&info)
+            })
+            .collect();
+        // SAFETY: 所有描述符均属于 `self.sets`；调用方保证视图与采样器的生命周期长于槽位。
+        unsafe { gpu.device.update_descriptor_sets(&writes, &[]) };
         Ok(())
     }
 
@@ -796,34 +821,39 @@ impl Pipelines {
         self.bind_external_texture(gpu, slot, self.dummy_rgba.view, self.sampler)
     }
 
-    /// 将顶点着色器的索引绑定指向当前帧的已排序索引列表。
+    /// 将所有帧槽位描述符集的已排序索引绑定指向整个缓冲区。
     ///
     /// # Safety
     /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活。
     pub unsafe fn bind_sorted_indices(&self, gpu: &Gpu, buffer: &crate::device::Buffer) {
-        self.bind_sorted_indices_range(gpu, buffer, vk::WHOLE_SIZE);
+        for slot in 0..self.sets.len() {
+            self.bind_sorted_indices_range(gpu, slot, buffer, 0, vk::WHOLE_SIZE);
+        }
     }
 
-    /// 将顶点着色器的动态存储缓冲绑定指向已排序索引缓冲区，并指定单帧切片字节范围。
+    /// 将指定帧槽位描述符集的已排序索引绑定指向缓冲区中的对齐切片 `(offset, range)`。
     ///
-    /// 配合 `cmd_bind_descriptor_sets` 传入的逐帧动态偏移，多帧飞行时各帧仅读取各自切片。
+    /// 各在飞帧绑定各自独立的描述符集，无需动态偏移即可严格隔离跨帧切片访问。
     ///
     /// # Safety
-    /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活。
+    /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活；
+    /// `offset` 必须满足设备的 `minStorageBufferOffsetAlignment` 对齐要求。
     pub unsafe fn bind_sorted_indices_range(
         &self,
         gpu: &Gpu,
+        slot: usize,
         buffer: &crate::device::Buffer,
+        offset: u64,
         range: u64,
     ) {
         let info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.raw)
-            .offset(0)
+            .offset(offset)
             .range(range)];
         let write = vk::WriteDescriptorSet::default()
-            .dst_set(self.set)
+            .dst_set(self.set_for_frame(slot))
             .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(&info);
         gpu.device.update_descriptor_sets(&[write], &[]);
     }
@@ -1053,6 +1083,7 @@ mod tests {
             return;
         };
         let pipelines = Pipelines::new(&gpu).expect("pipelines");
+        assert_eq!(pipelines.sets.len(), gpu.frames_in_flight().max(1) as usize);
         assert_ne!(pipelines.uber_normal, vk::Pipeline::null());
         assert_ne!(pipelines.opaque_core, vk::Pipeline::null());
         // SAFETY: 无在飞任务。
