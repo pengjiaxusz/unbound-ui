@@ -1,0 +1,29 @@
+# cargo-nextest 工作区配置
+# 用于加速本地与 CI 测试调度（每个用例独立进程隔离）；未安装时由 justfile 优雅回退至 cargo test。
+
+[profile.default]
+# 默认并发线程数自适应主机核心数，兼顾 2 核虚拟环境与多核开发机
+test-threads = "num-cpus"
+# 全量回归默认不提前中断，完整暴露所有失败用例
+fail-fast = false
+# 慢测试告警与超时阈值（2 核环境下给予充足宽限，避免误杀）
+slow-timeout = { period = "30s", terminate-after = 4 }
+retries = 0
+status-level = "pass"
+final-status-level = "slow"
+
+[profile.fast]
+# 快速迭代档位（由 just test-fast 调用）：遇错即停、仅输出失败与慢测试摘要
+inherits = "default"
+fail-fast = true
+slow-timeout = { period = "15s", terminate-after = 4 }
+status-level = "fail"
+final-status-level = "slow"
+
+[test-groups]
+# GPU 探测与画廊离屏渲染用例串行执行，避免并发争抢 Vulkan 设备资源
+gpu-serial = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "package(unbound-gpu) | test(gallery::)"
+test-group = "gpu-serial"

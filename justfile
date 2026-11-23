@@ -176,11 +176,12 @@ text-baseline *ARGS:
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 # 覆盖机制见托管块的 allow-duplicate-recipes。
 
-# 快速测试：跳过 doc-tests，支持按包（-p <crate>）或用例名过滤；未指定 -p 时覆盖全工作区
+# 快速测试：跳过 doc-tests，支持按包（-p <crate>）或用例名过滤；未指定 -p 时覆盖全工作区；
+# 已安装 cargo-nextest 时自动启用 fast 档位加速，未安装时静默回退至 cargo test。
 # 示例：just test-fast / just test-fast -p unbound-text / just test-fast -p showcase text_render
 [windows]
 test-fast *ARGS:
-    @$raw = '{{ARGS}}'; $hasPkg = $raw -match '(^|\s)(-p|--package)(\s|=|$)'; $needGuest = (-not $hasPkg) -or ($raw -match '(^|\s|=)app-guest(\s|$)'); if ($needGuest) { bque run -- cargo build -p app-guest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; if ($hasPkg) { bque run -- cargo test --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo test --workspace --all-features --lib --bins --tests {{ARGS}} }
+    @$raw = '{{ARGS}}'; $hasPkg = $raw -match '(^|\s)(-p|--package)(\s|=|$)'; $needGuest = (-not $hasPkg) -or ($raw -match '(^|\s|=)app-guest(\s|$)'); if ($needGuest) { bque run -- cargo build -p app-guest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; $hasNextest = [bool](Get-Command cargo-nextest -ErrorAction SilentlyContinue); if ($hasNextest) { if ($hasPkg) { bque run -- cargo nextest run --profile fast --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo nextest run --profile fast --workspace --all-features --lib --bins --tests {{ARGS}} } } else { if ($hasPkg) { bque run -- cargo test --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo test --workspace --all-features --lib --bins --tests {{ARGS}} } }
 [unix]
 test-fast *ARGS:
     @has_pkg=0; need_guest=0; \
@@ -191,21 +192,35 @@ test-fast *ARGS:
         esac; \
     done; \
     if [ "$has_pkg" -eq 0 ] || [ "$need_guest" -eq 1 ]; then cargo build -p app-guest; fi; \
-    if [ "$has_pkg" -eq 1 ]; then \
-        cargo test --all-features --lib --bins --tests {{ARGS}}; \
+    if command -v cargo-nextest >/dev/null 2>&1; then \
+        if [ "$has_pkg" -eq 1 ]; then \
+            cargo nextest run --profile fast --all-features --lib --bins --tests {{ARGS}}; \
+        else \
+            cargo nextest run --profile fast --workspace --all-features --lib --bins --tests {{ARGS}}; \
+        fi; \
     else \
-        cargo test --workspace --all-features --lib --bins --tests {{ARGS}}; \
+        if [ "$has_pkg" -eq 1 ]; then \
+            cargo test --all-features --lib --bins --tests {{ARGS}}; \
+        else \
+            cargo test --workspace --all-features --lib --bins --tests {{ARGS}}; \
+        fi; \
     fi
 
-# 覆盖框架 test：先产出 app-guest cdylib 再跑测试
+# 覆盖框架 test：先产出 app-guest cdylib 再跑全量测试；
+# 已安装 cargo-nextest 时优先走 nextest 并补跑 doc-tests 保证覆盖等价，未安装时回退至 cargo test。
 [windows]
 test *ARGS:
     @bque run -- cargo build -p app-guest
-    @bque run -- cargo test --workspace --all-features {{ARGS}}
+    @if (Get-Command cargo-nextest -ErrorAction SilentlyContinue) { bque run -- cargo nextest run --workspace --all-features {{ARGS}}; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; bque run -- cargo test --workspace --all-features --doc {{ARGS}} } else { bque run -- cargo test --workspace --all-features {{ARGS}} }
 [unix]
 test *ARGS:
     @cargo build -p app-guest
-    @cargo test --workspace --all-features {{ARGS}}
+    @if command -v cargo-nextest >/dev/null 2>&1; then \
+        cargo nextest run --workspace --all-features {{ARGS}}; \
+        cargo test --workspace --all-features --doc {{ARGS}}; \
+    else \
+        cargo test --workspace --all-features {{ARGS}}; \
+    fi
 
 # ---------- 共享编译目录（worktree 层） ----------
 
