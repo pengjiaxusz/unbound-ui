@@ -1,4 +1,5 @@
 //! 集合控件：虚拟化行与流式资源网格。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 
 use accesskit::Role;
 use unbound_app::AssetResidency;
@@ -114,8 +115,9 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         .rect(list, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
     let header = Rect::new(list.origin.x, list.origin.y, list.size.x, 38.0);
     ctx.canvas.rect(header, 10.0, palette.stage_bg, 0, 0.0, 0.0);
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        &format!("{} items", format_count(total)),
+        &format!("{} {}", format_count(total), locale.pick("items", "项")),
         Rect::new(
             header.origin.x + 14.0,
             header.origin.y,
@@ -128,7 +130,11 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         AlignY::Center,
     );
     ctx.canvas.text(
-        if overscan { "overscan 3" } else { "overscan 0" },
+        if overscan {
+            locale.pick("overscan 3", "预取 3 行")
+        } else {
+            locale.pick("overscan 0", "预取 0 行")
+        },
         Rect::new(
             header.max().x - 114.0,
             header.origin.y,
@@ -228,7 +234,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            "recycled",
+            locale.pick("recycled", "槽位复用"),
             Rect::new(row.max().x - 84.0, row.origin.y, 72.0, row.size.y),
             9.5,
             palette.text_muted,
@@ -238,9 +244,13 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
     }
     ctx.canvas.end_clip();
     let active = vlist.slot_count();
-    let recycled_str = format!("{} / frame", update.recycled);
+    let recycled_str = format!("{} / {}", update.recycled, locale.pick("frame", "帧"));
     ctx.canvas.text(
-        &format!("active nodes {active} · scroll {:.0} px", scroll),
+        &if locale.is_zh() {
+            format!("活跃节点 {active} · 滚动 {:.0} px", scroll)
+        } else {
+            format!("active nodes {active} · scroll {:.0} px", scroll)
+        },
         Rect::new(
             viewport.origin.x + 12.0,
             viewport.max().y - 18.0,
@@ -279,7 +289,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         200,
         Rect::new(track.origin.x - 4.0, track.origin.y, 14.0, track.size.y),
         Role::ScrollBar,
-        "Scroll list",
+        locale.pick("Scroll list", "列表滚动条"),
         false,
     );
     let zone_tag = if ctx.card == 0 { 1 } else { 5 };
@@ -290,7 +300,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
         ctx.canvas
             .rect(panel, 10.0, palette.stage_bg, palette.card_border, 1.0, 0.0);
         ctx.canvas.text(
-            "VIRTUALIZE",
+            locale.pick("VIRTUALIZE", "虚拟化遥测"),
             Rect::new(
                 panel.origin.x + 12.0,
                 panel.origin.y + 10.0,
@@ -303,11 +313,14 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             AlignY::Top,
         );
         for (index, (label, value)) in [
-            ("visible", format!("{visible}")),
-            ("overscan", if overscan { "3".into() } else { "0".into() }),
-            ("active", format!("{active}")),
-            ("recycled", recycled_str),
-            ("total", format_count(total)),
+            (locale.pick("visible", "可见行数"), format!("{visible}")),
+            (
+                locale.pick("overscan", "预取行数"),
+                if overscan { "3".into() } else { "0".into() },
+            ),
+            (locale.pick("active", "活跃节点"), format!("{active}")),
+            (locale.pick("recycled", "每帧复用"), recycled_str),
+            (locale.pick("total", "数据总量"), format_count(total)),
         ]
         .iter()
         .enumerate()
@@ -364,7 +377,7 @@ pub fn virtual_list(ctx: &mut DemoCtx<'_, '_>, metrics: bool) {
             100 + visible_slot as u16,
             row,
             Role::ListItem,
-            &format!("Row {}", index + 1),
+            &format!("{} {}", locale.pick("Row", "第"), index + 1),
             ctx.state.demo.list_selected[ctx.card] == Some(index),
         );
         registered += 1;

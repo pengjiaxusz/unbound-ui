@@ -1,4 +1,5 @@
 //! 引擎核心子系统架构全景展示页（Systems）。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 //!
 //! 将工作区内全部 21 个核心引擎库子系统（`unbound-math` 至 `unbound-kpi`）纳入 Showcase 专页，
 //! 并通过 [`SubsystemId`] 穷举枚举与编译期 `const` 断言确保每一个引擎子系统均被完整收录与展示。
@@ -362,10 +363,11 @@ fn draw_subsystems_matrix(ctx: &mut DemoCtx<'_, '_>) {
         1.5,
         0.0,
     );
+    let locale = ctx.state.locale;
     let layer_badge_label = match selected_sub.layer_group() {
-        0 => "LAYER 0 · FOUNDATION & GPU",
-        1 => "LAYER 1 · SCENE & LAYOUT",
-        _ => "LAYER 2 · RUNTIME & PLATFORM",
+        0 => locale.pick("LAYER 0 · FOUNDATION & GPU", "第 0 层 · 基础架构与 GPU"),
+        1 => locale.pick("LAYER 1 · SCENE & LAYOUT", "第 1 层 · 场景与布局"),
+        _ => locale.pick("LAYER 2 · RUNTIME & PLATFORM", "第 2 层 · 运行时与平台"),
     };
     let badge_w = (ctx.canvas.labels.measure(layer_badge_label, 9.5).x + 16.0).min(210.0);
     widgets::badge(
@@ -512,24 +514,25 @@ fn draw_pipeline_stage(ctx: &mut DemoCtx<'_, '_>) {
     let active_stage = (ctx.knob(0) as usize).min(3);
     let patch_mode = ctx.knob_on(1);
 
+    let locale = ctx.state.locale;
     let stages = [
         (
-            "1. Win32 Platform",
+            locale.pick("1. Win32 Platform", "1. Win32 平台层"),
             "windows 0.62.2 · WM_NCHITTEST",
             "unbound-platform",
         ),
         (
-            "2. Input & A11y",
+            locale.pick("2. Input & A11y", "2. 输入路由与无障碍"),
             "HitRouter + Focus + AccessKit",
             "unbound-input",
         ),
         (
-            "3. Layout & World",
-            "Taffy + Relayout Boundaries",
+            locale.pick("3. Layout & World", "3. 布局与世界"),
+            locale.pick("Taffy + Relayout Boundaries", "Taffy 布局 + 局部重排边界"),
             "unbound-layout",
         ),
         (
-            "4. Diff & Vulkan",
+            locale.pick("4. Diff & Vulkan", "4. 场景差分与 Vulkan"),
             if patch_mode {
                 "SceneDiff::Ranges (<1KB)"
             } else {
@@ -613,17 +616,31 @@ fn draw_pipeline_stage(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas
         .rect(footer, 6.0, palette.card_bg, palette.card_border, 1.0, 0.0);
     ctx.canvas.text(
-        &format!(
-            "Live Frame: {:.2} ms  ·  Primitives: {}  ·  Upload: {} B  ·  Mode: {}",
-            ctx.state.demo.frame_ms,
-            ctx.state.demo.primitive_count,
-            ctx.state.demo.upload_bytes,
-            if patch_mode {
-                "Incremental Range Patch"
-            } else {
-                "Full Scene Upload"
-            }
-        ),
+        &if locale.is_zh() {
+            format!(
+                "实时帧耗时：{:.2} ms  ·  图元数：{}  ·  上传：{} B  ·  模式：{}",
+                ctx.state.demo.frame_ms,
+                ctx.state.demo.primitive_count,
+                ctx.state.demo.upload_bytes,
+                if patch_mode {
+                    "增量切片补丁"
+                } else {
+                    "全量场景上传"
+                }
+            )
+        } else {
+            format!(
+                "Live Frame: {:.2} ms  ·  Primitives: {}  ·  Upload: {} B  ·  Mode: {}",
+                ctx.state.demo.frame_ms,
+                ctx.state.demo.primitive_count,
+                ctx.state.demo.upload_bytes,
+                if patch_mode {
+                    "Incremental Range Patch"
+                } else {
+                    "Full Scene Upload"
+                }
+            )
+        },
         Rect::new(
             footer.origin.x + 12.0,
             footer.origin.y,
@@ -642,31 +659,42 @@ fn draw_abi_and_headless(ctx: &mut DemoCtx<'_, '_>) {
     let palette = *ctx.canvas.palette;
     let show_thresholds = ctx.knob_on(0);
 
+    let locale = ctx.state.locale;
+    let pass = locale.pick("PASS", "通过");
     let rules = [
         (
-            "Rule 1 · FiniteGeometry",
-            "Zero NaN / Inf coordinates",
-            "PASS",
+            locale.pick("Rule 1 · FiniteGeometry", "规则 1 · FiniteGeometry"),
+            locale.pick("Zero NaN / Inf coordinates", "零 NaN / Inf 非法坐标"),
+            pass,
         ),
         (
-            "Rule 2 · TextContainment",
-            "Glyph ink inside clip & parent",
-            "PASS",
+            locale.pick("Rule 2 · TextContainment", "规则 2 · TextContainment"),
+            locale.pick("Glyph ink inside clip & parent", "字形墨迹严守裁剪与父边界"),
+            pass,
         ),
         (
-            "Rule 3 · HitTargetSize",
-            "Interactive >= 24×24 logical px",
-            "PASS",
+            locale.pick("Rule 3 · HitTargetSize", "规则 3 · HitTargetSize"),
+            locale.pick(
+                "Interactive >= 24×24 logical px",
+                "交互命中区 >= 24×24 逻辑像素",
+            ),
+            pass,
         ),
         (
-            "Rule 4 · SiblingDisjoint",
-            "Zero sibling box overlap",
-            "PASS",
+            locale.pick("Rule 4 · SiblingDisjoint", "规则 4 · SiblingDisjoint"),
+            locale.pick("Zero sibling box overlap", "同级控件零重叠"),
+            pass,
         ),
         (
-            "Rule 5 · ViewportContainment",
-            "Portals & tooltips inside window",
-            "PASS",
+            locale.pick(
+                "Rule 5 · ViewportContainment",
+                "规则 5 · ViewportContainment",
+            ),
+            locale.pick(
+                "Portals & tooltips inside window",
+                "浮层与 Tooltip 严守窗口边界",
+            ),
+            pass,
         ),
     ];
 

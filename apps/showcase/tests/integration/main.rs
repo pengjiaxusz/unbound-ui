@@ -9,6 +9,7 @@ pub(crate) static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod backdrop;
 mod frame_plan;
 mod gallery;
+mod i18n_regression;
 mod runtime_migration;
 mod shell;
 mod text_render;

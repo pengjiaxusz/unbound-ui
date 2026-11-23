@@ -318,12 +318,13 @@ pub fn curve_inspector(ctx: &mut DemoCtx<'_, '_>) {
     }
     ctx.canvas.divider(rect.origin.x, y + 4.0, rect.size.x);
     y += 14.0;
+    let locale = ctx.state.locale;
     let weights: [(u16, &str); 5] = [
-        (300, "Light 300"),
-        (400, "Regular 400"),
-        (500, "Medium 500"),
-        (600, "SemiBold 600"),
-        (700, "Bold 700"),
+        (300, locale.pick("Light 300", "细体 300")),
+        (400, locale.pick("Regular 400", "常规 400")),
+        (500, locale.pick("Medium 500", "中等 500")),
+        (600, locale.pick("SemiBold 600", "半粗 600")),
+        (700, locale.pick("Bold 700", "粗体 700")),
     ];
     let row_h = ((rect.max().y - y) / weights.len() as f32).min(30.0);
     for (weight, name) in weights {
@@ -362,7 +363,10 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         2 => "∑ ∫ √ ∞ ≈ ≠ ≤ ≥ → ∀ ∃ ∈ ∇ ∂ © ® ™",
         _ => {
             if ctx.state.demo.text.text().is_empty() {
-                "Click below, then type with the IME…"
+                ctx.state.locale.pick(
+                    "Click below, then type with the IME…",
+                    "点击下方输入框并使用输入法键入…",
+                )
             } else {
                 ctx.state.demo.text.text()
             }
@@ -403,7 +407,10 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         .labels
         .resolved_families(text, &style(15.0, 400, false));
     let resolved = if families.is_empty() {
-        "no system font matched".to_string()
+        ctx.state
+            .locale
+            .pick("no system font matched", "未命中系统字体")
+            .to_string()
     } else {
         families.join("  +  ")
     };
@@ -510,7 +517,9 @@ pub fn bidi_sandbox(ctx: &mut DemoCtx<'_, '_>) {
         1,
         field,
         accesskit::Role::TextInput,
-        "Font sandbox input",
+        ctx.state
+            .locale
+            .pick("Font sandbox input", "字体沙盒输入框"),
         false,
     );
 }

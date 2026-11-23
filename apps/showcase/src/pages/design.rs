@@ -1,4 +1,5 @@
 //! 设计指南：色彩、排版、层级阴影与矢量图形。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 
 use unbound_math::f16::f16_to_f32;
 use unbound_math::Rect;
@@ -251,7 +252,11 @@ fn palette_grid(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Top,
         );
         let detail = if show_slots {
-            format!("token {token} · {}", hex(table.entries()[*token as usize]))
+            format!(
+                "{} {token} · {}",
+                ctx.state.locale.pick("token", "令牌"),
+                hex(table.entries()[*token as usize])
+            )
         } else {
             hex(table.entries()[*token as usize])
         };
@@ -276,30 +281,37 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
     let palette = *ctx.canvas.palette;
     let light = theme::lut(false);
     let dark = theme::lut(true);
-    let roles: &[(&str, u16)] = match ctx.knob(0) as usize {
-        1 => &[
-            ("Text", palette.text),
-            ("Muted", palette.text_muted),
-            ("Primary", palette.primary),
-            ("Border", palette.border),
+    let locale = ctx.state.locale;
+    let roles: [(&str, u16); 4] = match ctx.knob(0) as usize {
+        1 => [
+            (locale.pick("Text", "正文"), palette.text),
+            (locale.pick("Muted", "次要"), palette.text_muted),
+            (locale.pick("Primary", "主色"), palette.primary),
+            (locale.pick("Border", "边框"), palette.border),
         ],
-        2 => &[
-            ("Primary", palette.primary),
-            ("Success", palette.success),
-            ("Warning", palette.warning),
-            ("Danger", palette.danger),
+        2 => [
+            (locale.pick("Primary", "主色"), palette.primary),
+            (locale.pick("Success", "成功"), palette.success),
+            (locale.pick("Warning", "警告"), palette.warning),
+            (locale.pick("Danger", "危险"), palette.danger),
         ],
-        _ => &[
-            ("Background", palette.background),
-            ("Surface", palette.surface),
-            ("Card", palette.card_bg),
-            ("Stage", palette.stage_bg),
+        _ => [
+            (locale.pick("Background", "背景"), palette.background),
+            (locale.pick("Surface", "表面"), palette.surface),
+            (locale.pick("Card", "卡片"), palette.card_bg),
+            (locale.pick("Stage", "舞台"), palette.stage_bg),
         ],
     };
     let show_hex = ctx.knob_on(1);
 
     let panel_w = (rect.size.x - 12.0) * 0.5;
-    for (side, (label, table)) in [("Light", &light), ("Dark", &dark)].iter().enumerate() {
+    for (side, (label, mode_name, table)) in [
+        (locale.pick("Light", "浅色主题"), "ThemeMode::Light", &light),
+        (locale.pick("Dark", "深色主题"), "ThemeMode::Dark", &dark),
+    ]
+    .iter()
+    .enumerate()
+    {
         let panel = Rect::new(
             rect.origin.x + side as f32 * (panel_w + 12.0),
             rect.origin.y,
@@ -324,11 +336,7 @@ fn palette_compare(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Top,
         );
         ctx.canvas.text(
-            if *label == "Light" {
-                "ThemeMode::Light"
-            } else {
-                "ThemeMode::Dark"
-            },
+            mode_name,
             Rect::new(
                 panel.origin.x + 14.0,
                 panel.origin.y + 30.0,
@@ -381,12 +389,35 @@ pub fn typography(ctx: &mut DemoCtx<'_, '_>, scaling: bool) {
     let palette = *ctx.canvas.palette;
     let body = ctx.knob(0);
     let ligatures = ctx.knob_on(1);
+    let locale = ctx.state.locale;
     let rows: [(&str, f32, &str); 5] = [
-        ("Display", 34.0, "Unbound"),
-        ("Title", 24.0, "Render everything"),
-        ("Subtitle", 18.0, "GPU primitives, no DOM"),
-        ("Body", body, "The quick brown fox jumps over the lazy dog."),
-        ("Caption", 11.0, "MTSDF 512² atlas · 4× supersampled"),
+        (locale.pick("Display", "展示"), 34.0, "Unbound"),
+        (
+            locale.pick("Title", "标题"),
+            24.0,
+            locale.pick("Render everything", "全量图元自绘渲染"),
+        ),
+        (
+            locale.pick("Subtitle", "副标题"),
+            18.0,
+            locale.pick("GPU primitives, no DOM", "纯 GPU 图元，无 DOM 负担"),
+        ),
+        (
+            locale.pick("Body", "正文"),
+            body,
+            locale.pick(
+                "The quick brown fox jumps over the lazy dog.",
+                "春江潮水连海平，海上明月共潮生 · Unbound UI 矢量排版",
+            ),
+        ),
+        (
+            locale.pick("Caption", "注释"),
+            11.0,
+            locale.pick(
+                "MTSDF 512² atlas · 4× supersampled",
+                "MTSDF 512² 字形图集 · 4× 超采样",
+            ),
+        ),
     ];
     let mut y = rect.origin.y;
     for (name, size, sample) in rows {
@@ -461,15 +492,19 @@ fn typography_scaling(ctx: &mut DemoCtx<'_, '_>) {
         AlignX::Start,
         AlignY::Center,
     );
+    let locale = ctx.state.locale;
     widgets::badge(
         ctx.canvas,
         Rect::new(rect.origin.x + 18.0, rect.max().y - 34.0, 96.0, 22.0),
-        &format!("{:.0} % zoom", scale * 100.0),
+        &format!("{:.0} % {}", scale * 100.0, locale.pick("zoom", "缩放")),
         palette.primary,
         palette.primary_soft,
     );
     ctx.canvas.text(
-        "screen-space derivatives / 1 px stem",
+        locale.pick(
+            "screen-space derivatives / 1 px stem",
+            "屏幕空间偏导数 / 1 px 锐利字干",
+        ),
         Rect::new(
             rect.origin.x + 126.0,
             rect.max().y - 34.0,
@@ -509,8 +544,13 @@ pub fn elevation(ctx: &mut DemoCtx<'_, '_>, clipping: bool) {
             if hairline { 1.0 } else { 0.0 },
             blur * (level as f32 + 1.0) * 0.55,
         );
+        let locale = ctx.state.locale;
         ctx.canvas.text(
-            ["Low", "Medium", "High"][level],
+            [
+                locale.pick("Low", "低海拔"),
+                locale.pick("Medium", "中海拔"),
+                locale.pick("High", "高海拔"),
+            ][level],
             Rect::new(
                 card.origin.x + 14.0,
                 card.origin.y + 14.0,
@@ -523,7 +563,11 @@ pub fn elevation(ctx: &mut DemoCtx<'_, '_>, clipping: bool) {
             AlignY::Top,
         );
         ctx.canvas.text(
-            &format!("{:.0} px blur", blur * (level as f32 + 1.0) * 0.55),
+            &format!(
+                "{:.0} px {}",
+                blur * (level as f32 + 1.0) * 0.55,
+                locale.pick("blur", "模糊")
+            ),
             Rect::new(
                 card.origin.x + 14.0,
                 card.origin.y + 34.0,
@@ -587,8 +631,9 @@ fn elevation_clipping(ctx: &mut DemoCtx<'_, '_>) {
         0.0,
         0.0,
     );
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        "clipped by the surface SDF",
+        locale.pick("clipped by the surface SDF", "由表面 SDF 圆角精确裁剪"),
         Rect::new(
             card.origin.x + 18.0,
             card.origin.y + 42.0,
@@ -603,9 +648,12 @@ fn elevation_clipping(ctx: &mut DemoCtx<'_, '_>) {
     ctx.canvas.end_clip();
     ctx.canvas.text(
         if overflow {
-            "overflow: children may paint outside the radius"
+            locale.pick(
+                "overflow: children may paint outside the radius",
+                "溢出状态：子元素可绘制在圆角边界之外",
+            )
         } else {
-            "overflow: clip"
+            locale.pick("overflow: clip", "溢出状态：严格裁剪 (clip)")
         },
         Rect::new(
             card.origin.x + 16.0,
@@ -635,7 +683,7 @@ fn elevation_clipping(ctx: &mut DemoCtx<'_, '_>) {
     widgets::badge(
         ctx.canvas,
         Rect::new(card.max().x - 96.0, card.origin.y + 12.0, 84.0, 20.0),
-        "SDF clip",
+        locale.pick("SDF clip", "SDF 裁剪"),
         palette.primary,
         palette.primary_soft,
     );
@@ -728,7 +776,15 @@ fn vector_shapes(ctx: &mut DemoCtx<'_, '_>) {
         stroke * 1.4,
         palette.hero_end,
     );
-    for (index, label) in ["ring", "rounded", "ribbon"].iter().enumerate() {
+    let locale = ctx.state.locale;
+    for (index, label) in [
+        locale.pick("ring", "圆环"),
+        locale.pick("rounded", "圆角矩形"),
+        locale.pick("ribbon", "贝塞尔丝带"),
+    ]
+    .iter()
+    .enumerate()
+    {
         ctx.canvas.text(
             label,
             Rect::new(

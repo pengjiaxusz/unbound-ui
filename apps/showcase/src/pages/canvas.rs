@@ -1,4 +1,5 @@
 //! 无限画布：视口、四叉树、框选与历史记录。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 
 use accesskit::Role;
 use unbound_canvas::{Axis, LooseQuadtree, SnapConfig, Snapper};
@@ -281,16 +282,29 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
             AlignY::Center,
         );
     }
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        &format!(
-            "{:.0}% · pan {:.0},{:.0} · vis {visible}/{} · qtree nodes {} visited {}",
-            zoom * 100.0,
-            pan.x,
-            pan.y,
-            WORLD_NODES.len(),
-            tree.occupied_nodes(),
-            qt_stats.nodes_visited
-        ),
+        &if locale.is_zh() {
+            format!(
+                "{:.0}% · 平移 {:.0},{:.0} · 可见 {visible}/{} · 四叉树节点 {} 访问 {}",
+                zoom * 100.0,
+                pan.x,
+                pan.y,
+                WORLD_NODES.len(),
+                tree.occupied_nodes(),
+                qt_stats.nodes_visited
+            )
+        } else {
+            format!(
+                "{:.0}% · pan {:.0},{:.0} · vis {visible}/{} · qtree nodes {} visited {}",
+                zoom * 100.0,
+                pan.x,
+                pan.y,
+                WORLD_NODES.len(),
+                tree.occupied_nodes(),
+                qt_stats.nodes_visited
+            )
+        },
         Rect::new(
             rect.origin.x + 12.0,
             rect.max().y - 24.0,
@@ -305,7 +319,13 @@ pub fn viewport(ctx: &mut DemoCtx<'_, '_>, quadtree: bool) {
     ctx.canvas.end_clip();
     ctx.canvas.scroll_zone(rect, 2);
     // 拖拽空白舞台可平移视口。
-    ctx.control(1, rect, Role::Group, "Canvas viewport", false);
+    ctx.control(
+        1,
+        rect,
+        Role::Group,
+        locale.pick("Canvas viewport", "无限画布视口"),
+        false,
+    );
     widgets::badge(
         ctx.canvas,
         Rect::new(rect.max().x - 96.0, rect.origin.y + 10.0, 86.0, 20.0),
@@ -381,7 +401,7 @@ pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
             10 + index as u16,
             node,
             Role::ListItem,
-            &format!("Node {}", index + 1),
+            &format!("{} {}", ctx.state.locale.pick("Node", "节点"), index + 1),
             selected,
         );
     }
@@ -440,11 +460,23 @@ pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
             AlignY::Top,
         );
     }
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        &format!(
-            "{selected_count} selected · {} · drag to select",
-            if snapping { "snap engine" } else { "marquee" }
-        ),
+        &if locale.is_zh() {
+            format!(
+                "已选 {selected_count} 项 · {} · 拖拽框选",
+                if snapping {
+                    "吸附引擎"
+                } else {
+                    "矩形框选"
+                }
+            )
+        } else {
+            format!(
+                "{selected_count} selected · {} · drag to select",
+                if snapping { "snap engine" } else { "marquee" }
+            )
+        },
         Rect::new(
             rect.origin.x + 12.0,
             rect.max().y - 22.0,
@@ -457,7 +489,13 @@ pub fn marquee(ctx: &mut DemoCtx<'_, '_>, snapping: bool) {
         AlignY::Center,
     );
     ctx.canvas.end_clip();
-    ctx.control(1, inner, Role::Group, "Selection surface", false);
+    ctx.control(
+        1,
+        inner,
+        Role::Group,
+        locale.pick("Selection surface", "框选操作表面"),
+        false,
+    );
     ctx.canvas.scroll_zone(rect, 3);
 }
 
@@ -485,8 +523,9 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
         60.0,
     );
     ctx.canvas.rect(node, 9.0, palette.primary, 0, 0.0, 12.0);
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        "node",
+        locale.pick("node", "节点"),
         node,
         12.0,
         palette.on_primary,
@@ -495,12 +534,21 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
     );
     let stack = &ctx.state.demo.undo_stack;
     ctx.canvas.text(
-        &format!(
-            "applied {applied} / {total} · stack {}/{} ({} B)",
-            stack.depth(),
-            stack.depth() + stack.redo_depth(),
-            stack.bytes()
-        ),
+        &if locale.is_zh() {
+            format!(
+                "已应用 {applied} / {total} · 事务栈 {}/{} ({} B)",
+                stack.depth(),
+                stack.depth() + stack.redo_depth(),
+                stack.bytes()
+            )
+        } else {
+            format!(
+                "applied {applied} / {total} · stack {}/{} ({} B)",
+                stack.depth(),
+                stack.depth() + stack.redo_depth(),
+                stack.bytes()
+            )
+        },
         Rect::new(
             stage.origin.x + 14.0,
             stage.origin.y + 10.0,
@@ -523,10 +571,28 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
         .rect(panel, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
     let undo = Rect::new(panel.origin.x + 12.0, panel.origin.y + 12.0, 38.0, 30.0);
     let redo = Rect::new(undo.max().x + 6.0, undo.origin.y, 38.0, 30.0);
-    widgets::icon_button(ctx.canvas, ctx.part(1), undo, Icon::Undo, "Undo", false);
-    widgets::icon_button(ctx.canvas, ctx.part(2), redo, Icon::Redo, "Redo", false);
+    widgets::icon_button(
+        ctx.canvas,
+        ctx.part(1),
+        undo,
+        Icon::Undo,
+        locale.pick("Undo", "撤销"),
+        false,
+    );
+    widgets::icon_button(
+        ctx.canvas,
+        ctx.part(2),
+        redo,
+        Icon::Redo,
+        locale.pick("Redo", "重做"),
+        false,
+    );
     ctx.canvas.text(
-        &format!("{} command(s)", total),
+        &if locale.is_zh() {
+            format!("{total} 条命令")
+        } else {
+            format!("{total} command(s)")
+        },
         Rect::new(
             redo.max().x + 8.0,
             undo.origin.y,
@@ -568,8 +634,18 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
             );
         }
         if show_labels {
+            let localized_label = if locale.is_zh() {
+                match *label {
+                    "Open canvas" => "打开画布",
+                    "Add node" => "新增节点",
+                    "Move node" => "移动节点",
+                    other => other,
+                }
+            } else {
+                label
+            };
             ctx.canvas.text(
-                label,
+                localized_label,
                 Rect::new(panel.origin.x + 28.0, y, panel.size.x - 40.0, 24.0),
                 10.5,
                 if active {
@@ -600,7 +676,7 @@ pub fn undo(ctx: &mut DemoCtx<'_, '_>) {
         ctx.canvas,
         ctx.part(3),
         add,
-        "Push “Move node”",
+        locale.pick("Push “Move node”", "推入「移动节点」"),
         ButtonVariant::Secondary,
         true,
     );

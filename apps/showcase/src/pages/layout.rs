@@ -1,4 +1,5 @@
 //! 布局与传送门（Portals）：弹性布局沙盒、浮层与拖拽排序。
+//! lang-allow: bilingual showcase page copy; Chinese is the zh-CN half
 
 use accesskit::Role;
 use unbound_abi::{Align, Justify, RawNodeDesc};
@@ -223,7 +224,10 @@ pub fn flex(ctx: &mut DemoCtx<'_, '_>, box_model: bool) {
     };
     ctx.canvas.stroke(outline, 6.0, palette.grid_dot, 1.0);
     ctx.canvas.text(
-        "content box · solved by unbound-layout",
+        ctx.state.locale.pick(
+            "content box · solved by unbound-layout",
+            "内容盒 · 由 unbound-layout 实时求解",
+        ),
         Rect::new(
             outline.origin.x + 4.0,
             inner.max().y - 22.0,
@@ -263,11 +267,24 @@ fn box_model_page(ctx: &mut DemoCtx<'_, '_>) {
     let inner = border.inflate(-padding);
     ctx.canvas
         .rect(inner, 8.0, palette.card_bg, palette.card_border, 1.0, 0.0);
+    let locale = ctx.state.locale;
     if labels {
         for (label, area, color) in [
-            ("margin", outer, palette.warning),
-            ("border", border, palette.secondary),
-            ("padding", inner, palette.primary),
+            (
+                locale.pick("margin", "外边距 (margin)"),
+                outer,
+                palette.warning,
+            ),
+            (
+                locale.pick("border", "边框 (border)"),
+                border,
+                palette.secondary,
+            ),
+            (
+                locale.pick("padding", "内边距 (padding)"),
+                inner,
+                palette.primary,
+            ),
         ] {
             ctx.canvas.text(
                 label,
@@ -285,7 +302,7 @@ fn box_model_page(ctx: &mut DemoCtx<'_, '_>) {
         }
     }
     ctx.canvas.text(
-        "content",
+        locale.pick("content", "内容区"),
         inner,
         16.0,
         palette.text,
@@ -293,7 +310,11 @@ fn box_model_page(ctx: &mut DemoCtx<'_, '_>) {
         AlignY::Center,
     );
     ctx.canvas.text(
-        &format!("margin {margin:.0} · padding {padding:.0}"),
+        &if locale.is_zh() {
+            format!("外边距 {margin:.0} · 内边距 {padding:.0}")
+        } else {
+            format!("margin {margin:.0} · padding {padding:.0}")
+        },
         Rect::new(outer.origin.x, outer.max().y + 8.0, outer.size.x, 16.0),
         10.0,
         palette.text_muted,
@@ -338,11 +359,12 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
         132.0,
         34.0,
     );
+    let locale = ctx.state.locale;
     widgets::button(
         ctx.canvas,
         ctx.part(1),
         menu_button,
-        "Open menu",
+        locale.pick("Open menu", "打开菜单"),
         ButtonVariant::Secondary,
         true,
     );
@@ -350,12 +372,15 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
         ctx.canvas,
         ctx.part(2),
         dialog_button,
-        "Show dialog",
+        locale.pick("Show dialog", "打开对话框"),
         ButtonVariant::Subtle,
         true,
     );
     ctx.canvas.text(
-        "portal layer 2 · z-sorted above content",
+        locale.pick(
+            "portal layer 2 · z-sorted above content",
+            "Portal 第 2 层 · 位于页面内容之上按 Z 序绘制",
+        ),
         Rect::new(
             dialog_button.max().x + 12.0,
             menu_button.origin.y,
@@ -383,7 +408,14 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             1.0,
             20.0,
         );
-        for (index, label) in ["Rename", "Duplicate", "Delete"].iter().enumerate() {
+        for (index, label) in [
+            locale.pick("Rename", "重命名"),
+            locale.pick("Duplicate", "创建副本"),
+            locale.pick("Delete", "删除"),
+        ]
+        .iter()
+        .enumerate()
+        {
             let item = Rect::new(
                 menu.origin.x + 5.0,
                 menu.origin.y + 5.0 + index as f32 * 42.0,
@@ -446,8 +478,10 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             1.0,
             28.0,
         );
+        let cancel_label = locale.pick("Cancel", "取消");
+        let delete_label = locale.pick("Delete", "删除");
         ctx.canvas.text(
-            "Delete this item?",
+            locale.pick("Delete this item?", "确认删除该条目？"),
             Rect::new(
                 dialog.origin.x + 18.0,
                 dialog.origin.y + 16.0,
@@ -460,7 +494,10 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             AlignY::Top,
         );
         ctx.canvas.text_wrapped(
-            "The action can be undone from the history timeline. The portal captures focus until dismissed.",
+            locale.pick(
+                "The action can be undone from the history timeline. The portal captures focus until dismissed.",
+                "此操作可在历史时间线中撤销。关闭前 Portal 会捕获键盘焦点。",
+            ),
             Rect::new(dialog.origin.x + 18.0, dialog.origin.y + 50.0, dialog.size.x - 36.0, 50.0),
             11.0,
             palette.text_muted,
@@ -471,7 +508,7 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             ctx.canvas,
             ctx.part(20),
             cancel,
-            "Cancel",
+            cancel_label,
             ButtonVariant::Secondary,
             true,
         );
@@ -479,14 +516,14 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
             ctx.canvas,
             ctx.part(21),
             delete,
-            "Delete",
+            delete_label,
             ButtonVariant::Primary,
             true,
         );
         // 在传送门层上重新注册对话框动作。
         for (node, rect, role, label) in [
-            (ctx.part(20), cancel, Role::Button, "Cancel"),
-            (ctx.part(21), delete, Role::Button, "Delete"),
+            (ctx.part(20), cancel, Role::Button, cancel_label),
+            (ctx.part(21), delete, Role::Button, delete_label),
         ] {
             ctx.canvas.control_on_layer(
                 node,
@@ -842,6 +879,13 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
     let card_w = ((rect.size.x - 36.0 - gap * 3.0) / 4.0).max(84.0);
     let card_h = if compact { 64.0 } else { 84.0 };
     let top = rect.origin.y + (rect.size.y - card_h) * 0.5;
+    let locale = ctx.state.locale;
+    let card_titles = [
+        locale.pick("Hero", "首屏横幅"),
+        locale.pick("Sidebar", "侧边栏"),
+        locale.pick("Grid", "内容网格"),
+        locale.pick("Footer", "页脚栏"),
+    ];
     let order = ctx.state.demo.drag_order.clone();
     for (slot, index) in order.iter().copied().enumerate() {
         let cell = Rect::new(
@@ -857,7 +901,7 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
         if drag_index == Some(index) {
             ctx.canvas.rect(cell, 9.0, palette.stage_bg, 0, 0.0, 0.0);
             ctx.canvas.text(
-                "drop here",
+                locale.pick("drop here", "放置于此"),
                 cell,
                 9.5,
                 palette.text_muted,
@@ -868,7 +912,7 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
                 1 + index as u16,
                 cell,
                 Role::ListItem,
-                &format!("Card {}", index + 1),
+                &format!("{} {}", locale.pick("Card", "卡片"), index + 1),
                 false,
             );
             continue;
@@ -904,7 +948,7 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Center,
         );
         ctx.canvas.text(
-            ["Hero", "Sidebar", "Grid", "Footer"][index],
+            card_titles[index],
             Rect::new(
                 card.origin.x + 42.0,
                 card.origin.y + 12.0,
@@ -917,7 +961,11 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
             AlignY::Top,
         );
         ctx.canvas.text(
-            if compact { "card" } else { "drag to reorder" },
+            if compact {
+                locale.pick("card", "卡片")
+            } else {
+                locale.pick("drag to reorder", "拖拽以排序")
+            },
             Rect::new(
                 card.origin.x + 10.0,
                 card.max().y - 20.0,
@@ -933,7 +981,7 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
             1 + index as u16,
             card,
             Role::ListItem,
-            &format!("Card {}", index + 1),
+            &format!("{} {}", locale.pick("Card", "卡片"), index + 1),
             false,
         );
     }
@@ -948,7 +996,7 @@ pub fn drag_drop(ctx: &mut DemoCtx<'_, '_>) {
         );
         ctx.canvas.rect(card, 9.0, palette.primary, 0, 0.0, 22.0);
         ctx.canvas.text(
-            ["Hero", "Sidebar", "Grid", "Footer"][index],
+            card_titles[index],
             Rect::new(
                 card.origin.x + 12.0,
                 card.origin.y,

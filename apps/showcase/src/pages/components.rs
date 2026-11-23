@@ -407,6 +407,17 @@ macro_rules! define_showcase_components {
                 )+
             }
         }
+
+        /// 获取每个目录组件的英文简介（穷举匹配，禁止遗漏）。
+        #[must_use]
+        #[deny(unreachable_patterns)]
+        pub const fn component_description(id: WidgetCatalogId) -> &'static str {
+            match id {
+                $(
+                    WidgetCatalogId::$id => $desc,
+                )+
+            }
+        }
     };
 }
 
@@ -693,6 +704,155 @@ pub const fn component_nav_label_localized(
     }
 }
 
+/// 按激活语言返回目录组件的卡片简介（穷举覆盖全部目录组件）。
+#[must_use]
+#[deny(unreachable_patterns)]
+pub const fn component_description_localized(
+    id: WidgetCatalogId,
+    locale: unbound_app::Locale,
+) -> &'static str {
+    if !locale.is_zh() {
+        return component_description(id);
+    }
+    match id {
+        WidgetCatalogId::ExpanderGroup => "带稳定标题节点标识的可折叠分组面板。",
+        WidgetCatalogId::InfoBar => "带严重级别标识与可选关闭按钮的信息提示栏。",
+        WidgetCatalogId::AlertDialog => "居中于视口的破坏性操作确认对话框。",
+        WidgetCatalogId::PersonPicture => "带在线状态指示器的首字母个人头像。",
+        WidgetCatalogId::InfoBadge => "可关闭的交互式徽章胶囊，构成徽章模块的交互部分。",
+        WidgetCatalogId::BreadcrumbBar => "逐级可独立命中点击的层级面包屑导航条。",
+        WidgetCatalogId::Button => "扁平按钮：包含阴影、表面、标签、边框与焦点环。",
+        WidgetCatalogId::CanvasToolbar => "面向无限画布的悬浮缩放与工具切换栏。",
+        WidgetCatalogId::Chart => "带坐标轴与悬停十字准线的折线数据图表。",
+        WidgetCatalogId::CheckBox => "带塑形勾选记号与文字标签的复选框。",
+        WidgetCatalogId::CodeBlock => "支持语法高亮与一键复制的代码展示块。",
+        WidgetCatalogId::ColorPicker => "HSVA 取色区域并实时输出 HEX / OKLCH 色值。",
+        WidgetCatalogId::ColorSwatch => "带选中高亮环的主题强调色块。",
+        WidgetCatalogId::ComboBoxEditable => "带实时过滤建议列表的可编辑下拉组合框。",
+        WidgetCatalogId::CommandPalette => "支持模糊搜索与快捷键提示的命令面板。",
+        WidgetCatalogId::Containers => "由容器模块绘制的页眉 / 正文 / 页脚卡片表面。",
+        WidgetCatalogId::ContextMenu => "驱动菜单发射器的右键定位上下文菜单状态机。",
+        WidgetCatalogId::CurveEditor => "带可拖拽控制点手柄的贝塞尔曲线编辑器。",
+        WidgetCatalogId::CalendarDatePicker => "折叠态日期触发器，点击可展开日历浮层。",
+        WidgetCatalogId::CalendarView => "支持单日选择的月历视图控件。",
+        WidgetCatalogId::DatePicker => "月 / 日 / 年三列滚轮式日期选择器。",
+        WidgetCatalogId::Divider => "支持可选居中文字标签的细线分割符。",
+        WidgetCatalogId::Dock => "支持拖拽停靠布局的多页签工作区面板。",
+        WidgetCatalogId::SplitView => "带视口遮罩层的侧边抽屉拆分视图。",
+        WidgetCatalogId::DropDownButton => "右侧带固定下拉箭头、用于展开菜单的按钮。",
+        WidgetCatalogId::FileDrop => "具备空闲态与拖入悬停态的文件拖拽放置区。",
+        WidgetCatalogId::Form => "带必填星号标记与校验反馈信息的表单字段。",
+        WidgetCatalogId::Gizmo => "带尺寸气泡读数的八手柄变换操控器。",
+        WidgetCatalogId::HoverCard => "锚定于触发控件的富内容悬停预览卡片。",
+        WidgetCatalogId::HyperlinkButton => "无边框强调色文字按钮，带悬停与按压薄纱。",
+        WidgetCatalogId::Image => "绑定至图集图层的纹理四边形视图。",
+        WidgetCatalogId::MenuFlyout => "包含操作行、分隔线与快捷键标注的弹出菜单。",
+        WidgetCatalogId::MenuBar => "支持键盘焦点遍历的顶层菜单栏。",
+        WidgetCatalogId::Minimap => "覆盖世界边界的视口缩略导航小地图。",
+        WidgetCatalogId::ContentDialog => "带焦点陷阱与背景遮罩的居中内容对话框。",
+        WidgetCatalogId::NodeGraph => "带输入输出端口与贝塞尔连线的节点蓝图。",
+        WidgetCatalogId::NumberBox => "支持数学表达式求值的步进数字输入框。",
+        WidgetCatalogId::Overlay => "纯定位记账浮层栈，本身不发射可见图元。",
+        WidgetCatalogId::Flyout => "带方向指向箭头的锚定浮出弹出层。",
+        WidgetCatalogId::ProgressBar => "由当前数值驱动的确定态水平进度条。",
+        WidgetCatalogId::PropertyGrid => "支持分组与属性重置点的检视器属性网格。",
+        WidgetCatalogId::RadioButton => "单选组内的单行互斥单选按钮。",
+        WidgetCatalogId::RichTextBlock => "将 Markdown 解析为多样式文本段的富文本块。",
+        WidgetCatalogId::Ruler => "带可拖拽辅助参考线的画布标尺。",
+        WidgetCatalogId::ScrollView => "配备真实可拖拽滚动条的可滚动视口。",
+        WidgetCatalogId::SelectorBar => "单选分段胶囊中的未选中槽位控件。",
+        WidgetCatalogId::ComboBox => "展示当前选中值的收起态下拉选择触发器。",
+        WidgetCatalogId::Skeleton => "带微光动画的加载骨架占位符。",
+        WidgetCatalogId::Slider => "带拇指滑块与步进刻度的连续轨道滑块。",
+        WidgetCatalogId::SplitPane => "双窗格之间带可拖拽分割条的拆分容器。",
+        WidgetCatalogId::ToggleSwitch => "带塑形文字标签的开 / 关切换开关。",
+        WidgetCatalogId::Table => "带列头与虚拟化行窗口的基础数据表。",
+        WidgetCatalogId::TabView => "带关闭按钮的选项卡槽位视图。",
+        WidgetCatalogId::TagInput => "带行内文本编辑器的可移除标签输入控件。",
+        WidgetCatalogId::TextBoxMultiline => "带行号边栏的多行文本编辑区域。",
+        WidgetCatalogId::TextBox => "带光标闪烁与文本选区的单行输入框。",
+        WidgetCatalogId::Toast => "带倒计时与弹簧入场动画的吐司通知。",
+        WidgetCatalogId::CommandBar => "水平排列按钮与切换项的命令工具栏。",
+        WidgetCatalogId::ToolTip => "带延迟显示与窗口边界自动翻转的工具提示。",
+        WidgetCatalogId::TreeView => "支持展开折叠与键盘导航的树形目录行。",
+        WidgetCatalogId::ListView => "基于树状数组（Fenwick）的变高虚拟列表行。",
+        WidgetCatalogId::Expander => "带平滑弹簧展开进度的单节折叠面板。",
+        WidgetCatalogId::Masonry => "最短列自适应瀑布流网格与固定比例盒。",
+        WidgetCatalogId::PipsPager => "带省略号折叠与页容量信息的页码导航条。",
+        WidgetCatalogId::PasswordBox => "带按住显密按钮的掩码密码输入框。",
+        WidgetCatalogId::Stepper => "支持水平或垂直布局的多步骤进度指示器。",
+        WidgetCatalogId::AutoSuggestBox => "带前缀过滤与实时建议徽章的自动建议输入框。",
+        WidgetCatalogId::Banner => "通栏顶部全局状态通知与恢复操作横幅。",
+        WidgetCatalogId::Cascader => "多层级联选项选择器。",
+        WidgetCatalogId::DateRangePicker => "带快捷预设的双月历日期区间选择器。",
+        WidgetCatalogId::HotkeyInput => "带键位冲突状态提示的实时 KeyChord 快捷键录制框。",
+        WidgetCatalogId::NotificationCenter => "汇总吐司历史与未读状态的侧边通知中心抽屉。",
+        WidgetCatalogId::PinInput => "支持整段粘贴自动拆分的分段验证码输入框。",
+        WidgetCatalogId::Popconfirm => "面向破坏性操作的锚定气泡二次确认框。",
+        WidgetCatalogId::RatingControl => "支持半星精度的五星评分控件。",
+        WidgetCatalogId::RepeatButton => "长按并在初次延迟后持续触发重复点击的按钮。",
+        WidgetCatalogId::ProgressRing => "连续旋转加载圆环与遮罩锁定层。",
+        WidgetCatalogId::TimePicker => "支持时、分、秒步进调节的时间选择器。",
+        WidgetCatalogId::Transfer => "支持批量转移条目的双栏穿梭列表。",
+        WidgetCatalogId::FlipView => "带指示圆点与弹簧吸附切换的轮播视图。",
+        WidgetCatalogId::CodeEditor => "带行号边栏与当前行高亮的可编辑代码表面。",
+        WidgetCatalogId::DataGrid => "支持单元格选中的可编辑虚拟化电子表格网格。",
+        WidgetCatalogId::Timeline => "带状态节点与时间戳的按序事件时间轴。",
+        WidgetCatalogId::TimelineTrack => "带播放头拖动的动画多轨关键帧轨道表。",
+        WidgetCatalogId::Tour => "带目标挖空聚光灯与说明气泡的漫游引导层。",
+        WidgetCatalogId::Watermark => "不拦截交互的平铺安全水印覆盖层。",
+        WidgetCatalogId::AspectRatioBox => "维持固定宽高比例的布局约束容器。",
+        WidgetCatalogId::AvatarGroup => "带溢出计数徽章的叠放头像组。",
+        WidgetCatalogId::Chip => "带关闭按钮的交互式过滤标签胶囊。",
+        WidgetCatalogId::EmptyState => "带主操作按钮的居中空状态占位视图。",
+        WidgetCatalogId::GradientEditor => "带可拖拽色标的渐变色阶编辑器。",
+        WidgetCatalogId::FontIcon => "带圆角容器与尺寸控制的矢量字体图标。",
+        WidgetCatalogId::LoadingOverlay => "铺满卡片并居中显示旋转加载器的等待遮罩。",
+        WidgetCatalogId::NinePatch => "固定四角边框比例的九宫格拉伸图像。",
+        WidgetCatalogId::StackPanel => "按 Z 轴顺序层叠排列子元素的堆叠容器。",
+        WidgetCatalogId::StatusBar => "按段对齐排列的桌面底部状态栏。",
+        WidgetCatalogId::Wrap => "超出宽度自动换行的流式布局容器。",
+        WidgetCatalogId::SplitButton => "主操作按钮与右侧下拉菜单触发器的组合按钮。",
+        WidgetCatalogId::ToggleButton => "带按下锁定态的双态切换按钮。",
+        WidgetCatalogId::ToggleSplitButton => "主操作区保持选中切换状态的分割按钮。",
+        WidgetCatalogId::TreeTable => "支持行展开折叠的多列层级树形数据表。",
+        WidgetCatalogId::MultiSplit => "带可拖拽分割线的多栏尺寸可调容器。",
+        WidgetCatalogId::Descriptions => "面向结构化属性的标签-数值摘要展示列表。",
+        WidgetCatalogId::Callout => "高可见度的信息提示或警告高亮说明框。",
+        WidgetCatalogId::VirtualMasonry => "面向异构条目的虚拟化交错多列瀑布流。",
+        WidgetCatalogId::TerminalView => "支持 ANSI 样式着色的虚拟化终端日志视图。",
+        WidgetCatalogId::AddressBar => "兼具路径面包屑与完整路径编辑的双模地址栏。",
+        WidgetCatalogId::GenericDataTable => "支持多列排序、拼音/双拼过滤与底部汇总的虚拟数据表。",
+        WidgetCatalogId::PipelineView => "渲染通道与构建流水线各阶段耗时检视器。",
+        WidgetCatalogId::Pivot => "Win11 二级导航页签条：纯文字标签配选中强调下划线。",
+        WidgetCatalogId::QueryBuilder => "带字段、操作符与值行的可视化 AND/OR 过滤规则构建器。",
+        WidgetCatalogId::SchemaForm => "带脏状态跟踪与条件显隐的声明式 Schema 表单。",
+        WidgetCatalogId::ShortcutBar => "带冲突检测的上下文按键帽快捷键提示栏。",
+        WidgetCatalogId::TaskHud => "带取消操作入口的后台任务进度堆栈浮窗。",
+        WidgetCatalogId::NavigationView => {
+            "全高导航面板：包含分组标题、选中/悬停行、徽章与固定页脚。"
+        }
+        WidgetCatalogId::RichEditBox => "WinUI 3 风格的富文本编辑区域。",
+        WidgetCatalogId::GridView => "等尺寸网格单元，带选中边框与悬停圆角反馈。",
+        WidgetCatalogId::ListBox => "带主强调色指示条的经典单选列表框。",
+        WidgetCatalogId::CommandBarFlyout => "带末尾溢出菜单的迷你图标工具条浮层。",
+        WidgetCatalogId::AppBarButton => "带悬停与按压薄纱的紧凑命令栏图标按钮。",
+        WidgetCatalogId::AppBarToggleButton => "选中时带主强调色下划线的命令栏切换按钮。",
+        WidgetCatalogId::AppBarSeparator => "命令栏分组间的 1 像素垂直分隔线。",
+        WidgetCatalogId::SwipeControl => "左右滑动可揭示前后操作槽位的列表行容器。",
+        WidgetCatalogId::RefreshContainer => "位于可滚动内容区顶部的下拉刷新指示容器。",
+        WidgetCatalogId::TeachingTip => "带指向尖角、标题、正文与操作按钮的教学引导气泡。",
+        WidgetCatalogId::AnnotatedScrollBar => "带刻度标签与悬停预览气泡的标注滚动条。",
+        WidgetCatalogId::ItemsView => "可在列表与网格布局间无缝切换的统一集合视图。",
+        WidgetCatalogId::RangeSelector => "用于选择上下界区间的双拇指范围滑块。",
+        WidgetCatalogId::RadialGauge => "带刻度线与扫描指针的环形仪表盘。",
+        WidgetCatalogId::OrbitView => "将节点均匀排布在圆形轨道上的环绕视图。",
+        WidgetCatalogId::BladeView => "带激活标题栏的水平多级刀片展开面板。",
+        WidgetCatalogId::HeaderedContentControl => "内容区域上方带共享标题条的组合容器。",
+        WidgetCatalogId::ImageCropper => "带八个缩放手柄与四角遮罩的图像裁剪框。",
+    }
+}
+
 /// 每个目录组件的中英文搜索关键词（支持全拼、小鹤/多方案双拼与首字母检索）。
 #[must_use]
 #[deny(unreachable_patterns)]
@@ -920,7 +1080,12 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
 
     let clicks = ctx.state.sandbox.get_clicks(id);
     let title_text = if clicks > 0 {
-        format!("{} • {} clicks", id.module_name(), clicks)
+        format!(
+            "{} • {} {}",
+            id.module_name(),
+            clicks,
+            ctx.state.locale.pick("clicks", "次点击")
+        )
     } else {
         id.module_name().to_string()
     };

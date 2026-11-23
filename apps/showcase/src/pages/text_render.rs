@@ -196,6 +196,38 @@ impl TextConsoleGroup {
             Self::Emoji => "Presentation mode, backend and color palettes",
         }
     }
+
+    /// 按当前语言返回分组标题。
+    #[must_use]
+    pub const fn localized_label(self, locale: unbound_app::Locale) -> &'static str {
+        if !locale.is_zh() {
+            return self.label();
+        }
+        match self {
+            Self::Font => "字体与样式",
+            Self::Typography => "排版与塑形",
+            Self::Pixel => "像素与亚像素相位",
+            Self::DistanceField => "距离场 (SDF / MTSDF)",
+            Self::Composition => "色彩空间与合成",
+            Self::Emoji => "Emoji 渲染",
+        }
+    }
+
+    /// 按当前语言返回分组描述。
+    #[must_use]
+    pub const fn localized_description(self, locale: unbound_app::Locale) -> &'static str {
+        if !locale.is_zh() {
+            return self.description();
+        }
+        match self {
+            Self::Font => "预览字体族、字重、字号与斜体",
+            Self::Typography => "塑形器后端、断行、BiDi 与连字",
+            Self::Pixel => "DirectWrite / Swash 光栅器、亚像素相位与微调",
+            Self::DistanceField => "有向距离场与管线模式",
+            Self::Composition => "混合色彩空间与渲染图层模式",
+            Self::Emoji => "Emoji 呈现模式、后端与调色板",
+        }
+    }
 }
 
 /// 预设渲染方案枚举。
@@ -1070,8 +1102,11 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         );
 
         // 展开箭头指示
+        let locale = ctx.state.locale;
         let arrow = if is_expanded { "v" } else { ">" };
-        let header_title = format!("{}  {}", arrow, group.label());
+        let group_title = group.localized_label(locale);
+        let group_desc = group.localized_description(locale);
+        let header_title = format!("{}  {}", arrow, group_title);
 
         ctx.canvas.text(
             &header_title,
@@ -1088,7 +1123,12 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
         );
 
         // 无障碍：全量注册折叠标题按钮与展开状态位
-        let a11y_label = format!("Group: {} — {}", group.label(), group.description());
+        let a11y_label = format!(
+            "{}: {} — {}",
+            locale.pick("Group", "分组"),
+            group_title,
+            group_desc
+        );
         ctx.control_expandable(
             part,
             header_rect,
@@ -1188,8 +1228,9 @@ fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPage
     let padding = 4.0;
     let label_w = 48.0;
     let label_rect = Rect::new(rect.origin.x + padding, rect.origin.y, label_w, rect.size.y);
+    let locale = ctx.state.locale;
     ctx.canvas.text(
-        "Preset:",
+        locale.pick("Preset:", "预设："),
         label_rect,
         10.5,
         palette.text_muted,
@@ -1200,14 +1241,26 @@ fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPage
     let presets_x = rect.origin.x + padding + label_w;
     let presets_w = (rect.size.x - padding * 2.0 - label_w).max(20.0);
     let items = [
-        ("WinUI", PART_PRESET_WINUI, TextRenderPreset::WinuiNative),
         (
-            "Consistent",
+            locale.pick("WinUI", "WinUI 原生"),
+            PART_PRESET_WINUI,
+            TextRenderPreset::WinuiNative,
+        ),
+        (
+            locale.pick("Consistent", "跨平台一致"),
             PART_PRESET_CROSS_PLATFORM,
             TextRenderPreset::CrossPlatform,
         ),
-        ("Pixel", PART_PRESET_PIXEL, TextRenderPreset::Pixel),
-        ("Custom", PART_PRESET_CUSTOM, TextRenderPreset::Custom),
+        (
+            locale.pick("Pixel", "像素风"),
+            PART_PRESET_PIXEL,
+            TextRenderPreset::Pixel,
+        ),
+        (
+            locale.pick("Custom", "自定义"),
+            PART_PRESET_CUSTOM,
+            TextRenderPreset::Custom,
+        ),
     ];
     let selected_idx = items
         .iter()
@@ -1251,10 +1304,11 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
     let col_gap = 8.0;
     let col_w = ((inner_w - col_gap) * 0.5).max(40.0);
 
+    let locale = ctx.state.locale;
     // Row 1: Family (left) & Weight (right)
     let row1_y = rect.origin.y + pad_y;
     ctx.canvas.text(
-        "FAMILY",
+        locale.pick("FAMILY", "字体族 (FAMILY)"),
         Rect::new(rect.origin.x + pad_x, row1_y, col_w, 10.0),
         8.0,
         palette.text_muted,
@@ -1262,7 +1316,7 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         AlignY::Center,
     );
     ctx.canvas.text(
-        "WEIGHT",
+        locale.pick("WEIGHT", "字重 (WEIGHT)"),
         Rect::new(rect.origin.x + pad_x + col_w + col_gap, row1_y, col_w, 10.0),
         8.0,
         palette.text_muted,
@@ -1316,7 +1370,7 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
     // Row 2: Size (left) & Italic (right)
     let row2_y = row1_y + 37.0;
     ctx.canvas.text(
-        "SIZE",
+        locale.pick("SIZE", "字号 (SIZE)"),
         Rect::new(rect.origin.x + pad_x, row2_y, col_w, 10.0),
         8.0,
         palette.text_muted,
@@ -1354,7 +1408,7 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         ctx.canvas,
         italic_node,
         italic_rect,
-        "Italic Slant",
+        locale.pick("Italic Slant", "斜体倾角"),
         state.settings.italic,
         italic_res.disabled,
     );
@@ -1555,10 +1609,17 @@ fn draw_distance_field_controls(
     );
 
     // 互斥说明或提示文案
+    let locale = ctx.state.locale;
     let note = if is_sdf {
-        "Phase locked to 1 (Snapped)"
+        locale.pick(
+            "Phase locked to 1 (Snapped)",
+            "亚像素相位已锁定为 1（整数对齐）",
+        )
     } else {
-        "Signed distance field generation"
+        locale.pick(
+            "Signed distance field generation",
+            "有向距离场（SDF）字形生成",
+        )
     };
     ctx.canvas.text(
         note,
@@ -1586,10 +1647,11 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
     let label_w = 46.0;
     let group_w = (rect.size.x - 16.0 - label_w).max(40.0);
 
+    let locale = ctx.state.locale;
     // 第一行：混合空间 (Blend Space)
     let row1_y = rect.origin.y + 6.0;
     ctx.canvas.text(
-        "Space:",
+        locale.pick("Space:", "空间："),
         Rect::new(rect.origin.x + 8.0, row1_y, label_w, row_h),
         10.0,
         palette.text_muted,
@@ -1598,7 +1660,10 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
     );
     let mut srgb_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_SRGB), "sRGB");
     srgb_slot.a11y_role = Some(Role::Button);
-    let mut linear_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LINEAR), "Linear");
+    let mut linear_slot = crate::widgets::SegmentedSlot::new(
+        ctx.part(PART_COMP_LINEAR),
+        locale.pick("Linear", "线性"),
+    );
     linear_slot.a11y_role = Some(Role::Button);
     let space_selected = usize::from(state.settings.blend_space == BlendSpace::Linear);
     crate::widgets::segmented_slots(
@@ -1613,18 +1678,22 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
     // 第二行：图层模式 (Layer Mode)
     let row2_y = row1_y + row_h + 6.0;
     ctx.canvas.text(
-        "Layer:",
+        locale.pick("Layer:", "图层："),
         Rect::new(rect.origin.x + 8.0, row2_y, label_w, row_h),
         10.0,
         palette.text_muted,
         AlignX::Start,
         AlignY::Center,
     );
-    let mut direct_slot =
-        crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LAYER_DIRECT), "Direct");
+    let mut direct_slot = crate::widgets::SegmentedSlot::new(
+        ctx.part(PART_COMP_LAYER_DIRECT),
+        locale.pick("Direct", "直出"),
+    );
     direct_slot.a11y_role = Some(Role::Button);
-    let mut isolated_slot =
-        crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LAYER_ISOLATED), "Isolated");
+    let mut isolated_slot = crate::widgets::SegmentedSlot::new(
+        ctx.part(PART_COMP_LAYER_ISOLATED),
+        locale.pick("Isolated", "隔离层"),
+    );
     isolated_slot.a11y_role = Some(Role::Button);
     let layer_selected = usize::from(state.settings.layer_mode == LayerMode::Isolated);
     crate::widgets::segmented_slots(
@@ -1861,18 +1930,32 @@ fn draw_preview_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, settings: &TextRend
     let sample_gap = 10.0;
     let header_h = 24.0;
 
+    let locale = ctx.state.locale;
     // 标题与当前预览样式数值摘要
-    let family_display = settings.family.as_deref().unwrap_or("Default");
-    let summary_text = format!(
-        "Family: {}  Weight: {}  Size: {:.1}px  Italic: {}",
-        family_display,
-        settings.weight,
-        settings.size,
-        if settings.italic { "Yes" } else { "No" }
-    );
+    let family_display = settings
+        .family
+        .as_deref()
+        .unwrap_or_else(|| locale.pick("Default", "默认"));
+    let summary_text = if locale.is_zh() {
+        format!(
+            "字体：{}  字重：{}  字号：{:.1}px  斜体：{}",
+            family_display,
+            settings.weight,
+            settings.size,
+            if settings.italic { "是" } else { "否" }
+        )
+    } else {
+        format!(
+            "Family: {}  Weight: {}  Size: {:.1}px  Italic: {}",
+            family_display,
+            settings.weight,
+            settings.size,
+            if settings.italic { "Yes" } else { "No" }
+        )
+    };
 
     ctx.canvas.text(
-        "LIVE PREVIEW SPECIMENS",
+        locale.pick("LIVE PREVIEW SPECIMENS", "实时渲染对照样本"),
         Rect::new(
             rect.origin.x + padding,
             rect.origin.y + padding,
@@ -1999,29 +2082,44 @@ fn draw_status_bar(
     ctx.canvas
         .rect(rect, 6.0, palette.card_bg, palette.card_border, 1.0, 0.0);
 
+    let locale = ctx.state.locale;
     let backend_text = match report.backend {
-        RasterBackend::DirectWrite => "DirectWrite (Coverage)",
+        RasterBackend::DirectWrite => {
+            locale.pick("DirectWrite (Coverage)", "DirectWrite（覆盖率）")
+        }
         RasterBackend::Cosmic => "Cosmic (Swash)",
     };
     let phases_text = match report.phases {
-        8 => "8 Subpixel Phases",
-        4 => "4 Subpixel Phases",
-        1 => "1 Phase (Snapped)",
-        _ => "Phases",
+        8 => locale.pick("8 Subpixel Phases", "8 档亚像素相位"),
+        4 => locale.pick("4 Subpixel Phases", "4 档亚像素相位"),
+        1 => locale.pick("1 Phase (Snapped)", "1 相位（整数对齐）"),
+        _ => locale.pick("Phases", "相位"),
     };
     let fallback_text = if report.fallback_count == 0 {
-        "0 fallbacks".to_string()
+        locale.pick("0 fallbacks", "0 次回退").to_string()
     } else if let Some(ref reason) = report.last_fallback_reason {
-        format!("{} fallbacks (Recent: {})", report.fallback_count, reason)
+        if locale.is_zh() {
+            format!("{} 次回退（最近：{}）", report.fallback_count, reason)
+        } else {
+            format!("{} fallbacks (Recent: {})", report.fallback_count, reason)
+        }
+    } else if locale.is_zh() {
+        format!("{} 次回退", report.fallback_count)
     } else {
         format!("{} fallbacks", report.fallback_count)
     };
 
     let items = [
-        ("EFFECTIVE BACKEND", backend_text),
-        ("EFFECTIVE PHASES", phases_text),
-        ("EMOJI PATH", &report.emoji_path),
-        ("FALLBACKS", &fallback_text),
+        (
+            locale.pick("EFFECTIVE BACKEND", "实际光栅后端"),
+            backend_text,
+        ),
+        (
+            locale.pick("EFFECTIVE PHASES", "实际亚像素相位"),
+            phases_text,
+        ),
+        (locale.pick("EMOJI PATH", "Emoji 路径"), &report.emoji_path),
+        (locale.pick("FALLBACKS", "回退统计"), &fallback_text),
     ];
 
     let col_w = (rect.size.x - 16.0) / 4.0;
@@ -2093,11 +2191,27 @@ fn draw_status_bar(
             report.known_deviation.as_ref(),
         ) {
             (Some(reason), Some(dev)) => {
-                format!("Fallback: {reason}  |  Known deviation: {dev}")
+                if locale.is_zh() {
+                    format!("回退：{reason}  |  已知差异：{dev}")
+                } else {
+                    format!("Fallback: {reason}  |  Known deviation: {dev}")
+                }
             }
-            (Some(reason), None) => format!("Recent Fallback Diagnostic: {reason}"),
-            (None, Some(dev)) => format!("Known deviation: {dev}"),
-            (None, None) => "No fallback recorded in current session".to_string(),
+            (Some(reason), None) => {
+                format!(
+                    "{}{reason}",
+                    locale.pick("Recent Fallback Diagnostic: ", "最近回退诊断：")
+                )
+            }
+            (None, Some(dev)) => {
+                format!("{}{dev}", locale.pick("Known deviation: ", "已知差异："))
+            }
+            (None, None) => locale
+                .pick(
+                    "No fallback recorded in current session",
+                    "当前会话暂无回退记录",
+                )
+                .to_string(),
         };
         ctx.canvas.text(
             &detail_text,
