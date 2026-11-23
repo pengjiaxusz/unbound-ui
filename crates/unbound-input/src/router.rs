@@ -168,11 +168,18 @@ impl Router {
 
     /// 指针移动。当存在活跃捕获时跳过命中测试——这正是捕获的意义所在。
     ///
+    /// 非捕获移动时将真实命中目标回填到 `PointerEvent::Move.target`，
+    /// 避免下游只看到 `None` 导致悬停状态与路由脱节。
     pub fn pointer_move(&mut self, position: Vec2) -> Option<PointerEvent> {
         self.last_position = Some(position);
-        let event = self.pointer.on_move(position);
+        let mut event = self.pointer.on_move(position);
         if self.pointer.capture().is_none() {
             self.hover = pick(&self.regions, position).map(|r| r.node);
+            if let Some(PointerEvent::Move { target, .. }) = event.as_mut() {
+                if target.is_none() {
+                    *target = self.hover;
+                }
+            }
         }
         self.refresh_cursor();
         event
@@ -647,5 +654,37 @@ mod tests {
             None,
             "cancel must use the refreshed point, not the stale press point"
         );
+    }
+
+    #[test]
+    fn non_captured_pointer_move_reports_hit_target() {
+        let mut r = Router::new(PointerConfig::default());
+        r.set_regions(vec![
+            region(10, Rect::new(0.0, 0.0, 80.0, 28.0)),
+            region(20, Rect::new(0.0, 28.0, 80.0, 28.0)),
+        ]);
+        let ev1 = r.pointer_move(Vec2::new(20.0, 14.0)).unwrap();
+        assert!(matches!(
+            ev1,
+            PointerEvent::Move {
+                target: Some(10),
+                ..
+            }
+        ));
+        assert_eq!(r.hover(), Some(10));
+
+        let ev2 = r.pointer_move(Vec2::new(20.0, 40.0)).unwrap();
+        assert!(matches!(
+            ev2,
+            PointerEvent::Move {
+                target: Some(20),
+                ..
+            }
+        ));
+        assert_eq!(r.hover(), Some(20));
+
+        let ev3 = r.pointer_move(Vec2::new(200.0, 200.0)).unwrap();
+        assert!(matches!(ev3, PointerEvent::Move { target: None, .. }));
+        assert_eq!(r.hover(), None);
     }
 }

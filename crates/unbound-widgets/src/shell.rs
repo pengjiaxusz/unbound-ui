@@ -174,6 +174,8 @@ pub enum ShellIcon {
     DetailsView,
     /// 大图标视图图标。
     LargeIconsView,
+    /// 查看/视图选项（带底线窗口布局）图标。
+    ViewOptions,
 }
 
 /// 跨控件统一图标变体（支持内置 Fluent 几何矢量图标与外部 RGBA8 彩色纹理双通道）。
@@ -1680,26 +1682,52 @@ pub fn emit_shell_icon_primitives(
             );
         }
         ShellIcon::Pin => {
-            // 图钉帽 + 钉身 + 钉尖。
-            primitives.push(surface(
-                Rect::new(c.x - 4.0, c.y - 5.8, 8.0, 1.8),
-                0.9,
-                color,
-                z,
-            ));
-            primitives.push(outlined(
-                Rect::new(c.x - 3.0, c.y - 4.4, 6.0, 5.4),
-                1.2,
-                Token::NONE,
-                color,
-                1.5,
-                0.0,
-                z,
-            ));
+            // Win11 原生 45° 斜向图钉：右上钉帽 + 斜向钉身 + 斜向底座 + 左下斜针。
+            // 1. 右上斜向钉帽
             curve_stroke(
-                [c.x, c.y + 1.0],
-                [c.x, c.y + 6.2],
+                [c.x + 0.8, c.y - 5.6],
+                [c.x + 5.6, c.y - 0.8],
                 1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            // 2. 钉身上侧斜边
+            curve_stroke(
+                [c.x + 1.6, c.y - 4.8],
+                [c.x - 1.4, c.y - 1.8],
+                1.5,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            // 3. 钉身下侧斜边
+            curve_stroke(
+                [c.x + 4.8, c.y - 1.6],
+                [c.x + 1.8, c.y + 1.4],
+                1.5,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            // 4. 斜向底座横杠
+            curve_stroke(
+                [c.x - 3.4, c.y - 2.6],
+                [c.x + 2.6, c.y + 3.4],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            // 5. 左下斜针
+            curve_stroke(
+                [c.x - 0.4, c.y + 0.4],
+                [c.x - 5.6, c.y + 5.6],
+                1.5,
                 color,
                 z,
                 primitives,
@@ -2211,6 +2239,24 @@ pub fn emit_shell_icon_primitives(
                     ));
                 }
             }
+        }
+        ShellIcon::ViewOptions => {
+            // Win11 命令栏「查看」图标：圆角外框矩形 + 底部独立细条。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.2, c.y - 5.4, 12.4, 8.2),
+                1.6,
+                Token::NONE,
+                color,
+                1.5,
+                0.0,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 6.2, c.y + 4.4, 12.4, 1.6),
+                0.8,
+                color,
+                z,
+            ));
         }
     }
 }
@@ -3201,6 +3247,8 @@ mod tests {
             ShellIcon::PreviewPane,
             ShellIcon::DetailsView,
             ShellIcon::LargeIconsView,
+            ShellIcon::ViewOptions,
+            ShellIcon::Pin,
         ];
         let small = Rect::new(0.0, 0.0, 16.0, 16.0);
         let large = Rect::new(10.0, 6.0, 24.0, 24.0);

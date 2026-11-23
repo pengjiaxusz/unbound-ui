@@ -316,7 +316,7 @@ pub struct ManagedExternalTextureDesc {
     pub width: u32,
     /// 纹理高度（像素，必须大于 0）。
     pub height: u32,
-    /// 为 true 时按 `R8G8B8A8_SRGB` 创建；否则按线性 `R8G8B8A8_UNORM` 创建。
+    /// 标记源像素语义是否为 sRGB（底层统一按 `R8G8B8A8_UNORM` 创建，由片元着色器统一执行单次 `srgb_to_linear` 解码）。
     pub srgb: bool,
 }
 
@@ -373,13 +373,14 @@ impl ManagedExternalTextureDesc {
     }
 
     /// 返回该纹理对应的 Vulkan 像素格式。
+    ///
+    /// 外部 RGBA8 纹理统一采用 `R8G8B8A8_UNORM`（与内部 RGBA 图集页保持一致），
+    /// 由 `uber.frag` 的 `PRIM_IMAGE` 分支统一执行单次 `srgb_to_linear` 解码，
+    /// 避免硬件 sRGB 采样与着色器重复解码叠加造成双重压暗。
     #[must_use]
     pub const fn vk_format(self) -> vk::Format {
-        if self.srgb {
-            vk::Format::R8G8B8A8_SRGB
-        } else {
-            vk::Format::R8G8B8A8_UNORM
-        }
+        let _ = self.srgb;
+        vk::Format::R8G8B8A8_UNORM
     }
 }
 
@@ -4321,7 +4322,8 @@ mod tests {
         assert_eq!(linear.validate_rgba(&[0u8; 48]).unwrap(), 48);
 
         let srgb = ManagedExternalTextureDesc::new(2, 2, true);
-        assert_eq!(srgb.vk_format(), vk::Format::R8G8B8A8_SRGB);
+        // 统一使用 R8G8B8A8_UNORM，由片元着色器统一执行单次 srgb_to_linear 解码。
+        assert_eq!(srgb.vk_format(), vk::Format::R8G8B8A8_UNORM);
         assert_eq!(srgb.expected_byte_len().unwrap(), 16);
 
         // 0 宽高必须返回 InvalidArgument。

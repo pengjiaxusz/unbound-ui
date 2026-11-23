@@ -271,6 +271,12 @@ impl ThemeSet {
                 ] {
                     set_tok(&mut dark_entries, token, win11_dark.color(token));
                 }
+                // 补齐暗色导航栏底色，避免回退至偏蓝紫的 `#16161B`，与 Win11 暗色 `#191919` 对齐。
+                set_tok(
+                    &mut dark_entries,
+                    Token::NAV_BG,
+                    win11_dark.color(Token::WORKSPACE_SURFACE),
+                );
                 let win11_light = crate::win11::light();
                 for token in [
                     Token::NAV_SELECTED,
@@ -422,6 +428,17 @@ mod tests {
             assert_ne!(
                 dark.color(Token::NAV_SELECTED),
                 Color::from_srgb8(34, 52, 84, 255)
+            );
+            // 确保 AssetManager 暗色导航栏底色对齐 Win11 暗色 `#191919`（不再回退至 `#16161B`）
+            assert_eq!(
+                dark.color(Token::NAV_BG),
+                Color::from_srgb8(25, 25, 25, 255),
+                "AssetManager dark NAV_BG must align with #191919 for accent {accent:?}"
+            );
+            assert_eq!(
+                dark.color(Token::NAV_BG),
+                win11_dark.color(Token::WORKSPACE_SURFACE),
+                "AssetManager dark NAV_BG must match win11::dark() WORKSPACE_SURFACE for accent {accent:?}"
             );
         }
 

@@ -3657,14 +3657,17 @@ impl<'a> ViewBuilder<'a> {
         self.container(key, desc, build)
     }
 
-    /// 声明弹性填充剩余宽度的纵向分栏（`flex_grow = 1.0`，最小宽度 `0`）。
+    /// 声明弹性填充剩余空间的纵向分栏（`flex_grow = 1.0`，最小宽高 `0`）。
     ///
     /// 与 [`Self::col_stretch`] 的区别：`col_stretch` 直接声明 `width: 100%`，
     /// 只适合独占整行的列。当左列要与右侧操作区共享同一个 `row` / `row_between` 时
-    /// 必须改用本方法，否则左列会吃掉整行宽度，把右侧按钮挤出可视区。
+    /// 必须改用本方法，否则左列会吃掉整行宽度，把右侧按钮挤出可视区；同时默认补齐
+    /// `min_height = Dim::px(0.0)`，防止 Taffy `min-height: auto` 撑破纵向父容器
+    /// 导致底部状态栏等兄弟节点被挤出视口。
     pub fn col_grow(&mut self, key: u64, gap: f32, build: impl FnOnce(&mut Self)) -> NodeId {
         let mut desc = RawNodeDesc::container().column().gap(gap);
         desc.min_width = Dim::px(0.0);
+        desc.min_height = Dim::px(0.0);
         desc.flex_grow = 1.0;
         desc.flex_basis = Dim::px(0.0);
         self.container(key, desc, build)
@@ -4860,10 +4863,12 @@ impl<A: Application> AppRuntime<A> {
     pub fn pointer_move(&mut self, pos: Vec2) -> DirtyFlags {
         self.ctx.pointer = pos;
         let mut flags = DirtyFlags::PAINT;
-        if let Some(event) = self.router.pointer_move(pos) {
+        let event = self.router.pointer_move(pos);
+        // 先同步路由悬停态到 `ctx`，确保 `reduce_pointer` 与后续渲染立即可见当前帧悬停目标。
+        self.sync_router_context();
+        if let Some(event) = event {
             flags = flags.merge(self.reduce_pointer(event));
         }
-        self.sync_router_context();
         self.mark(flags);
         flags
     }
@@ -5543,6 +5548,8 @@ impl<A: Application> AppRuntime<A> {
             .into_iter()
             .collect();
         self.router.set_regions(regions);
+        // 帧末命中区域更新后立即同步路由悬停态，避免 `ctx.hovered` 与 `router.hover()` 出现 1 帧相位差闪烁。
+        self.sync_router_context();
         self.focus
             .set_order(self.collector.focus_order.iter().copied());
         self.focus.clear_groups();
@@ -7401,7 +7408,7 @@ impl<A: Application> AppRuntime<A> {
                 target,
             } => self.dispatch(AppEvent::PointerMove {
                 pos: position,
-                hovered: target,
+                hovered: target.or_else(|| self.router.hover()),
             }),
             PointerEvent::DragStart { target, position } => self.dispatch(AppEvent::DragStart {
                 node: target,
@@ -9775,5 +9782,172 @@ mod tests {
         rt.pointer_up(danger_center, PointerButton::Left);
         assert_eq!(rt.application().activated_log, vec![0, 4]);
         assert_eq!(rt.context().take_context_menu_activated(MENU_KEY), None);
+    }
+
+    #[test]
+    fn tree_view_hover_on_other_row_after_selection_stays_stable_across_frames() {
+        use unbound_gpu::data::PrimType;
+        use unbound_theme::Token;
+        use unbound_widgets::{TreeViewDensity, TreeViewDesc, TreeViewState};
+        use unbound_world::TreeRow;
+
+        struct TreeHoverApp {
+            tree_state: RefCell<TreeViewState>,
+            move_events: Vec<(Option<u64>, Option<u64>)>,
+        }
+        impl Application for TreeHoverApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::PointerMove { hovered, .. } => {
+                        self.move_events.push((hovered, ctx.hovered));
+                        EventOutcome::new(DirtyFlags::PAINT)
+                    }
+                    AppEvent::Click { node, .. } => {
+                        if (1001..=1004).contains(&node) {
+                            self.tree_state.borrow_mut().select(node, false);
+                            return EventOutcome::new(DirtyFlags::ALL);
+                        }
+                        EventOutcome::new(DirtyFlags::NONE)
+                    }
+                    _ => EventOutcome::new(DirtyFlags::NONE),
+                }
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.tree_view(
+                    50,
+                    TreeViewDesc::new(Rect::new(0.0, 0.0, 220.0, 140.0))
+                        .with_density(TreeViewDensity::Compact)
+                        .with_navigation_pane(true),
+                    &mut self.tree_state.borrow_mut(),
+                );
+            }
+        }
+
+        let mut tree = TreeViewState::new_with_density(TreeViewDensity::Compact);
+        let roots: Vec<TreeRow> = (1001..=1004).map(|id| TreeRow::new(id, 0, false)).collect();
+        tree.rebuild(&roots, |_| Vec::new());
+        for (i, id) in (1001u64..=1004).enumerate() {
+            tree.set_row_label(id, format!("Folder {i}"));
+        }
+
+        let mut rt = AppRuntime::new(
+            TreeHoverApp {
+                tree_state: RefCell::new(tree),
+                move_events: Vec::new(),
+            },
+            Vec2::new(400.0, 300.0),
+        );
+        let _ = rt.frame(0.0);
+
+        let tree_rect = rt.widget_rect(50).expect("tree view laid out");
+        let row_h = TreeViewDensity::Compact.row_height();
+        let row0_pos = Vec2::new(tree_rect.origin.x + 80.0, tree_rect.origin.y + row_h * 0.5);
+        let row1_pos = Vec2::new(tree_rect.origin.x + 80.0, tree_rect.origin.y + row_h * 1.5);
+
+        // 1. 点击选中第 0 行（1001）。
+        rt.pointer_move(row0_pos);
+        rt.pointer_down(row0_pos, PointerButton::Left);
+        rt.pointer_up(row0_pos, PointerButton::Left);
+        let _ = rt.frame(0.016);
+        assert!(rt
+            .application()
+            .tree_state
+            .borrow()
+            .selected
+            .contains(&1001));
+
+        // 2. 将指针移动到第 1 行（1002），校验事件与上下文即时同步且无滞后。
+        rt.application_mut().move_events.clear();
+        rt.pointer_move(row1_pos);
+        assert_eq!(rt.context().hovered, Some(1002));
+        assert_eq!(
+            rt.application().move_events,
+            vec![(Some(1002), Some(1002))],
+            "PointerMove must carry hit target and sync ctx.hovered before reduce"
+        );
+
+        let row_bg_fill = |rt: &AppRuntime<TreeHoverApp>, row_id: u64| -> Option<u32> {
+            let scene = rt.scene();
+            let (start, end) = scene.node_spans[&row_id];
+            scene.primitives[start as usize..end as usize]
+                .iter()
+                .find(|p| p.prim_type() == PrimType::RoundedRect && p.size[0] > 100.0)
+                .map(|p| p.fill_token_or_uv)
+        };
+
+        // 3. 连续 6 帧（含静止帧与同行业内微移帧）验证 ctx.hovered 与选中/悬停高亮全程稳定无闪烁。
+        for step in 0..6u32 {
+            if step % 2 == 1 {
+                rt.pointer_move(Vec2::new(row1_pos.x + step as f32, row1_pos.y));
+            }
+            let _ = rt.frame(0.016 * (step + 2) as f32);
+            assert_eq!(
+                rt.context().hovered,
+                Some(1002),
+                "frame {step}: ctx.hovered must remain on hovered row 1002"
+            );
+            assert_eq!(
+                row_bg_fill(&rt, 1001),
+                Some(u32::from(Token::NAV_SELECTED.raw())),
+                "frame {step}: selected row 1001 must keep NAV_SELECTED"
+            );
+            assert_eq!(
+                row_bg_fill(&rt, 1002),
+                Some(u32::from(Token::NAV_HOVER.raw())),
+                "frame {step}: hovered row 1002 must keep NAV_HOVER without flickering"
+            );
+            assert_eq!(
+                row_bg_fill(&rt, 1003),
+                Some(u32::from(Token::NONE.raw())),
+                "frame {step}: idle row 1003 must remain transparent"
+            );
+        }
+    }
+
+    #[test]
+    fn col_grow_sets_zero_min_height_so_bottom_bar_stays_in_viewport() {
+        struct ColGrowApp;
+        impl Application for ColGrowApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                let root_desc = RawNodeDesc::container()
+                    .column()
+                    .width(Dim::percent(100.0))
+                    .height(Dim::percent(100.0));
+                v.container(1, root_desc, |root| {
+                    root.col_grow(2, 0.0, |middle| {
+                        // 超高子项模拟长内容列表，验证不会撑破父容器把底部状态栏挤出视口。
+                        middle.button(
+                            3,
+                            ButtonDesc::new(Rect::new(0.0, 0.0, 200.0, 900.0), "Tall"),
+                        );
+                    });
+                    root.button(
+                        4,
+                        ButtonDesc::new(Rect::new(0.0, 0.0, 200.0, 28.0), "Status"),
+                    );
+                });
+            }
+        }
+
+        let mut rt = AppRuntime::new(ColGrowApp, Vec2::new(400.0, 300.0));
+        let _ = rt.frame(0.0);
+        let status_rect = rt.widget_rect(4).expect("status bar laid out");
+        assert!(
+            status_rect.max().y <= 300.5,
+            "bottom bar must stay within 300px viewport, got {:?}",
+            status_rect
+        );
     }
 }
