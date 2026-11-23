@@ -579,7 +579,7 @@ impl ShellTree {
                 knob_rows.push(KnobRow {
                     index: row_index,
                     row: rect(row.row),
-                    label: row.label.map(&rect),
+                    label: row.label.map(rect),
                     control: rect(row.control),
                 });
             }
@@ -587,10 +587,10 @@ impl ShellTree {
                 index,
                 rect: rect(nodes.card),
                 stage: rect(nodes.stage),
-                knobs: nodes.knobs.map_or_else(Rect::default, &rect),
+                knobs: nodes.knobs.map_or_else(Rect::default, rect),
                 knob_rows,
                 code_bar: rect(nodes.code_bar),
-                code_panel: nodes.code_panel.map(&rect),
+                code_panel: nodes.code_panel.map(rect),
             });
         }
         PageLayout {
