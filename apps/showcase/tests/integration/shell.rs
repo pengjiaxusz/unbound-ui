@@ -2459,8 +2459,8 @@ fn every_shell_i18n_key_resolves_in_both_locales() {
     use unbound_app::Locale;
 
     let sources = [
-        include_str!("../src/shell.rs"),
-        include_str!("../src/pages/home.rs"),
+        include_str!("../../src/shell.rs"),
+        include_str!("../../src/pages/home.rs"),
     ];
     let mut keys: BTreeSet<&str> = BTreeSet::new();
     for source in sources {

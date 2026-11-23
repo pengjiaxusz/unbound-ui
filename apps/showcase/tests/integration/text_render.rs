@@ -388,12 +388,12 @@ fn table_driven_rules_comprehensive_coverage() {
     }
 }
 
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use super::ENV_MUTEX;
 
 /// 验收条件 1、2：像素组内 DirectWrite 与 Swash 可操作切换，状态栏同步反映实际生效后端。
 #[test]
 fn text_render_backend_interactive_toggle_and_report_sync() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let mut app = app();
     app.navigate(PageId::TextRender);
     app.rebuild(VIEWPORT);
@@ -649,7 +649,7 @@ fn text_render_phase_mode_runtime_switching_and_status_sync() {
 #[cfg(windows)]
 #[test]
 fn text_render_init_failure_fallback_and_counter_persistence() {
-    let _guard = ENV_MUTEX.lock().unwrap();
+    let _guard = ENV_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
     let mut app = app();
     app.navigate(PageId::TextRender);
     app.rebuild(VIEWPORT);
@@ -668,14 +668,21 @@ fn text_render_init_failure_fallback_and_counter_persistence() {
     );
     let initial_fallback_count = app.state.text_render.report.fallback_count;
 
-    // 注入 DirectWrite 强制初始化失败环境
+    // 通过 RAII 守卫注入并确保退出时清理 DirectWrite 强制初始化失败环境，避免 panic 污染同进程测试
+    struct ForceDwInitFailGuard;
+    impl Drop for ForceDwInitFailGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL");
+        }
+    }
     std::env::set_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL", "1");
+    let _dw_fail_guard = ForceDwInitFailGuard;
 
     // 点击切换至 DirectWrite
     app.click_node(dw_btn_node);
 
-    // 清理环境变量
-    std::env::remove_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL");
+    // 提前释放守卫以清理环境变量
+    drop(_dw_fail_guard);
 
     // 验证实际生效后端回退到 Cosmic
     assert_eq!(
