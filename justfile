@@ -184,9 +184,10 @@ test-fast *ARGS:
     @$raw = '{{ARGS}}'; $hasPkg = $raw -match '(^|\s)(-p|--package)(\s|=|$)'; $needGuest = (-not $hasPkg) -or ($raw -match '(^|\s|=)app-guest(\s|$)'); if ($needGuest) { bque run -- cargo build -p app-guest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; $hasNextest = [bool](Get-Command cargo-nextest -ErrorAction SilentlyContinue); if ($hasNextest) { if ($hasPkg) { bque run -- cargo nextest run --profile fast --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo nextest run --profile fast --workspace --all-features --lib --bins --tests {{ARGS}} } } else { if ($hasPkg) { bque run -- cargo test --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo test --workspace --all-features --lib --bins --tests {{ARGS}} } }
 [unix]
 test-fast *ARGS:
-    @has_pkg=0; need_guest=0; \
+    @set -e; has_pkg=0; need_guest=0; \
     for arg in {{ARGS}}; do \
         case "$arg" in \
+            -p=app-guest|--package=app-guest) has_pkg=1; need_guest=1 ;; \
             -p|--package|-p=*|--package=*) has_pkg=1 ;; \
             app-guest) need_guest=1 ;; \
         esac; \
@@ -216,7 +217,7 @@ test *ARGS:
 test *ARGS:
     @cargo build -p app-guest
     @if command -v cargo-nextest >/dev/null 2>&1; then \
-        cargo nextest run --workspace --all-features {{ARGS}}; \
+        cargo nextest run --workspace --all-features {{ARGS}} && \
         cargo test --workspace --all-features --doc {{ARGS}}; \
     else \
         cargo test --workspace --all-features {{ARGS}}; \
