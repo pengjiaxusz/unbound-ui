@@ -1241,7 +1241,7 @@ mod win32 {
                 let xbutton = ((wparam.0 >> 16) & 0xFFFF) as u16;
                 data.events.borrow_mut().push(PlatformEvent::MouseInput {
                     state,
-                    button: MouseButton::Other(xbutton),
+                    button: MouseButton::from_win32_xbutton(xbutton),
                 });
                 LRESULT(1)
             }

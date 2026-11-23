@@ -678,7 +678,8 @@ fn pointer_button(button: MouseButton) -> Option<PointerButton> {
         MouseButton::Left => Some(PointerButton::Left),
         MouseButton::Right => Some(PointerButton::Right),
         MouseButton::Middle => Some(PointerButton::Middle),
-        // 前进 / 后退属于导航操作，并非路由器管理的指针状态。
+        MouseButton::Back | MouseButton::Other(1) => Some(PointerButton::Back),
+        MouseButton::Forward | MouseButton::Other(2) => Some(PointerButton::Forward),
         MouseButton::Other(_) => None,
     }
 }

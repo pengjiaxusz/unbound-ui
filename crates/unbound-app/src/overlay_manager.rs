@@ -3,7 +3,7 @@
 //! 封装 [`OverlayStack`]，协调 [`FocusManager`] 焦点陷阱、点击外部轻关闭、
 //! `Escape` 关闭以及将焦点归还至触发元素。
 
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_input::{FocusCause, FocusManager};
 use unbound_math::Vec2;
 use unbound_widgets::overlay::{OverlayEntry, OverlayStack};
@@ -118,15 +118,26 @@ impl OverlayManager {
 
     /// 在单帧视图声明结束后同步声明式浮层状态：
     /// 1. 清理本帧不再声明的浮层的已关闭标记，便于下次重新打开；
-    /// 2. 裁剪锚点已不在本帧活跃节点集合中的浮层，并同步焦点陷阱。
+    /// 2. 裁剪锚点已不在本帧活跃节点集合中的浮层，并同步焦点陷阱；
+    ///    若锚点为控件生成的子热区键（例如标签页或树节点），会先经 `hit_owners`
+    ///    折算为其宿主控件键，再校验宿主键是否存活于 `seen_keys`。
     pub fn sync_declared_overlays(
         &mut self,
         declared: &FxHashSet<u64>,
         seen_keys: &FxHashSet<u64>,
+        hit_owners: &FxHashMap<u64, u64>,
         focus: &mut FocusManager,
     ) -> usize {
         self.dismissed.retain(|node| declared.contains(node));
-        self.prune_anchors(|anchor| seen_keys.contains(&anchor), focus)
+        self.prune_anchors(
+            |anchor| {
+                seen_keys.contains(&anchor)
+                    || hit_owners
+                        .get(&anchor)
+                        .is_some_and(|owner| seen_keys.contains(owner))
+            },
+            focus,
+        )
     }
 
     fn restore_and_sync(&mut self, closed: u64, focus: &mut FocusManager) {
@@ -139,5 +150,43 @@ impl OverlayManager {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_math::Rect;
+
+    #[test]
+    fn sync_declared_overlays_resolves_sub_hit_anchor_via_hit_owners() {
+        const HOST_TABS_KEY: u64 = 1000;
+        const SUB_HIT_TAB_KEY: u64 = 1000 ^ 0x5441_4201;
+        const MENU_KEY: u64 = 2000;
+
+        let mut manager = OverlayManager::new();
+        let mut focus = FocusManager::new();
+        manager.open(
+            OverlayEntry::menu(MENU_KEY, SUB_HIT_TAB_KEY, Rect::new(20.0, 40.0, 180.0, 120.0)),
+            &mut focus,
+        );
+
+        let mut declared = FxHashSet::default();
+        declared.insert(MENU_KEY);
+        let mut seen_keys = FxHashSet::default();
+        seen_keys.insert(HOST_TABS_KEY);
+        let mut hit_owners = FxHashMap::default();
+        hit_owners.insert(SUB_HIT_TAB_KEY, HOST_TABS_KEY);
+
+        // 子热区键未直接出现在 seen_keys，但宿主键存活时不得被裁剪。
+        let pruned = manager.sync_declared_overlays(&declared, &seen_keys, &hit_owners, &mut focus);
+        assert_eq!(pruned, 0);
+        assert!(manager.stack().contains(MENU_KEY));
+
+        // 当宿主控件从本帧移除后，对应浮层应被正常裁剪。
+        seen_keys.remove(&HOST_TABS_KEY);
+        let pruned = manager.sync_declared_overlays(&declared, &seen_keys, &hit_owners, &mut focus);
+        assert_eq!(pruned, 1);
+        assert!(!manager.stack().contains(MENU_KEY));
     }
 }

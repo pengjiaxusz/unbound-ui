@@ -345,7 +345,23 @@ pub enum MouseButton {
     Left,
     Right,
     Middle,
+    /// 鼠标后退侧键（Win32 `XBUTTON1`）。
+    Back,
+    /// 鼠标前进侧键（Win32 `XBUTTON2`）。
+    Forward,
     Other(u16),
+}
+
+impl MouseButton {
+    /// 将 Win32 `WM_XBUTTONDOWN` / `WM_XBUTTONUP` 的高位 `xbutton` 编号映射为 [`MouseButton`]。
+    #[must_use]
+    pub const fn from_win32_xbutton(xbutton: u16) -> Self {
+        match xbutton {
+            1 => Self::Back,
+            2 => Self::Forward,
+            other => Self::Other(other),
+        }
+    }
 }
 
 /// 键盘按键，扁平化为引擎关心的少数几类。
@@ -1164,5 +1180,29 @@ mod tests {
         assert!(!state.minimized);
         assert!(!state.occlusion.is_minimized());
         assert!(state.pacer.should_render(t_res));
+    }
+
+    #[test]
+    fn win32_xbutton_maps_to_back_and_forward_and_passes_through_apply() {
+        assert_eq!(MouseButton::from_win32_xbutton(1), MouseButton::Back);
+        assert_eq!(MouseButton::from_win32_xbutton(2), MouseButton::Forward);
+        assert_eq!(MouseButton::from_win32_xbutton(3), MouseButton::Other(3));
+
+        let mut state = PlatformState::new(
+            &WindowConfig::default(),
+            Extent::new(800, 600),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        let t = Instant::now();
+        let down = PlatformEvent::MouseInput {
+            state: ButtonState::Pressed,
+            button: MouseButton::Back,
+        };
+        let up = PlatformEvent::MouseInput {
+            state: ButtonState::Released,
+            button: MouseButton::Forward,
+        };
+        assert_eq!(apply(&mut state, &down, t), vec![down]);
+        assert_eq!(apply(&mut state, &up, t), vec![up]);
     }
 }

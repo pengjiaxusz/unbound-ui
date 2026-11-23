@@ -146,6 +146,8 @@ fn translate_pointer_button(button: MouseButton) -> Option<PointerButton> {
         MouseButton::Left => Some(PointerButton::Left),
         MouseButton::Right => Some(PointerButton::Right),
         MouseButton::Middle => Some(PointerButton::Middle),
+        MouseButton::Back | MouseButton::Other(1) => Some(PointerButton::Back),
+        MouseButton::Forward | MouseButton::Other(2) => Some(PointerButton::Forward),
         MouseButton::Other(_) => None,
     }
 }
