@@ -2,8 +2,20 @@
 //!
 //! 工具提示是唯一**绝不能**接收输入的浮层：它出现在指针下方，
 //! 若设置命中区域反而会窃取维持其显示的悬停事件。因此 [`emit_tooltip`] 返回的
-//! `WidgetOutput` 中 `hit: None`，而 [`TooltipState`] 持有延迟计时，
+//! `WidgetOutput` 中 `hit: None` 且 `focusable: false`，而 [`TooltipState`] 持有延迟计时，
 //! 使指针扫过工具栏时不会为每个按钮都闪烁气泡。
+//!
+//! 默认视觉对齐 Win11 Fluent ToolTip 与 `parity` 基线：
+//! - `4.0px` 圆角（[`TOOLTIP_RADIUS`]）
+//! - `Token::OVERLAY_BG` 填充与 `1.0px Token::CARD_BORDER` 描边（[`TOOLTIP_BORDER_WIDTH`]）
+//! - 轻量阴影（[`TOOLTIP_SHADOW`]）
+//! - `12.0px` 左对齐自动换行（[`TOOLTIP_FONT_SIZE`] / [`TOOLTIP_MAX_WIDTH`]）
+//! - WinUI 3 非对称内边距 `9, 6, 9, 8`（左/上/右/下，[`TOOLTIP_PADDING`]）
+//!
+//! 除 [`TooltipDesc::new`] / [`TooltipDesc::labeled`] 纯文本构造外，
+//! 本模块遵循 ADR-0030 提供纯展示富内容容器排版（[`TooltipDesc::rich`]、
+//! [`TooltipDesc::layout`]）与组合发射（[`TooltipDesc::render_with_content`]），
+//! 便于在气泡内自由组合图标、标题、正文、`Kbd` 快捷键徽章等任意展示元素。
 //!
 //! 位置求解统一经由 [`place_tooltip_in_window`]：
 //! - 优先采用 `placement` 指定方向；
@@ -20,16 +32,124 @@ use crate::overlay::{place_tooltip_in_window, OverlayEntry, PlacedPopup, Placeme
 use crate::primitive::{instance, surface};
 use crate::{ControlState, WidgetDesc, WidgetOutput};
 
-/// 工具提示出现前指针必须停留的时长。
+/// 工具提示出现前指针必须停留的时长（毫秒）。
 pub const TOOLTIP_DELAY_MS: f32 = 400.0;
 /// 自动换行后工具提示的最大宽度。对齐 WinUI `ToolTipMaxWidth = 320`。
 pub const TOOLTIP_MAX_WIDTH: f32 = 320.0;
-const TOOLTIP_SHADOW: f32 = 14.0;
-/// 气泡圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
-const TOOLTIP_RADIUS: f32 = 4.0;
-/// 气泡内边距。WinUI `ToolTipBorderPadding = 9,6,9,8`；`Vec2` 只能表达对称的
-/// 水平/垂直值，这里取水平 9、垂直上边 6（下边多的 2px 由文字行高吸收）。
-const TOOLTIP_PADDING: Vec2 = Vec2::new(9.0, 6.0);
+/// 工具提示轻量阴影模糊半径（逻辑像素），轻于 `Popover`（24px）与 `HoverCard`（22px）。
+pub const TOOLTIP_SHADOW: f32 = 8.0;
+/// 气泡圆角半径。对齐 WinUI `ControlCornerRadius = 4` 与 `parity` 基线。
+pub const TOOLTIP_RADIUS: f32 = 4.0;
+/// 气泡外描边宽度（逻辑像素）。对齐 WinUI 3 `SurfaceStroke`（1px 微描边）。
+pub const TOOLTIP_BORDER_WIDTH: f32 = 1.0;
+/// 工具提示默认字号（逻辑像素）。对齐 WinUI 3 `ToolTip` 12px 正文基线。
+pub const TOOLTIP_FONT_SIZE: f32 = 12.0;
+/// 工具提示默认单行行高（逻辑像素）。对齐 `parity` 基线的 16px 行框。
+pub const TOOLTIP_LINE_HEIGHT: f32 = 16.0;
+/// WinUI 3 默认非对称内边距（左 9、上 6、右 9、下 8）。
+pub const TOOLTIP_PADDING: TooltipPadding = TooltipPadding::WINUI_DEFAULT;
+
+/// 工具提示四边内边距（逻辑像素，顺序为左/上/右/下）。
+///
+/// 对齐 WinUI 3 `ToolTipBorderPadding = 9, 6, 9, 8` 非对称基线，
+/// 同时实现 `From<Vec2>` 以兼容既有对称内边距调用方。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct TooltipPadding {
+    /// 左内边距（逻辑像素）。
+    pub left: f32,
+    /// 上内边距（逻辑像素）。
+    pub top: f32,
+    /// 右内边距（逻辑像素）。
+    pub right: f32,
+    /// 下内边距（逻辑像素）。
+    pub bottom: f32,
+}
+
+impl TooltipPadding {
+    /// WinUI 3 官方默认内边距：`9, 6, 9, 8`（左/上/右/下）。
+    pub const WINUI_DEFAULT: Self = Self {
+        left: 9.0,
+        top: 6.0,
+        right: 9.0,
+        bottom: 8.0,
+    };
+
+    /// 按左/上/右/下四边构造内边距。
+    #[must_use]
+    pub const fn new(left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// 构造水平/垂直对称内边距。
+    #[must_use]
+    pub const fn symmetric(horizontal: f32, vertical: f32) -> Self {
+        Self {
+            left: horizontal,
+            top: vertical,
+            right: horizontal,
+            bottom: vertical,
+        }
+    }
+
+    /// 水平方向总内边距（`left + right`）。
+    #[must_use]
+    pub fn horizontal(self) -> f32 {
+        self.left + self.right
+    }
+
+    /// 垂直方向总内边距（`top + bottom`）。
+    #[must_use]
+    pub fn vertical(self) -> f32 {
+        self.top + self.bottom
+    }
+
+    /// 将四边负值钳制为 `0.0`。
+    #[must_use]
+    pub fn sanitized(self) -> Self {
+        Self {
+            left: self.left.max(0.0),
+            top: self.top.max(0.0),
+            right: self.right.max(0.0),
+            bottom: self.bottom.max(0.0),
+        }
+    }
+}
+
+impl Default for TooltipPadding {
+    fn default() -> Self {
+        Self::WINUI_DEFAULT
+    }
+}
+
+impl From<Vec2> for TooltipPadding {
+    fn from(v: Vec2) -> Self {
+        Self::symmetric(v.x, v.y).sanitized()
+    }
+}
+
+impl From<[f32; 4]> for TooltipPadding {
+    fn from(edges: [f32; 4]) -> Self {
+        Self::new(edges[0], edges[1], edges[2], edges[3]).sanitized()
+    }
+}
+
+/// 富内容工具提示气泡的完整布局结果（供 `Canvas` 或自定义绘制使用）。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct TooltipLayout {
+    /// 气泡外框的最终窗口矩形（已自动翻转并钳制在视口安全区内）。
+    pub outer_rect: Rect,
+    /// 扣除四边内边距后的内容区域矩形（供内部组合图标、标题、正文、`Kbd` 等元素）。
+    pub content_rect: Rect,
+    /// 实际选定的放置方向（发生防溢出翻转后可能与首选方向不同）。
+    pub chosen_placement: Placement,
+    /// 气泡朝向锚点的箭头尖端坐标。
+    pub arrow_tip: Vec2,
+}
 
 /// 绝对悬停截止时间戳（毫秒）。
 ///
@@ -135,7 +255,7 @@ pub struct TooltipDesc {
     pub placement: Placement,
     /// 显示前的延迟时长（毫秒）。
     pub delay_ms: f32,
-    /// [`Self::with_wrapped_text`] 使用的最大行宽。
+    /// [`Self::with_wrapped_text`] 与自动换行排版使用的最大气泡宽度。
     pub max_width: f32,
     /// 圆角半径。
     pub radius: f32,
@@ -147,8 +267,8 @@ pub struct TooltipDesc {
     pub gap: f32,
     /// 气泡与窗口边缘保持的最小安全内边距（逻辑像素）。
     pub viewport_margin: f32,
-    /// 气泡内部水平与垂直内边距（逻辑像素）。
-    pub padding: Vec2,
+    /// 气泡内部四边非对称内边距（逻辑像素，默认 WinUI 3 `9, 6, 9, 8`）。
+    pub padding: TooltipPadding,
 }
 
 impl TooltipDesc {
@@ -175,15 +295,16 @@ impl TooltipDesc {
     pub fn labeled(anchor: Rect, viewport: Rect, label: impl Into<String>) -> Self {
         let label = label.into();
         let padding = TOOLTIP_PADDING;
-        let lines = wrap_text(&label, TOOLTIP_MAX_WIDTH - padding.x * 2.0, 7.2);
+        let max_content_w = (TOOLTIP_MAX_WIDTH - padding.horizontal()).max(1.0);
+        let lines = wrap_text(&label, max_content_w, 7.2);
         let line_count = lines.len().max(1) as f32;
         let widest = lines
             .iter()
             .map(|l| l.chars().count() as f32 * 7.2)
             .fold(40.0_f32, f32::max);
         let size = Vec2::new(
-            (widest + padding.x * 2.0).min(TOOLTIP_MAX_WIDTH),
-            line_count * 18.0 + padding.y * 2.0,
+            (widest + padding.horizontal()).min(TOOLTIP_MAX_WIDTH),
+            line_count * TOOLTIP_LINE_HEIGHT + padding.vertical(),
         );
         Self {
             anchor,
@@ -201,7 +322,32 @@ impl TooltipDesc {
         }
     }
 
-    /// 设置工具提示文本标签。
+    /// 按自定义富内容区域尺寸 `content_size` 创建工具提示描述符（ADR-0030）。
+    ///
+    /// 自动叠加 WinUI 3 非对称内边距（[`TOOLTIP_PADDING`]）并按 [`TOOLTIP_MAX_WIDTH`] 限制外框宽度，
+    /// 同时启用默认安全边距与窗口内自动翻转。若需超过 `320px` 的自定义宽度，
+    /// 可继续链式调用 [`Self::with_max_width`] 与 [`Self::with_content_size`]。
+    #[must_use]
+    pub fn rich(anchor: Rect, viewport: Rect, content_size: Vec2) -> Self {
+        let mut desc = Self {
+            anchor,
+            viewport,
+            size: Vec2::ZERO,
+            placement: Placement::Top,
+            delay_ms: TOOLTIP_DELAY_MS,
+            max_width: TOOLTIP_MAX_WIDTH,
+            radius: TOOLTIP_RADIUS,
+            z: 940,
+            label: String::new(),
+            gap: 6.0,
+            viewport_margin: crate::overlay::TOOLTIP_VIEWPORT_MARGIN,
+            padding: TOOLTIP_PADDING,
+        };
+        desc.size = desc.outer_size_for_content(content_size);
+        desc
+    }
+
+    /// 设置工具提示文本标签（纯文本场景下用于绘制，富内容场景下用于无障碍语义名称）。
     #[must_use]
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
@@ -222,7 +368,7 @@ impl TooltipDesc {
         self
     }
 
-    /// 设置最大换行宽度。
+    /// 设置最大换行与容器宽度。
     #[must_use]
     pub fn with_max_width(mut self, max_width: f32) -> Self {
         self.max_width = max_width.max(40.0);
@@ -243,11 +389,44 @@ impl TooltipDesc {
         self
     }
 
-    /// 设置气泡内边距。
+    /// 设置气泡内边距（支持 [`TooltipPadding`]、`Vec2` 对称值或 `[left, top, right, bottom]`）。
     #[must_use]
-    pub fn with_padding(mut self, padding: Vec2) -> Self {
-        self.padding = Vec2::new(padding.x.max(0.0), padding.y.max(0.0));
+    pub fn with_padding(mut self, padding: impl Into<TooltipPadding>) -> Self {
+        self.padding = padding.into().sanitized();
         self
+    }
+
+    /// 显式设置左/上/右/下四边非对称内边距。
+    #[must_use]
+    pub fn with_asymmetric_padding(mut self, left: f32, top: f32, right: f32, bottom: f32) -> Self {
+        self.padding = TooltipPadding::new(left, top, right, bottom).sanitized();
+        self
+    }
+
+    /// 按给定的内部富内容尺寸 `content_size` 重新计算气泡外框尺寸。
+    ///
+    /// 宽度会在叠加水平内边距后受 [`Self::max_width`] 约束，高度等于内容高度叠加垂直内边距。
+    #[must_use]
+    pub fn with_content_size(mut self, content_size: Vec2) -> Self {
+        self.size = self.outer_size_for_content(content_size);
+        self
+    }
+
+    /// 在当前 `padding` 与 `max_width` 约束下，由内容区域尺寸推导气泡外框尺寸。
+    #[must_use]
+    pub fn outer_size_for_content(&self, content_size: Vec2) -> Vec2 {
+        let min_outer_w = self.padding.horizontal();
+        let max_outer_w = self.max_width.max(min_outer_w);
+        Vec2::new(
+            (content_size.x.max(0.0) + self.padding.horizontal()).min(max_outer_w),
+            content_size.y.max(0.0) + self.padding.vertical(),
+        )
+    }
+
+    /// 当前气泡扣除水平内边距后的最大内容宽度。
+    #[must_use]
+    pub fn max_content_width(&self) -> f32 {
+        (self.max_width - self.padding.horizontal()).max(1.0)
     }
 
     /// 测量自动换行的多行工具提示。
@@ -285,6 +464,25 @@ impl TooltipDesc {
         )
     }
 
+    /// 一次求解气泡外框、扣除内边距后的内容矩形、实际方向与箭头尖端（供富内容绘制复用）。
+    #[must_use]
+    pub fn layout(&self) -> TooltipLayout {
+        let placed = self.placed();
+        let r = placed.rect;
+        let content_rect = Rect::new(
+            r.origin.x + self.padding.left,
+            r.origin.y + self.padding.top,
+            (r.width() - self.padding.horizontal()).max(0.0),
+            (r.height() - self.padding.vertical()).max(0.0),
+        );
+        TooltipLayout {
+            outer_rect: r,
+            content_rect,
+            chosen_placement: placed.chosen_placement,
+            arrow_tip: placed.arrow_tip,
+        }
+    }
+
     /// 已放置的气泡矩形（始终位于 `viewport` 内部）。
     #[must_use]
     pub fn rect(&self) -> Rect {
@@ -303,16 +501,10 @@ impl TooltipDesc {
         self.placed().arrow_tip
     }
 
-    /// 气泡内部扣除 `padding` 后的文本排版矩形。
+    /// 气泡内部扣除 `padding` 后的内容排版矩形。
     #[must_use]
     pub fn content_rect(&self) -> Rect {
-        let r = self.rect();
-        Rect::new(
-            r.origin.x + self.padding.x,
-            r.origin.y + self.padding.y,
-            (r.width() - self.padding.x * 2.0).max(0.0),
-            (r.height() - self.padding.y * 2.0).max(0.0),
-        )
+        self.layout().content_rect
     }
 
     /// 发射包含已整形文本字形的工具提示气泡。
@@ -332,6 +524,32 @@ impl TooltipDesc {
             &mut output.primitives,
             &mut output.payloads,
         );
+        (output, entry)
+    }
+
+    /// 发射工具提示气泡外壳并合并调用方在 `content_rect` 内生成的纯展示富内容（ADR-0030）。
+    ///
+    /// 闭包接收扣除内边距后的 `content_rect` 与内容层起始 `z`（`self.z + 1`），
+    /// 返回的子内容图元与载荷会自动拼接至气泡外壳之后并重定位载荷索引；
+    /// 最终输出强制保持 `hit: None`、`sub_hits` 为空与 `focusable: false`，
+    /// 严格守住 `OverlayKind::Tooltip` 的鼠标穿透、不抢焦点、纯展示契约。
+    #[must_use]
+    pub fn render_with_content(
+        &self,
+        node: u64,
+        anchor_node: u64,
+        state: ControlState,
+        build_content: impl FnOnce(Rect, u16) -> WidgetOutput,
+    ) -> (WidgetOutput, OverlayEntry) {
+        let layout = self.layout();
+        let (mut output, entry) = emit_tooltip(node, anchor_node, self, state);
+        let content_z = self.z.saturating_add(1);
+        let child = build_content(layout.content_rect, content_z);
+        output.append_child_primitives(child);
+        // 守住纯展示契约：即使子内容携带交互图元也绝不产出命中区或焦点能力。
+        output.hit = None;
+        output.sub_hits.clear();
+        output.focusable = false;
         (output, entry)
     }
 }
@@ -476,7 +694,7 @@ impl WidgetDesc for TooltipWidget {
     }
 }
 
-/// 输出工具提示气泡。输出结果永不包含命中区域。
+/// 输出工具提示气泡外壳。输出结果永不包含命中区域且不可聚焦。
 #[must_use]
 pub fn emit_tooltip(
     node: u64,
@@ -503,8 +721,8 @@ pub fn emit_tooltip(
             rect,
             radii,
             Token::NONE,
-            Token::OUTLINE,
-            1.0,
+            Token::CARD_BORDER,
+            TOOLTIP_BORDER_WIDTH,
             0.0,
             PrimType::RoundedRect,
             SubElement::Border,
@@ -532,6 +750,8 @@ pub fn emit_tooltip(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overlay::OverlayKind;
+    use unbound_input::HitRegion;
 
     fn desc() -> TooltipDesc {
         TooltipDesc::new(
@@ -578,8 +798,82 @@ mod tests {
         let desc = desc();
         let (output, entry) = emit_tooltip(3, 2, &desc, ControlState::default());
         assert!(output.hit.is_none());
+        assert!(!output.focusable);
+        assert_eq!(entry.kind, OverlayKind::Tooltip);
         assert!(desc.viewport.contains_rect(&entry.bounds));
         assert_eq!(output.primitives.len(), 3);
+    }
+
+    #[test]
+    fn win11_fluent_default_tokens_radius_shadow_and_asymmetric_padding() {
+        let d = desc();
+        assert_eq!(d.radius, 4.0);
+        assert_eq!(d.max_width, 320.0);
+        assert_eq!(d.padding, TooltipPadding::new(9.0, 6.0, 9.0, 8.0));
+        assert_eq!(d.padding.horizontal(), 18.0);
+        assert_eq!(d.padding.vertical(), 14.0);
+
+        let (output, entry) = emit_tooltip(10, 1, &d, ControlState::default());
+        assert_eq!(entry.kind, OverlayKind::Tooltip);
+        assert_eq!(output.primitives.len(), 3);
+
+        let shadow = &output.primitives[0];
+        let bg = &output.primitives[1];
+        let border = &output.primitives[2];
+
+        // 轻量阴影、OVERLAY_BG 填充与 1px CARD_BORDER 描边。
+        assert_eq!(shadow.shadow_blur(), TOOLTIP_SHADOW);
+        assert_eq!(bg.fill_token_or_uv, u32::from(Token::OVERLAY_BG.raw()));
+        assert_eq!(
+            border.border_token_or_tex,
+            u32::from(Token::CARD_BORDER.raw())
+        );
+        assert_eq!(border.border_width(), TOOLTIP_BORDER_WIDTH);
+    }
+
+    #[test]
+    fn rich_tooltip_layout_applies_asymmetric_padding_and_strips_child_hits() {
+        let viewport = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let anchor = Rect::new(300.0, 200.0, 80.0, 32.0);
+        let content_size = Vec2::new(180.0, 44.0);
+        let d = TooltipDesc::rich(anchor, viewport, content_size).with_label("Shortcut hint");
+
+        assert_eq!(d.size, Vec2::new(180.0 + 18.0, 44.0 + 14.0));
+        let layout = d.layout();
+        assert_eq!(
+            layout.content_rect.origin.x,
+            layout.outer_rect.origin.x + 9.0
+        );
+        assert_eq!(
+            layout.content_rect.origin.y,
+            layout.outer_rect.origin.y + 6.0
+        );
+        assert_eq!(layout.content_rect.width(), 180.0);
+        assert_eq!(layout.content_rect.height(), 44.0);
+
+        let (output, entry) =
+            d.render_with_content(42, 7, ControlState::default(), |content_r, z| {
+                let mut child = WidgetOutput::default();
+                child
+                    .primitives
+                    .push(surface(content_r, 2.0, Token::SURFACE_RAISED, z));
+                // 故意塞入命中区与可聚焦标记，验证纯展示契约会将其剥离。
+                child.hit = Some(HitRegion::ui(99, u32::from(z), content_r));
+                child
+                    .sub_hits
+                    .push(HitRegion::ui(100, u32::from(z), content_r));
+                child.focusable = true;
+                child
+            });
+        assert_eq!(entry.kind, OverlayKind::Tooltip);
+        assert_eq!(
+            output.primitives.len(),
+            4,
+            "3 shell primitives + 1 rich child primitive"
+        );
+        assert!(output.hit.is_none());
+        assert!(output.sub_hits.is_empty());
+        assert!(!output.focusable);
     }
 
     #[test]

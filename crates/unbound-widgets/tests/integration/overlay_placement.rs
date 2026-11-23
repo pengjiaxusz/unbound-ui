@@ -279,3 +279,49 @@ fn tooltip_in_window_auto_flips_and_clamps_inside_safe_viewport() {
     assert_eq!(bottom_desc.chosen_placement(), Placement::Top);
     assert!(safe.contains_rect(&bottom_desc.rect()));
 }
+
+#[test]
+fn rich_tooltip_container_auto_flips_and_preserves_asymmetric_content_rect() {
+    let vp = viewport();
+    let safe = Rect::new(
+        TOOLTIP_VIEWPORT_MARGIN,
+        TOOLTIP_VIEWPORT_MARGIN,
+        vp.width() - TOOLTIP_VIEWPORT_MARGIN * 2.0,
+        vp.height() - TOOLTIP_VIEWPORT_MARGIN * 2.0,
+    );
+    let content_size = Vec2::new(220.0, 56.0);
+
+    // 紧贴窗口顶边时请求 Top 自动翻转为 Bottom，并保持 9/6/9/8 非对称内容内边距。
+    let top_anchor = Rect::new(500.0, 4.0, 96.0, 28.0);
+    let top_rich = TooltipDesc::rich(top_anchor, vp, content_size).with_placement(Placement::Top);
+    let top_layout = top_rich.layout();
+    assert_eq!(top_layout.chosen_placement, Placement::Bottom);
+    assert!(safe.contains_rect(&top_layout.outer_rect));
+    assert_eq!(
+        top_layout.content_rect,
+        Rect::new(
+            top_layout.outer_rect.origin.x + 9.0,
+            top_layout.outer_rect.origin.y + 6.0,
+            content_size.x,
+            content_size.y,
+        )
+    );
+
+    // 紧贴窗口右侧与底部角落时始终钳制在安全视口内。
+    let corner_anchor = Rect::new(1210.0, 686.0, 64.0, 28.0);
+    for placement in [
+        Placement::Top,
+        Placement::Bottom,
+        Placement::Left,
+        Placement::Right,
+    ] {
+        let rich = TooltipDesc::rich(corner_anchor, vp, content_size).with_placement(placement);
+        let layout = rich.layout();
+        assert!(
+            safe.contains_rect(&layout.outer_rect),
+            "rich tooltip {placement:?} escaped safe viewport: {:?}",
+            layout.outer_rect
+        );
+        assert!(layout.outer_rect.contains_rect(&layout.content_rect));
+    }
+}

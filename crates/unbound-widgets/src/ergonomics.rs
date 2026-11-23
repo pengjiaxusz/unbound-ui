@@ -60,7 +60,7 @@ use crate::text_input::{
 };
 use crate::timeline_track::{emit_timeline_track, TimelineTrackDesc, TimelineTrackState};
 use crate::toggle_button::{emit_toggle_button_with_glyphs, ToggleButtonDesc, ToggleButtonState};
-use crate::tooltip::{TooltipDesc, TooltipState};
+use crate::tooltip::{TooltipDesc, TooltipState, TOOLTIP_FONT_SIZE, TOOLTIP_LINE_HEIGHT};
 use crate::tour::{emit_tour, TourDesc};
 use crate::transfer::{emit_transfer, TransferDesc, TransferState};
 use crate::tree_table::{
@@ -2358,12 +2358,24 @@ impl UiWidget for TooltipDesc {
         if self.label.is_empty() {
             return Vec2::new(self.size.x.max(64.0), self.size.y.max(28.0));
         }
-        let m = text_ctx.measure_line(&self.label, 12.0, 400);
+        let scale = text_ctx.effective_raster_scale();
+        let max_content_w = self.max_content_width();
+        let mut style = unbound_text::TextStyle::sized(TOOLTIP_FONT_SIZE * scale);
+        style.weight = 400;
+        let wrapped = text_ctx
+            .engine
+            .wrap(&self.label, &style, max_content_w * scale);
+        let line_h = (wrapped.line_height / scale).max(TOOLTIP_LINE_HEIGHT);
+        let line_count = wrapped.lines.len().max(1) as f32;
+        let content_w = (wrapped.width / scale).ceil().min(max_content_w);
+        let content_h = (wrapped.height / scale).max(line_count * line_h);
         Vec2::new(
-            (m.x + self.padding.x * 2.0)
+            (content_w + self.padding.horizontal())
                 .max(self.size.x)
                 .min(self.max_width.max(64.0)),
-            (m.y + self.padding.y * 2.0).max(self.size.y).max(28.0),
+            (content_h + self.padding.vertical())
+                .max(self.size.y)
+                .max(28.0),
         )
     }
 
@@ -2379,24 +2391,57 @@ impl UiWidget for TooltipDesc {
         if desc.anchor.is_empty() {
             desc.anchor = rect;
         }
-        if !desc.label.is_empty() {
-            let m = text_ctx.measure_line(&desc.label, 12.0, 400);
-            desc.size = Vec2::new(
-                (m.x + desc.padding.x * 2.0)
-                    .max(desc.size.x)
-                    .min(desc.max_width.max(64.0)),
-                (m.y + desc.padding.y * 2.0).max(desc.size.y).max(28.0),
-            );
+        if desc.label.is_empty() {
+            return desc.render_with_glyphs(node, 0, control, &[]).0;
         }
-        let text_r = desc.content_rect();
-        let glyphs = text_ctx.shape_line(
-            &desc.label,
-            text_r,
-            12.0,
-            400,
-            AlignX::Center,
-            AlignY::Middle,
+        // 对齐 Win11 Fluent ToolTip：12px 正文、左对齐、按最大内容宽度自动换行，
+        // 并应用 WinUI 3 非对称内边距（左/右 9、上 6、下 8）。
+        let scale = text_ctx.effective_raster_scale();
+        let max_content_w = desc.max_content_width();
+        let mut style = unbound_text::TextStyle::sized(TOOLTIP_FONT_SIZE * scale);
+        style.weight = 400;
+        let wrapped = text_ctx
+            .engine
+            .wrap(&desc.label, &style, max_content_w * scale);
+        let line_h = (wrapped.line_height / scale).max(TOOLTIP_LINE_HEIGHT);
+        let line_count = wrapped.lines.len().max(1) as f32;
+        let content_w = (wrapped.width / scale).ceil().min(max_content_w);
+        let content_h = (wrapped.height / scale).max(line_count * line_h);
+        desc.size = Vec2::new(
+            (content_w + desc.padding.horizontal())
+                .max(desc.size.x)
+                .min(desc.max_width.max(64.0)),
+            (content_h + desc.padding.vertical())
+                .max(desc.size.y)
+                .max(28.0),
         );
+        let text_r = desc.content_rect();
+        let mut glyphs = Vec::new();
+        for (idx, line) in wrapped.lines.iter().enumerate() {
+            let start = (line.start as usize).min(desc.label.len());
+            let end = (line.end as usize).min(desc.label.len()).max(start);
+            let Some(slice) = desc.label.get(start..end) else {
+                continue;
+            };
+            let trimmed = slice.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                continue;
+            }
+            let line_r = Rect::new(
+                text_r.origin.x,
+                text_r.origin.y + idx as f32 * line_h,
+                text_r.width(),
+                line_h,
+            );
+            glyphs.extend(text_ctx.shape_line(
+                trimmed,
+                line_r,
+                TOOLTIP_FONT_SIZE,
+                400,
+                AlignX::Left,
+                AlignY::Top,
+            ));
+        }
         desc.render_with_glyphs(node, 0, control, &glyphs).0
     }
 }
