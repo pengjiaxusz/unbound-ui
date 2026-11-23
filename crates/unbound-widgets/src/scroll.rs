@@ -137,26 +137,29 @@ fn thumb_length(track_length: f32, viewport: f32, content: f32) -> f32 {
     (track_length * ratio).max(MIN_THUMB).min(track_length)
 }
 
-/// 把命中带内的滑块收窄成 WinUI 的可见宽度，并沿垂直于滚动方向居中。
+/// 把命中带内的滑块收窄成 WinUI 的可见宽度。
 ///
-/// 命中带保持 [`SCROLLBAR_WIDTH`] 全宽，可见的胶囊只有 2px（收起）或 6px（展开）。
-fn visible_thumb_rect(thumb: Rect, width: f32, horizontal: bool) -> Rect {
+/// 命中带保持 [`SCROLLBAR_WIDTH`] 全宽：
+/// - 展开态（6px 粗滑块）：沿垂直于滚动方向在轨道胶囊内居中；
+/// - 静止态（2px 细指示条）：贴紧轨道外右缘（垂直）或外底缘（水平），留 [`SCROLLBAR_EDGE_INSET`]（2px），
+///   避免在窄栏（如 48px 紧凑导航轨）内居中偏左靠近图标。
+fn visible_thumb_rect(thumb: Rect, width: f32, horizontal: bool, expanded: bool) -> Rect {
     if horizontal {
         let height = width.min(thumb.size.y);
-        Rect::new(
-            thumb.origin.x,
-            thumb.origin.y + (thumb.size.y - height) * 0.5,
-            thumb.size.x,
-            height,
-        )
+        let y = if expanded {
+            thumb.origin.y + (thumb.size.y - height) * 0.5
+        } else {
+            (thumb.max().y - SCROLLBAR_EDGE_INSET - height).max(thumb.origin.y)
+        };
+        Rect::new(thumb.origin.x, y, thumb.size.x, height)
     } else {
         let visible = width.min(thumb.size.x);
-        Rect::new(
-            thumb.origin.x + (thumb.size.x - visible) * 0.5,
-            thumb.origin.y,
-            visible,
-            thumb.size.y,
-        )
+        let x = if expanded {
+            thumb.origin.x + (thumb.size.x - visible) * 0.5
+        } else {
+            (thumb.max().x - SCROLLBAR_EDGE_INSET - visible).max(thumb.origin.x)
+        };
+        Rect::new(x, thumb.origin.y, visible, thumb.size.y)
     }
 }
 
@@ -474,7 +477,7 @@ pub fn emit_scrollbar(owner_node: u64, desc: &ScrollBarDesc) -> ScrollBarOutput 
     } else {
         SCROLLBAR_THUMB_IDLE_WIDTH
     };
-    let visible_thumb = visible_thumb_rect(thumb, visible_width, horizontal);
+    let visible_thumb = visible_thumb_rect(thumb, visible_width, horizontal, expanded);
 
     let thumb_token = if desc.disabled {
         // WinUI `ScrollBarThumbFillDisabled` = `ControlStrongFillColorDisabledBrush`。
@@ -1203,6 +1206,7 @@ pub fn scrollbar_thumb_primitive(
         desc.thumb_rect(offset, horizontal),
         SCROLLBAR_THUMB_WIDTH,
         horizontal,
+        true,
     );
     let mut primitive = surface(
         thumb,
@@ -1599,8 +1603,15 @@ mod tests {
         assert!(!out.is_empty());
         assert_eq!(out.output.primitives.len(), 2);
         assert_eq!(out.output.primitives[0].opacity(), 0.0);
+        let track = out.track_rect.expect("overflowing track rect");
         let thumb_prim = &out.output.primitives[1];
         assert_eq!(thumb_prim.size[0], SCROLLBAR_THUMB_IDLE_WIDTH);
+        let expected_idle_x = track.max().x - SCROLLBAR_EDGE_INSET - SCROLLBAR_THUMB_IDLE_WIDTH;
+        assert!(
+            (thumb_prim.local_pos[0] - expected_idle_x).abs() < 1e-3,
+            "idle 2px vertical thumb must hug outer right edge: got {}, expected {expected_idle_x}",
+            thumb_prim.local_pos[0]
+        );
         assert!((thumb_prim.opacity() - SCROLLBAR_IDLE_OPACITY).abs() < 0.02);
 
         assert_eq!(out.hits.len(), 2);
@@ -1635,9 +1646,16 @@ mod tests {
             let track_capsule = &out.output.primitives[0];
             let thumb_prim = &out.output.primitives[1];
 
+            let track = out.track_rect.expect("expanded track rect");
             assert_eq!(track_capsule.size[0], SCROLLBAR_WIDTH);
             assert!((track_capsule.opacity() - SCROLLBAR_TRACK_CAPSULE_OPACITY).abs() < 0.02);
             assert_eq!(thumb_prim.size[0], SCROLLBAR_THUMB_WIDTH);
+            let expected_expanded_x =
+                track.origin.x + (track.width() - SCROLLBAR_THUMB_WIDTH) * 0.5;
+            assert!(
+                (thumb_prim.local_pos[0] - expected_expanded_x).abs() < 1e-3,
+                "expanded 6px thumb must stay centered in 12px track capsule"
+            );
             assert!(thumb_prim.opacity() > 0.99);
             assert!(
                 thumb_prim.depth_u16() > track_capsule.depth_u16(),
@@ -1682,9 +1700,16 @@ mod tests {
         let idle = emit_scrollbar(55, &bar);
         assert_eq!(idle.output.primitives.len(), 2);
         assert_eq!(idle.output.primitives[0].opacity(), 0.0);
+        let h_track = idle.track_rect.expect("horizontal track rect");
         assert_eq!(
             idle.output.primitives[1].size[1],
             SCROLLBAR_THUMB_IDLE_WIDTH
+        );
+        let expected_idle_y = h_track.max().y - SCROLLBAR_EDGE_INSET - SCROLLBAR_THUMB_IDLE_WIDTH;
+        assert!(
+            (idle.output.primitives[1].local_pos[1] - expected_idle_y).abs() < 1e-3,
+            "idle 2px horizontal thumb must hug outer bottom edge: got {}, expected {expected_idle_y}",
+            idle.output.primitives[1].local_pos[1]
         );
         assert_eq!(
             idle.thumb_node,
