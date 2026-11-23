@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.85.0",
+  "version": "0.86.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -180,12 +180,14 @@
     ".pengj-templates/scripts/doctor.cmd": "3498d22336badc2843d5b57792d58c18771d805e9fc081e20108fae53b04ee00",
     ".pengj-templates/scripts/doctor.d/README.md": "fb7a29477e7f6216cf076a4344e6f97cda4b7aa48efc1f0e00209339acceb64f",
     ".pengj-templates/scripts/doctor.sh": "6392f3eb8d7068e99ee1199bbfbe69dc2337e587bad013294789732378b07510",
+    ".pengj-templates/scripts/setup.cmd": "daf755afe0f04fdd303b43347f5880af2ed8480ef537d772a68c86b63202d21f",
+    ".pengj-templates/scripts/setup.sh": "12f4bc9ff5d6c66c8c87b47e6f5e0715799e24f07b91362b148c854594636898",
     ".vscode/extensions.json": "c7cb87ed3321bc2a3f9d71ebf6b46e4e12b92b6c03ff22af5c08a0a86cc94dec",
     ".vscode/settings.json": "d25f7fee2d39c690a70cd72b6c1d93477e2b306b8027fc4f85c31aa1c1d58135",
     "AGENTS.md": "0fe516aa7d28f8ebb49daadfa87ec7108a56cfcafc251850f940a432bb93652c",
     "CONTRIBUTING.md": "5f409f91c8ac03c1b5ac4ed17b4303388ebb1cc5ed7aede82390e51fd11837a8",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
-    "justfile": "5faf1470e5b6e76de2dea2285e445c1fad33171a93506f3b5568447108f274bc",
+    "justfile": "e19804a0e5a79ce509e79f551f59184a770256e61f2dd5cea1d13fc849c11a11",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
   }
 }
