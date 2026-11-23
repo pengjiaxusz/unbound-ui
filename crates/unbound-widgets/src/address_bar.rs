@@ -29,8 +29,10 @@ const NAV_BUTTON_SIZE: f32 = 28.0;
 const NAV_BUTTON_GAP: f32 = 2.0;
 /// 三段区域之间的水平间距（`6px`）。
 const SECTION_GAP: f32 = 6.0;
-/// 地址框与搜索框圆角（`4px`）。
+/// 传统描边地址框与搜索框圆角（`4px`）。
 const BAR_RADIUS: f32 = 4.0;
+/// Windows 11 无描边胶囊地址框与搜索框圆角（`6px`）。
+const PILL_BAR_RADIUS: f32 = 6.0;
 /// 内部按钮与分段胶囊圆角（`4px`）。
 const INNER_RADIUS: f32 = 4.0;
 /// 地址框左侧根图标尺寸（`16×16px`）。
@@ -228,6 +230,66 @@ pub struct AddressBarLayout {
     pub search_clear_rect: Option<Rect>,
 }
 
+/// 地址栏与内联搜索框容器视觉风格。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum AddressBarChromeStyle {
+    /// Windows 11 风格无外描边半透明圆角胶囊填充（默认）。
+    #[default]
+    BorderlessPill,
+    /// 传统 1px 外描边输入框风格。
+    Outlined,
+}
+
+/// 内联搜索框放大镜图标置放位置。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SearchIconPlacement {
+    /// 图标置放于搜索框右侧（与 Windows 11 资源管理器一致，默认）。
+    #[default]
+    Right,
+    /// 图标置放于搜索框左侧。
+    Left,
+}
+
+impl AddressBarLayout {
+    /// 计算非折叠内联搜索框内部可用的文本显示与输入区域。
+    ///
+    /// 自动适配放大镜图标位于左侧或右侧、以及清除 `×` 按钮显隐时的边界留白。
+    #[must_use]
+    pub fn search_text_rect(&self, show_clear: bool) -> Option<Rect> {
+        let sr = self.search_rect?;
+        if self.search_collapsed {
+            return None;
+        }
+        let icon_on_right = self
+            .search_icon_rect
+            .is_some_and(|ir| ir.center().x >= sr.center().x);
+        let (left_x, right_x) = if icon_on_right {
+            let left = sr.origin.x + 10.0;
+            let right = if show_clear {
+                self.search_clear_rect
+                    .map_or(sr.max().x - 8.0, |cr| cr.origin.x - 4.0)
+            } else {
+                self.search_icon_rect
+                    .map_or(sr.max().x - 8.0, |ir| ir.origin.x - 6.0)
+            };
+            (left, right)
+        } else {
+            let left = self
+                .search_icon_rect
+                .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
+            let right = if show_clear {
+                self.search_clear_rect
+                    .map_or(sr.max().x - 6.0, |cr| cr.origin.x - 6.0)
+            } else {
+                sr.max().x - 6.0
+            };
+            (left, right)
+        };
+        let width = (right_x - left_x).max(0.0);
+        Some(Rect::new(left_x, sr.origin.y, width, sr.size.y.max(0.0)))
+    }
+}
+
 /// 双模地址栏描述符（平时显示分段路径面包屑，点击空白或按下 `Ctrl+L` / `Alt+D` 切换为完整路径编辑框）。
 #[derive(Clone, Debug, PartialEq)]
 pub struct AddressBarDesc {
@@ -241,6 +303,10 @@ pub struct AddressBarDesc {
     pub show_refresh: bool,
     pub show_search: bool,
     pub search_placeholder: String,
+    /// 容器视觉风格（默认 [`AddressBarChromeStyle::BorderlessPill`]）。
+    pub chrome_style: AddressBarChromeStyle,
+    /// 搜索框放大镜图标置放位置（默认 [`SearchIconPlacement::Right`]）。
+    pub search_icon_placement: SearchIconPlacement,
     pub z: u16,
 }
 
@@ -278,6 +344,8 @@ impl AddressBarDesc {
             show_refresh: true,
             show_search: false,
             search_placeholder: String::new(),
+            chrome_style: AddressBarChromeStyle::BorderlessPill,
+            search_icon_placement: SearchIconPlacement::Right,
             z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
@@ -301,6 +369,8 @@ impl AddressBarDesc {
             show_refresh: true,
             show_search: false,
             search_placeholder: String::new(),
+            chrome_style: AddressBarChromeStyle::BorderlessPill,
+            search_icon_placement: SearchIconPlacement::Right,
             z: DEFAULT_ADDRESS_BAR_Z,
         }
     }
@@ -345,6 +415,20 @@ impl AddressBarDesc {
     #[must_use]
     pub fn without_search(mut self) -> Self {
         self.show_search = false;
+        self
+    }
+
+    /// 设置地址栏与搜索框容器视觉风格。
+    #[must_use]
+    pub fn with_chrome_style(mut self, style: AddressBarChromeStyle) -> Self {
+        self.chrome_style = style;
+        self
+    }
+
+    /// 设置内联搜索框放大镜图标的置放位置（左侧或右侧）。
+    #[must_use]
+    pub fn with_search_icon_placement(mut self, placement: SearchIconPlacement) -> Self {
+        self.search_icon_placement = placement;
         self
     }
 
@@ -434,32 +518,39 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
             };
             let sx = (r.max().x - sw).max(left_x);
             let sr = Rect::new(sx, r.origin.y, (r.max().x - sx).max(0.0), r.size.y);
-            let icon_r = if collapsed {
+            let (icon_r, clear_r) = if collapsed {
                 let icon_s = 24.0f32.min(sr.size.y).min(sr.size.x);
                 let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
-                Rect::new(
+                let ir = Rect::new(
                     sr.origin.x + (sr.size.x - icon_s) * 0.5,
                     icon_y,
                     icon_s,
                     icon_s,
-                )
+                );
+                (ir, None)
             } else {
-                // Windows 11 资源管理器标准：非折叠搜索框放大镜图标位于左侧
                 let icon_s = 16.0f32.min(sr.size.y).min(sr.size.x);
                 let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
-                let icon_x = (sr.origin.x + 8.0).min((sr.max().x - icon_s).max(sr.origin.x));
-                Rect::new(icon_x, icon_y, icon_s, icon_s)
-            };
-            let clear_r = if collapsed {
-                None
-            } else {
-                // 清除按钮固定位于搜索框最右侧，确保文本区严格落在图标与清除按钮之间
                 let clear_s = 22.0f32.min(sr.size.y).min(sr.size.x);
                 let clear_y = sr.origin.y + (sr.size.y - clear_s) * 0.5;
-                let clear_x = (sr.max().x - clear_s - 4.0)
-                    .max(icon_r.max().x + 4.0)
-                    .min((sr.max().x - clear_s).max(sr.origin.x));
-                Some(Rect::new(clear_x, clear_y, clear_s, clear_s))
+                match desc.search_icon_placement {
+                    SearchIconPlacement::Right => {
+                        // Windows 11 资源管理器风格：放大镜位于搜索框最右侧，清除按钮紧靠放大镜左侧
+                        let icon_x = (sr.max().x - icon_s - 8.0).max(sr.origin.x);
+                        let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
+                        let clear_x = (ir.origin.x - clear_s - 2.0).max(sr.origin.x + 4.0);
+                        (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
+                    }
+                    SearchIconPlacement::Left => {
+                        let icon_x =
+                            (sr.origin.x + 8.0).min((sr.max().x - icon_s).max(sr.origin.x));
+                        let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
+                        let clear_x = (sr.max().x - clear_s - 4.0)
+                            .max(ir.max().x + 4.0)
+                            .min((sr.max().x - clear_s).max(sr.origin.x));
+                        (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
+                    }
+                }
             };
             (
                 Some(sr),
@@ -1488,12 +1579,13 @@ fn emit_address_bar_inner(
 
     // 2. 中段：一体化双模地址框
     let addr_r = layout.address_rect;
-    let bg = if control.disabled {
-        Token::CONTROL_DISABLED_BG
+    let is_borderless_pill = desc.chrome_style == AddressBarChromeStyle::BorderlessPill;
+    let bar_radius = if is_borderless_pill {
+        PILL_BAR_RADIUS
     } else {
-        Token::CONTROL_FILL
+        BAR_RADIUS
     };
-    // 悬停或按压地址框内部任意子热区时，外框描边保持悬停高亮不闪烁
+    // 悬停或按压地址框内部任意子热区时，外框/胶囊底色保持悬停高亮不闪烁
     let addr_sub_active = matches!(
         state.hovered_hit,
         Some(
@@ -1513,19 +1605,40 @@ fn emit_address_bar_inner(
                 | AddressBarHitKind::EditTrigger
         )
     );
-    let border = if control.disabled {
-        Token::CONTROL_DISABLED_BORDER
-    } else if control.phase == PointerPhase::Hovered || addr_sub_active || state.editing {
-        Token::OUTLINE_STRONG
+    let bg = if control.disabled {
+        Token::CONTROL_DISABLED_BG
+    } else if is_borderless_pill {
+        if control.phase == PointerPhase::Hovered || addr_sub_active || state.editing {
+            Token::CONTROL_HOVER
+        } else {
+            Token::PILL_INPUT_FILL
+        }
     } else {
-        Token::CONTROL_STROKE
+        Token::CONTROL_FILL
     };
-    primitives.push(outlined(addr_r, BAR_RADIUS, bg, border, 1.0, 0.0, z));
+    let (border, border_width) = if is_borderless_pill {
+        (Token::NONE, 0.0)
+    } else if control.disabled {
+        (Token::CONTROL_DISABLED_BORDER, 1.0)
+    } else if control.phase == PointerPhase::Hovered || addr_sub_active || state.editing {
+        (Token::OUTLINE_STRONG, 1.0)
+    } else {
+        (Token::CONTROL_STROKE, 1.0)
+    };
+    primitives.push(outlined(
+        addr_r,
+        bar_radius,
+        bg,
+        border,
+        border_width,
+        0.0,
+        z,
+    ));
 
     // 聚焦/编辑态底部 2px 强调线（图元始终存在，通过透明度切换保证 24 态图元数恒定）
     primitives.push(focus_underline(
         addr_r,
-        BAR_RADIUS,
+        bar_radius,
         z,
         if !control.disabled && (state.editing || control.focused) {
             1.0
@@ -1652,17 +1765,38 @@ fn emit_address_bar_inner(
             state.pressed_hit,
             Some(AddressBarHitKind::SearchBox | AddressBarHitKind::SearchClear)
         );
-        let search_border = if control.disabled {
-            Token::CONTROL_DISABLED_BORDER
-        } else if state.search_focused || search_sub_active {
-            Token::OUTLINE_STRONG
+        let search_bg = if control.disabled {
+            Token::CONTROL_DISABLED_BG
+        } else if is_borderless_pill {
+            if control.phase == PointerPhase::Hovered || search_sub_active || state.search_focused {
+                Token::CONTROL_HOVER
+            } else {
+                Token::PILL_INPUT_FILL
+            }
         } else {
-            Token::CONTROL_STROKE
+            Token::CONTROL_FILL
         };
-        primitives.push(outlined(sr, BAR_RADIUS, bg, search_border, 1.0, 0.0, z));
+        let (search_border, search_border_width) = if is_borderless_pill {
+            (Token::NONE, 0.0)
+        } else if control.disabled {
+            (Token::CONTROL_DISABLED_BORDER, 1.0)
+        } else if state.search_focused || search_sub_active {
+            (Token::OUTLINE_STRONG, 1.0)
+        } else {
+            (Token::CONTROL_STROKE, 1.0)
+        };
+        primitives.push(outlined(
+            sr,
+            bar_radius,
+            search_bg,
+            search_border,
+            search_border_width,
+            0.0,
+            z,
+        ));
         primitives.push(focus_underline(
             sr,
-            BAR_RADIUS,
+            bar_radius,
             z,
             if !control.disabled && state.search_focused {
                 1.0
@@ -2179,8 +2313,87 @@ mod tests {
     }
 
     #[test]
-    fn search_icon_is_on_left_and_text_region_stays_inside_search_box() {
+    fn win11_borderless_pill_and_right_search_icon_are_default() {
         let desc = sample_desc();
+        assert_eq!(desc.chrome_style, AddressBarChromeStyle::BorderlessPill);
+        assert_eq!(desc.search_icon_placement, SearchIconPlacement::Right);
+
+        let layout = compute_layout(&desc);
+        let sr = layout.search_rect.expect("search rect");
+        let icon_r = layout.search_icon_rect.expect("search icon rect");
+        let clear_r = layout.search_clear_rect.expect("search clear rect");
+
+        // 默认搜索放大镜置放于搜索框右侧，清除按钮位于放大镜左侧
+        assert!(
+            icon_r.origin.x > sr.center().x && icon_r.max().x <= sr.max().x,
+            "default search icon must be on the right side of search box"
+        );
+        assert!(
+            clear_r.max().x <= icon_r.origin.x,
+            "clear button must sit to the left of right-aligned search icon"
+        );
+        let text_r = layout
+            .search_text_rect(true)
+            .expect("search text rect with clear");
+        assert!(
+            text_r.origin.x >= sr.origin.x && text_r.max().x <= clear_r.origin.x,
+            "search text rect must fit to the left of clear button"
+        );
+
+        // 默认无外描边胶囊填充：地址框与搜索框填充 PILL_INPUT_FILL 且无描边（border = NONE, width = 0）
+        let state = AddressBarState::new();
+        let out = emit_address_bar(1, &desc, &state, ControlState::default(), &[]);
+        let addr_prim = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - layout.address_rect.origin.x).abs() < 0.5
+                    && (p.size[0] - layout.address_rect.size.x).abs() < 0.5
+            })
+            .expect("address container primitive");
+        assert_eq!(
+            addr_prim.fill_token_or_uv,
+            u32::from(Token::PILL_INPUT_FILL.raw())
+        );
+        assert_eq!(addr_prim.border_token_or_tex, u32::from(Token::NONE.raw()));
+        assert_eq!(addr_prim.border_width, 0);
+
+        let search_prim = out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - sr.origin.x).abs() < 0.5 && (p.size[0] - sr.size.x).abs() < 0.5
+            })
+            .expect("search container primitive");
+        assert_eq!(
+            search_prim.fill_token_or_uv,
+            u32::from(Token::PILL_INPUT_FILL.raw())
+        );
+        assert_eq!(search_prim.border_token_or_tex, u32::from(Token::NONE.raw()));
+        assert_eq!(search_prim.border_width, 0);
+
+        // 显式切换为 Outlined 模式后恢复 1px 描边
+        let outlined_desc = desc.clone().with_chrome_style(AddressBarChromeStyle::Outlined);
+        let outlined_out =
+            emit_address_bar(1, &outlined_desc, &state, ControlState::default(), &[]);
+        let outlined_addr = outlined_out
+            .primitives
+            .iter()
+            .find(|p| {
+                (p.local_pos[0] - layout.address_rect.origin.x).abs() < 0.5
+                    && (p.size[0] - layout.address_rect.size.x).abs() < 0.5
+            })
+            .expect("outlined address primitive");
+        assert!(outlined_addr.border_width > 0);
+        assert_ne!(
+            outlined_addr.border_token_or_tex,
+            u32::from(Token::NONE.raw())
+        );
+    }
+
+    #[test]
+    fn search_icon_is_on_left_and_text_region_stays_inside_search_box() {
+        let desc = sample_desc().with_search_icon_placement(SearchIconPlacement::Left);
         let layout = compute_layout(&desc);
         let sr = layout.search_rect.expect("search rect");
         let icon_r = layout.search_icon_rect.expect("search icon rect");
@@ -2479,7 +2692,7 @@ mod tests {
 
     #[test]
     fn root_chevron_supports_hit_test_click_sub_control_and_hover_pressed_states() {
-        let desc = sample_desc();
+        let desc = sample_desc().with_chrome_style(AddressBarChromeStyle::Outlined);
         let layout = compute_layout(&desc);
         let rc_r = layout.root_chevron_rect.expect("root chevron rect");
         let mut state = AddressBarState::new();
@@ -2547,7 +2760,7 @@ mod tests {
 
     #[test]
     fn search_clear_renders_pressed_token_and_keeps_search_border_hovered() {
-        let desc = sample_desc();
+        let desc = sample_desc().with_chrome_style(AddressBarChromeStyle::Outlined);
         let layout = compute_layout(&desc);
         let sr = layout.search_rect.expect("search rect");
         let clear_r = layout.search_clear_rect.expect("search clear rect");

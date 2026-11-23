@@ -263,6 +263,11 @@ impl ThemeSet {
                     Token::NAV_HOVER,
                     Token::HOVER,
                     Token::PRESSED,
+                    Token::WORKSPACE_SURFACE,
+                    Token::STATUS_BAR_SURFACE,
+                    Token::PILL_INPUT_FILL,
+                    Token::ITEM_SELECTED_BG,
+                    Token::ITEM_SELECTED_BORDER,
                 ] {
                     set_tok(&mut dark_entries, token, win11_dark.color(token));
                 }
@@ -272,6 +277,11 @@ impl ThemeSet {
                     Token::NAV_HOVER,
                     Token::HOVER,
                     Token::PRESSED,
+                    Token::WORKSPACE_SURFACE,
+                    Token::STATUS_BAR_SURFACE,
+                    Token::PILL_INPUT_FILL,
+                    Token::ITEM_SELECTED_BG,
+                    Token::ITEM_SELECTED_BORDER,
                 ] {
                     set_tok(&mut light_entries, token, win11_light.color(token));
                 }

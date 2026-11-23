@@ -362,6 +362,19 @@ impl Token {
     /// 浅色为纯白圆盘、深色为 `#454545`；内圈 12px 强调色圆点由
     /// [`Token::PRIMARY`] / [`Token::SLIDER_THUMB_DISABLED`] 负责。
     pub const SLIDER_THUMB_DISK: Self = Self(97);
+
+    // ---- Win11 壳层表面分层与中性选中态（101..=105）---------------------
+
+    /// 主工作区纯净表面颜色（Win11 暗色 `#191919`，无暖色偏）。
+    pub const WORKSPACE_SURFACE: Self = Self(101);
+    /// 独立次级状态栏表面颜色（Win11 暗色 `#1c1c1c`）。
+    pub const STATUS_BAR_SURFACE: Self = Self(102);
+    /// 无外描边圆角胶囊输入框填充颜色（Win11 暗色 `#2c2b33` 附近半透明深灰）。
+    pub const PILL_INPUT_FILL: Self = Self(103);
+    /// 列表/网格项中性选中态半透明深灰底色（不强绑亮蓝强调色）。
+    pub const ITEM_SELECTED_BG: Self = Self(104);
+    /// 列表/网格项中性选中态 1px 浅灰白细描边（配合近直角 2px 圆角）。
+    pub const ITEM_SELECTED_BORDER: Self = Self(105);
 }
 
 /// 设计系统定义的全部语义令牌集合。
@@ -371,7 +384,7 @@ impl Token {
 ///
 /// [`Token::NONE`] 不在此列表中：它是引擎保留槽位，而非语义颜色。
 ///
-pub const TOKENS: [Token; 100] = [
+pub const TOKENS: [Token; 105] = [
     Token::SURFACE,
     Token::SURFACE_RAISED,
     Token::SURFACE_SUNKEN,
@@ -472,6 +485,11 @@ pub const TOKENS: [Token; 100] = [
     Token::CONTROL_STROKE_SECONDARY,
     Token::CONTROL_STROKE_STRONG,
     Token::SLIDER_THUMB_DISK,
+    Token::WORKSPACE_SURFACE,
+    Token::STATUS_BAR_SURFACE,
+    Token::PILL_INPUT_FILL,
+    Token::ITEM_SELECTED_BG,
+    Token::ITEM_SELECTED_BORDER,
 ];
 
 /// 当前激活的主题。
@@ -668,6 +686,23 @@ impl ThemeSet {
                 ),
                 (Token::CONTROL_STROKE_SUBTLE, Color::from_srgb8(0, 0, 0, 15)),
                 (
+                    Token::WORKSPACE_SURFACE,
+                    Color::from_srgb8(255, 255, 255, 255),
+                ),
+                (
+                    Token::STATUS_BAR_SURFACE,
+                    Color::from_srgb8(243, 243, 243, 255),
+                ),
+                (
+                    Token::PILL_INPUT_FILL,
+                    Color::from_srgb8(245, 246, 249, 230),
+                ),
+                (Token::ITEM_SELECTED_BG, Color::from_srgb8(0, 0, 0, 18)),
+                (
+                    Token::ITEM_SELECTED_BORDER,
+                    Color::from_srgb8(140, 140, 140, 255),
+                ),
+                (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(241, 242, 246, 255),
                 ),
@@ -826,6 +861,20 @@ impl ThemeSet {
                     Token::CONTROL_STROKE_SUBTLE,
                     Color::from_srgb8(255, 255, 255, 18),
                 ),
+                (Token::WORKSPACE_SURFACE, Color::from_srgb8(25, 25, 25, 255)),
+                (
+                    Token::STATUS_BAR_SURFACE,
+                    Color::from_srgb8(28, 28, 28, 255),
+                ),
+                (Token::PILL_INPUT_FILL, Color::from_srgb8(44, 43, 51, 230)),
+                (
+                    Token::ITEM_SELECTED_BG,
+                    Color::from_srgb8(255, 255, 255, 28),
+                ),
+                (
+                    Token::ITEM_SELECTED_BORDER,
+                    Color::from_srgb8(200, 200, 200, 160),
+                ),
                 (
                     Token::CONTROL_DISABLED_BG,
                     Color::from_srgb8(34, 36, 43, 255),
@@ -979,6 +1028,11 @@ impl ThemeSet {
             (Token::NAV_CONTENT_BG, Color::BLACK),
             (Token::NAV_CONTENT_STROKE, Color::WHITE),
             (Token::CONTROL_STROKE_SUBTLE, Color::WHITE),
+            (Token::WORKSPACE_SURFACE, Color::BLACK),
+            (Token::STATUS_BAR_SURFACE, Color::BLACK),
+            (Token::PILL_INPUT_FILL, Color::BLACK),
+            (Token::ITEM_SELECTED_BG, Color::from_srgb8(255, 230, 0, 255)),
+            (Token::ITEM_SELECTED_BORDER, Color::WHITE),
             (
                 Token::CONTROL_DISABLED_BG,
                 Color::from_srgb8(32, 32, 32, 255),

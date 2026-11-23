@@ -2535,19 +2535,11 @@ impl UiWidget for AddressBarDesc {
                 } else {
                     search_text
                 };
-                let left_x = layout
-                    .search_icon_rect
-                    .map_or(sr.origin.x + 8.0, |ir| ir.max().x + 6.0);
                 let show_clear = !control.disabled && !is_placeholder;
-                let right_x = if show_clear {
-                    layout
-                        .search_clear_rect
-                        .map_or(sr.max().x - 6.0, |cr| cr.origin.x - 6.0)
-                } else {
-                    sr.max().x - 6.0
-                };
-                let search_w = (right_x - left_x).max(0.0);
-                let text_r = Rect::new(left_x, sr.origin.y, search_w, sr.size.y.max(0.0));
+                let text_r = layout.search_text_rect(show_clear).unwrap_or_else(|| {
+                    Rect::new(sr.origin.x + 8.0, sr.origin.y, 0.0, sr.size.y.max(0.0))
+                });
+                let search_w = text_r.size.x;
                 if search_w > 0.0 && !display.is_empty() {
                     if state.search_focused && !is_placeholder {
                         // 搜索聚焦输入态保留未省略原文并按 `scroll_x` 平移，避免与光标/选区错位。

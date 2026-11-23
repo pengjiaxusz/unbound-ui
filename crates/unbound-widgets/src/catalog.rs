@@ -1991,10 +1991,12 @@ where
             );
             merge_output(&mut out, root_out);
             let child_g = shape("Child", Vec2::new(o.x + 32.0, o.y + 36.0 + 11.0), 14.0);
-            let child_out = crate::tree_view::emit_tree_row_with_icon(
+            let child_out = crate::tree_view::emit_tree_row_with_options(
                 &desc,
                 &child_row,
                 crate::tree_view::TreeRowIcon::Vector(crate::shell::ShellIcon::Documents),
+                crate::tree_view::TreeRowOptions::new()
+                    .with_trailing_icon(Some(crate::shell::ShellIcon::Pin)),
                 false,
                 state,
                 &child_g,
