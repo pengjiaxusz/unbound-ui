@@ -287,6 +287,11 @@ pub fn wallpaper_path() -> Option<PathBuf> {
     #[cfg(not(target_os = "windows"))]
     {
         let env_candidate = std::env::var_os(WALLPAPER_ENV_VAR).map(PathBuf::from);
+        if let Some(ref p) = env_candidate {
+            if !p.as_os_str().is_empty() && p.is_file() {
+                return Some(p.clone());
+            }
+        }
         let desktop_candidate = linux_desktop_wallpaper_path();
         match resolve_wallpaper_source_with(env_candidate, desktop_candidate, Path::is_file) {
             WallpaperSourceKind::EnvVar(p) | WallpaperSourceKind::DesktopConfig(p) => Some(p),

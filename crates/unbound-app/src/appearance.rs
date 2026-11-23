@@ -469,7 +469,7 @@ pub fn apply_appearance_diff_to_window(
         }
     }
     if let Some(dark) = diff.dark_mode {
-        let _ = window.set_dark_mode(dark);
+        window.set_dark_mode(dark);
     }
     if let Some(lock_mica) = diff.lock_mica {
         if let Some(metrics) = metrics {

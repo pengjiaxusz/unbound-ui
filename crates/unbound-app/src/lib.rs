@@ -6048,8 +6048,18 @@ impl<A: Application> AppRuntime<A> {
                 (b.width() * scale).round().max(1.0) as u32,
                 (b.height() * scale).round().max(1.0) as u32,
             );
+            let anchor_rect = unbound_platform::ScreenRect::new(
+                (b.origin.x * scale).round() as i32,
+                (b.origin.y * scale).round() as i32,
+                (b.width() * scale).round().max(1.0) as u32,
+                (b.height() * scale).round().max(1.0) as u32,
+            );
+            let click_through =
+                matches!(entry.kind, unbound_widgets::overlay::OverlayKind::Tooltip);
             let config =
-                unbound_platform::PopupWindowConfig::new(self.window_owner_id, screen_rect);
+                unbound_platform::PopupWindowConfig::new(self.window_owner_id, screen_rect)
+                    .with_anchor_rect(anchor_rect)
+                    .with_click_through(click_through);
             desired.insert(entry.node, config);
         }
 
