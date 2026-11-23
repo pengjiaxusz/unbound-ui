@@ -3514,7 +3514,10 @@ mod tests {
                 &mut primitives,
                 &mut payloads,
             );
-            assert!(!primitives.is_empty(), "ShellIcon::{icon:?} emitted no primitives");
+            assert!(
+                !primitives.is_empty(),
+                "ShellIcon::{icon:?} emitted no primitives"
+            );
             for prim in &primitives {
                 let sub = (prim.prim_type_and_flags >> 16) & 0x7;
                 assert_eq!(
@@ -3539,7 +3542,11 @@ mod tests {
             &mut primitives,
             &mut payloads,
         );
-        assert_eq!(primitives.len(), 6, "4 open-arc curves + 2 arrowhead strokes");
+        assert_eq!(
+            primitives.len(),
+            6,
+            "4 open-arc curves + 2 arrowhead strokes"
+        );
         assert!(
             primitives.iter().all(|p| p.prim_type() == PrimType::Curve),
             "Refresh icon must use open curve strokes without a closed RoundedRect ring"

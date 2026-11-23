@@ -167,7 +167,11 @@ mod tests {
         let mut manager = OverlayManager::new();
         let mut focus = FocusManager::new();
         manager.open(
-            OverlayEntry::menu(MENU_KEY, SUB_HIT_TAB_KEY, Rect::new(20.0, 40.0, 180.0, 120.0)),
+            OverlayEntry::menu(
+                MENU_KEY,
+                SUB_HIT_TAB_KEY,
+                Rect::new(20.0, 40.0, 180.0, 120.0),
+            ),
             &mut focus,
         );
 

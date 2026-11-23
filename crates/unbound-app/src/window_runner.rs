@@ -1618,6 +1618,7 @@ mod tests {
             unbound_platform::RenderThrottleState::Active
         );
         assert!(!runner.should_skip_frame_for_throttle(&state));
+    }
 
     #[test]
     fn translate_pointer_button_preserves_side_buttons() {
