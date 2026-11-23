@@ -287,6 +287,7 @@ impl PointerState {
                 });
             }
         }
+        // 非捕获移动时 `self.capture` 为 `None`，由 `InputRouter::pointer_move` 回填真实命中目标。
         Some(PointerEvent::Move {
             position,
             delta,

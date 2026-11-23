@@ -12,7 +12,9 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs as emit_glyphs, outlined, surface};
-use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
+use crate::shell::{
+    emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon,
+};
 use crate::text_input::{
     floor_boundary, focus_underline, reduce_text_input, TextEditState, TextInputDesc,
     TextInputEvent, TextInputOutcome, TextInputVisual,
@@ -23,12 +25,12 @@ const LAYER: u8 = 1;
 
 /// 地址栏标准高度（`32px`）。
 pub const ADDRESS_BAR_HEIGHT: f32 = 32.0;
-/// 外部导航按钮尺寸（`28×28px`）。
-const NAV_BUTTON_SIZE: f32 = 28.0;
-/// 外部导航按钮间距（`2px`）。
-const NAV_BUTTON_GAP: f32 = 2.0;
-/// 三段区域之间的水平间距（`6px`）。
-const SECTION_GAP: f32 = 6.0;
+/// 外部导航按钮尺寸（`32×32px`）。
+const NAV_BUTTON_SIZE: f32 = 32.0;
+/// 外部导航按钮间距（`4px`）。
+const NAV_BUTTON_GAP: f32 = 4.0;
+/// 三段区域之间的水平间距（`8px`）。
+const SECTION_GAP: f32 = 8.0;
 /// 传统描边地址框与搜索框圆角（`4px`）。
 const BAR_RADIUS: f32 = 4.0;
 /// Windows 11 无描边胶囊地址框与搜索框圆角（`6px`）。
@@ -327,11 +329,7 @@ impl AddressBarDesc {
             }
             path_segments.push(seg);
         }
-        let full_path = if acc.is_empty() {
-            "/".to_owned()
-        } else {
-            acc
-        };
+        let full_path = if acc.is_empty() { "/".to_owned() } else { acc };
         let can_go_up = path_segments.len() > 1;
         Self {
             rect,
@@ -508,60 +506,60 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         left_x += SECTION_GAP - NAV_BUTTON_GAP;
     }
 
-    let (search_rect, search_collapsed, search_icon_rect, search_clear_rect, right_limit) =
-        if desc.show_search {
-            let collapsed = r.size.x < SEARCH_COLLAPSE_THRESHOLD;
-            let sw = if collapsed {
-                r.size.y.clamp(28.0, 32.0)
-            } else {
-                (r.size.x * 0.28).clamp(200.0, 260.0)
-            };
-            let sx = (r.max().x - sw).max(left_x);
-            let sr = Rect::new(sx, r.origin.y, (r.max().x - sx).max(0.0), r.size.y);
-            let (icon_r, clear_r) = if collapsed {
-                let icon_s = 24.0f32.min(sr.size.y).min(sr.size.x);
-                let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
-                let ir = Rect::new(
-                    sr.origin.x + (sr.size.x - icon_s) * 0.5,
-                    icon_y,
-                    icon_s,
-                    icon_s,
-                );
-                (ir, None)
-            } else {
-                let icon_s = 16.0f32.min(sr.size.y).min(sr.size.x);
-                let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
-                let clear_s = 22.0f32.min(sr.size.y).min(sr.size.x);
-                let clear_y = sr.origin.y + (sr.size.y - clear_s) * 0.5;
-                match desc.search_icon_placement {
-                    SearchIconPlacement::Right => {
-                        // Windows 11 资源管理器风格：放大镜位于搜索框最右侧，清除按钮紧靠放大镜左侧
-                        let icon_x = (sr.max().x - icon_s - 8.0).max(sr.origin.x);
-                        let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
-                        let clear_x = (ir.origin.x - clear_s - 2.0).max(sr.origin.x + 4.0);
-                        (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
-                    }
-                    SearchIconPlacement::Left => {
-                        let icon_x =
-                            (sr.origin.x + 8.0).min((sr.max().x - icon_s).max(sr.origin.x));
-                        let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
-                        let clear_x = (sr.max().x - clear_s - 4.0)
-                            .max(ir.max().x + 4.0)
-                            .min((sr.max().x - clear_s).max(sr.origin.x));
-                        (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
-                    }
-                }
-            };
-            (
-                Some(sr),
-                collapsed,
-                Some(icon_r),
-                clear_r,
-                (sx - SECTION_GAP).max(left_x),
-            )
+    let (search_rect, search_collapsed, search_icon_rect, search_clear_rect, right_limit) = if desc
+        .show_search
+    {
+        let collapsed = r.size.x < SEARCH_COLLAPSE_THRESHOLD;
+        let sw = if collapsed {
+            r.size.y.clamp(28.0, 32.0)
         } else {
-            (None, false, None, None, r.max().x)
+            (r.size.x * 0.28).clamp(220.0, 340.0)
         };
+        let sx = (r.max().x - sw).max(left_x);
+        let sr = Rect::new(sx, r.origin.y, (r.max().x - sx).max(0.0), r.size.y);
+        let (icon_r, clear_r) = if collapsed {
+            let icon_s = 24.0f32.min(sr.size.y).min(sr.size.x);
+            let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
+            let ir = Rect::new(
+                sr.origin.x + (sr.size.x - icon_s) * 0.5,
+                icon_y,
+                icon_s,
+                icon_s,
+            );
+            (ir, None)
+        } else {
+            let icon_s = 16.0f32.min(sr.size.y).min(sr.size.x);
+            let icon_y = sr.origin.y + (sr.size.y - icon_s) * 0.5;
+            let clear_s = 22.0f32.min(sr.size.y).min(sr.size.x);
+            let clear_y = sr.origin.y + (sr.size.y - clear_s) * 0.5;
+            match desc.search_icon_placement {
+                SearchIconPlacement::Right => {
+                    // Windows 11 资源管理器风格：放大镜位于搜索框最右侧，清除按钮紧靠放大镜左侧
+                    let icon_x = (sr.max().x - icon_s - 8.0).max(sr.origin.x);
+                    let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
+                    let clear_x = (ir.origin.x - clear_s - 2.0).max(sr.origin.x + 4.0);
+                    (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
+                }
+                SearchIconPlacement::Left => {
+                    let icon_x = (sr.origin.x + 8.0).min((sr.max().x - icon_s).max(sr.origin.x));
+                    let ir = Rect::new(icon_x, icon_y, icon_s, icon_s);
+                    let clear_x = (sr.max().x - clear_s - 4.0)
+                        .max(ir.max().x + 4.0)
+                        .min((sr.max().x - clear_s).max(sr.origin.x));
+                    (ir, Some(Rect::new(clear_x, clear_y, clear_s, clear_s)))
+                }
+            }
+        };
+        (
+            Some(sr),
+            collapsed,
+            Some(icon_r),
+            clear_r,
+            (sx - SECTION_GAP).max(left_x),
+        )
+    } else {
+        (None, false, None, None, r.max().x)
+    };
 
     let address_rect = Rect::new(
         left_x,
@@ -591,7 +589,8 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     } else {
         None
     };
-    let content_start_x = root_chevron_rect.map_or(root_icon_rect.max().x + 4.0, |rc| rc.max().x + 2.0);
+    let content_start_x =
+        root_chevron_rect.map_or(root_icon_rect.max().x + 4.0, |rc| rc.max().x + 2.0);
     let available_total =
         (address_rect.max().x - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
 
@@ -610,10 +609,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         })
         .collect();
 
-    let total_segs_w: f32 = seg_widths
-        .iter()
-        .map(|(lw, cw)| lw + cw + 2.0)
-        .sum();
+    let total_segs_w: f32 = seg_widths.iter().map(|(lw, cw)| lw + cw + 2.0).sum();
 
     let mut overflow_count = 0usize;
     if total_segs_w > available_total && desc.segments.len() > 1 {
@@ -819,7 +815,10 @@ impl AddressBarState {
             {
                 return Some(AddressBarHitKind::RootChevron);
             }
-            if layout.overflow_rect.is_some_and(|r| r.contains_point(point)) {
+            if layout
+                .overflow_rect
+                .is_some_and(|r| r.contains_point(point))
+            {
                 return Some(AddressBarHitKind::OverflowButton);
             }
             for seg in &layout.segments {
@@ -1107,7 +1106,15 @@ fn emit_arrow_left_icon(
     payloads: &mut Vec<GpuPayload>,
 ) {
     let c = rect.center();
-    curve_stroke([c.x + 5.0, c.y], [c.x - 5.0, c.y], 1.6, color, z, primitives, payloads);
+    curve_stroke(
+        [c.x + 5.0, c.y],
+        [c.x - 5.0, c.y],
+        1.6,
+        color,
+        z,
+        primitives,
+        payloads,
+    );
     curve_stroke(
         [c.x - 1.0, c.y - 4.0],
         [c.x - 5.0, c.y],
@@ -1390,8 +1397,7 @@ pub fn emit_address_bar_text_layer(
     disabled: bool,
     z: u16,
 ) -> WidgetOutput {
-    let mut primitives =
-        Vec::with_capacity(3 + primary_glyphs.len() + placeholder_glyphs.len());
+    let mut primitives = Vec::with_capacity(3 + primary_glyphs.len() + placeholder_glyphs.len());
     let mut payloads = Vec::with_capacity(primary_glyphs.len() + placeholder_glyphs.len());
     let text_z = z.saturating_add(2);
 
@@ -1418,7 +1424,14 @@ pub fn emit_address_bar_text_layer(
         &mut primitives,
         &mut payloads,
     );
-    push_caret_and_preedit_overlays(visual, active, has_preedit, disabled, text_z, &mut primitives);
+    push_caret_and_preedit_overlays(
+        visual,
+        active,
+        has_preedit,
+        disabled,
+        text_z,
+        &mut primitives,
+    );
 
     WidgetOutput {
         primitives,
@@ -1512,7 +1525,11 @@ fn emit_address_bar_inner(
 
     // 1. 左段：外部 4 枚导航按钮槽位（后退/前进/向上/刷新，位于地址框之外）
     let nav_slots: [(Option<Rect>, AddressBarHitKind, bool); 4] = [
-        (layout.back_rect, AddressBarHitKind::NavBack, desc.can_go_back),
+        (
+            layout.back_rect,
+            AddressBarHitKind::NavBack,
+            desc.can_go_back,
+        ),
         (
             layout.forward_rect,
             AddressBarHitKind::NavForward,
@@ -2045,8 +2062,7 @@ fn emit_address_bar_inner(
         };
         out.with_sub_control(
             edit_sub,
-            HitRegion::new(edit_sub, LAYER, u32::from(z) + 1, edit_r)
-                .with_cursor(CursorKind::Text),
+            HitRegion::new(edit_sub, LAYER, u32::from(z) + 1, edit_r).with_cursor(CursorKind::Text),
             A11yNode::new(Role::TextInput, desc.full_path(), edit_r),
             true,
         );
@@ -2060,12 +2076,13 @@ fn emit_address_bar_inner(
             };
             out.with_sub_control(
                 search_sub,
-                HitRegion::new(search_sub, LAYER, u32::from(z) + 1, sr)
-                    .with_cursor(if layout.search_collapsed {
+                HitRegion::new(search_sub, LAYER, u32::from(z) + 1, sr).with_cursor(
+                    if layout.search_collapsed {
                         CursorKind::Pointer
                     } else {
                         CursorKind::Text
-                    }),
+                    },
+                ),
                 A11yNode::new(Role::SearchInput, search_label, sr),
                 true,
             );
@@ -2093,7 +2110,7 @@ mod tests {
 
     fn sample_desc() -> AddressBarDesc {
         AddressBarDesc::with_path_segments(
-            Rect::new(0.0, 0.0, 760.0, ADDRESS_BAR_HEIGHT),
+            Rect::new(0.0, 0.0, 840.0, ADDRESS_BAR_HEIGHT),
             "C:/Workspace/Assets/Shaders",
             vec![
                 PathSegment::new("C:", "C:/").with_icon(ShellIcon::Folder),
@@ -2302,7 +2319,11 @@ mod tests {
             vec!["C:".to_owned(), "Workspace".to_owned()],
         );
         let structured = sample_desc();
-        assert!(legacy.z >= 400, "legacy default z must be >= 400, got {}", legacy.z);
+        assert!(
+            legacy.z >= 400,
+            "legacy default z must be >= 400, got {}",
+            legacy.z
+        );
         assert!(
             structured.z >= 400,
             "structured default z must be >= 400, got {}",
@@ -2369,11 +2390,16 @@ mod tests {
             search_prim.fill_token_or_uv,
             u32::from(Token::PILL_INPUT_FILL.raw())
         );
-        assert_eq!(search_prim.border_token_or_tex, u32::from(Token::NONE.raw()));
+        assert_eq!(
+            search_prim.border_token_or_tex,
+            u32::from(Token::NONE.raw())
+        );
         assert_eq!(search_prim.border_width, 0);
 
         // 显式切换为 Outlined 模式后恢复 1px 描边
-        let outlined_desc = desc.clone().with_chrome_style(AddressBarChromeStyle::Outlined);
+        let outlined_desc = desc
+            .clone()
+            .with_chrome_style(AddressBarChromeStyle::Outlined);
         let outlined_out =
             emit_address_bar(1, &outlined_desc, &state, ControlState::default(), &[]);
         let outlined_addr = outlined_out
@@ -2534,7 +2560,10 @@ mod tests {
                     && (p.size[0] - back_r.size.x).abs() < 0.5
             })
             .expect("hovered back button surface");
-        assert_eq!(back_bg_hover.fill_token_or_uv, u32::from(Token::HOVER.raw()));
+        assert_eq!(
+            back_bg_hover.fill_token_or_uv,
+            u32::from(Token::HOVER.raw())
+        );
 
         state.hovered_hit = Some(AddressBarHitKind::Segment(0));
         let pressed_control = ControlState {
@@ -2632,25 +2661,22 @@ mod tests {
         );
 
         assert!(
-            out.primitives
-                .iter()
-                .any(|p| p.fill_token_or_uv == u32::from(Token::TEXT_SECONDARY.raw())
-                    && (p.local_pos[0] - 580.0).abs() < 0.5),
+            out.primitives.iter().any(|p| p.fill_token_or_uv
+                == u32::from(Token::TEXT_SECONDARY.raw())
+                && (p.local_pos[0] - 580.0).abs() < 0.5),
             "placeholder glyph must use Token::TEXT_SECONDARY"
         );
         assert!(
-            out.primitives
-                .iter()
-                .any(|p| p.fill_token_or_uv == u32::from(Token::PREEDIT_UNDERLINE.raw())
-                    && p.opacity() > 0.5),
+            out.primitives.iter().any(|p| p.fill_token_or_uv
+                == u32::from(Token::PREEDIT_UNDERLINE.raw())
+                && p.opacity() > 0.5),
             "active IME preedit must emit visible underline"
         );
         assert!(
-            out.primitives
-                .iter()
-                .any(|p| p.fill_token_or_uv == u32::from(Token::TEXT_PRIMARY.raw())
-                    && (p.size[0] - 1.5).abs() < 0.01
-                    && p.opacity() > 0.5),
+            out.primitives.iter().any(|p| p.fill_token_or_uv
+                == u32::from(Token::TEXT_PRIMARY.raw())
+                && (p.size[0] - 1.5).abs() < 0.01
+                && p.opacity() > 0.5),
             "active edit state must emit visible caret"
         );
     }
@@ -2806,7 +2832,10 @@ mod tests {
         assert_eq!(plain.effective_icon(), WidgetIcon::None);
 
         let vec_only = PathSegment::new("Drive", "C:\\").with_icon(ShellIcon::Drive);
-        assert_eq!(vec_only.effective_icon(), WidgetIcon::Vector(ShellIcon::Drive));
+        assert_eq!(
+            vec_only.effective_icon(),
+            WidgetIcon::Vector(ShellIcon::Drive)
+        );
 
         let overridden = vec_only
             .clone()
