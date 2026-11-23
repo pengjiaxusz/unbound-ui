@@ -449,7 +449,7 @@ pub use address_bar::{
     emit_address_bar_with_dropdown, emit_address_bar_with_visual, AddressBarChromeStyle,
     AddressBarDesc, AddressBarDropdownLayout, AddressBarDropdownMode, AddressBarEvent,
     AddressBarHitKind, AddressBarLayout, AddressBarState, AddressBarTextVisual, PathSegment,
-    SearchIconPlacement, SegmentLayout, ADDRESS_BAR_HEIGHT,
+    SearchIconPlacement, SegmentLayout, ADDRESS_BAR_FONT_SIZE, ADDRESS_BAR_HEIGHT,
 };
 pub use copy_button::{
     emit_copy_button, emit_read_only_input, read_only_copy_node, CopyButtonDesc, CopyButtonState,
@@ -722,8 +722,8 @@ pub use tabs::{
     emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, emit_tabs_with_control_states,
     reduce_tabs_key, tab_add_node, tab_close_node, tab_item_node, TabItem, TabViewEvent,
     TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens, TAB_ADD_GAP,
-    TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
-    TAB_SHELL_CORNER_RADIUS, TAB_SHELL_TOP_INSET,
+    TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
+    TAB_SHELL_CORNER_RADIUS, TAB_SHELL_ITEM_HEIGHT, TAB_SHELL_TOP_INSET, TAB_STRIP_HEIGHT,
 };
 pub use tag_input::{
     emit_tag_input, layout_tags, TagInputDesc, TagInputOutcome, TagInputState, TagKey, TagLayout,
@@ -771,8 +771,8 @@ pub use tree_view::{
     emit_tree_background, emit_tree_row, emit_tree_row_divider, emit_tree_row_with_icon,
     emit_tree_row_with_options, tree_row_label_max_width, tree_row_label_x,
     tree_row_trailing_icon_rect, tree_toggle_node, TreeRowIcon, TreeRowOptions, TreeViewDensity,
-    TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens, TREE_ICON_GAP,
-    TREE_ICON_SIZE, TREE_ROW_COMPACT, TREE_TRAILING_ICON_SIZE,
+    TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens, TREE_DIVIDER_HEIGHT,
+    TREE_FONT_SIZE, TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT, TREE_TRAILING_ICON_SIZE,
 };
 pub use virtual_masonry::{emit_virtual_masonry, VirtualMasonryDesc, VirtualMasonryState};
 pub use virtual_views::{

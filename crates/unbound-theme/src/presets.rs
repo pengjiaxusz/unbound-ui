@@ -348,6 +348,61 @@ impl ThemeSet {
             Palette::new(ThemeKind::HighContrast, &high_contrast_entries),
         )
     }
+
+    /// 在当前主题集上注入操作系统主题强调色，透传至聚焦下划线、主强调与选中指示相关令牌。
+    ///
+    /// 高对比度调色板保持原样，不破坏无障碍对比度约定。
+    #[must_use]
+    pub fn with_system_accent(self, accent_color: Color) -> Self {
+        let apply_to_palette = |palette: &Palette, dark_mode: bool| -> Palette {
+            let mut entries: Vec<(Token, Color)> = crate::TOKENS
+                .iter()
+                .map(|&t| (t, palette.color(t)))
+                .collect();
+            let set_tok = |list: &mut Vec<(Token, Color)>, tok: Token, col: Color| {
+                if let Some(slot) = list.iter_mut().find(|(t, _)| *t == tok) {
+                    slot.1 = col;
+                }
+            };
+            let (p, h, pr, soft, on) =
+                crate::win11::accent_ramp_from_color(accent_color, dark_mode);
+            set_tok(&mut entries, Token::PRIMARY, p);
+            set_tok(&mut entries, Token::ON_PRIMARY, on);
+            set_tok(&mut entries, Token::PRIMARY_HOVER, h);
+            set_tok(&mut entries, Token::PRIMARY_PRESSED, pr);
+            set_tok(&mut entries, Token::PRIMARY_SOFT, soft);
+            set_tok(&mut entries, Token::ACCENT, p);
+            set_tok(&mut entries, Token::ON_ACCENT, on);
+            set_tok(&mut entries, Token::ACCENT_SOFT, soft);
+            set_tok(&mut entries, Token::FOCUS_RING, h);
+            set_tok(&mut entries, Token::SELECTION, p.with_alpha(0.22));
+            set_tok(&mut entries, Token::INDETERMINATE_FILL, p);
+            set_tok(&mut entries, Token::PREEDIT_UNDERLINE, p);
+            Palette::new(palette.kind(), &entries)
+        };
+
+        let light = apply_to_palette(self.palette(ThemeKind::Light), false);
+        let dark = apply_to_palette(self.palette(ThemeKind::Dark), true);
+        let high_contrast = self.palette(ThemeKind::HighContrast).clone();
+        Self::from_palettes(light, dark, high_contrast)
+    }
+
+    /// 根据宿主产品预设、品牌强调色与可选系统强调色生成完整 3 主题调色板集合。
+    ///
+    /// 当 `system_accent` 为 `Some(color)` 时，基于产品预设进一步透传系统强调色至
+    /// 主强调色、文本输入焦点下划线与选中指示令牌。
+    #[must_use]
+    pub fn for_product_with_system_accent(
+        preset: ProductPreset,
+        accent: AccentBrand,
+        system_accent: Option<Color>,
+    ) -> Self {
+        let base = Self::for_product(preset, accent);
+        match system_accent {
+            Some(color) => base.with_system_accent(color),
+            None => base,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -457,5 +512,50 @@ mod tests {
                 .color(Token::NAV_SELECTED),
             standard.palette(ThemeKind::Dark).color(Token::NAV_SELECTED)
         );
+    }
+
+    #[test]
+    fn with_system_accent_propagates_to_focus_selection_and_primary_tokens() {
+        let base = ThemeSet::for_product(ProductPreset::Win11, AccentBrand::Blue);
+        let custom_accent = Color::from_srgb8(0xE8, 0x5D, 0x75, 255);
+        let themed = ThemeSet::for_product_with_system_accent(
+            ProductPreset::Win11,
+            AccentBrand::Blue,
+            Some(custom_accent),
+        );
+
+        let base_dark = base.palette(ThemeKind::Dark);
+        let themed_dark = themed.palette(ThemeKind::Dark);
+        let themed_light = themed.palette(ThemeKind::Light);
+
+        // 主强调色（驱动文本输入焦点下划线与选中指示条）已从默认亮蓝切换为系统强调色派生值
+        assert_ne!(
+            themed_dark.color(Token::PRIMARY),
+            base_dark.color(Token::PRIMARY)
+        );
+        assert_eq!(
+            themed_dark.color(Token::PREEDIT_UNDERLINE),
+            themed_dark.color(Token::PRIMARY)
+        );
+        assert_eq!(
+            themed_dark.color(Token::INDETERMINATE_FILL),
+            themed_dark.color(Token::PRIMARY)
+        );
+        assert_eq!(
+            themed_dark.color(Token::FOCUS_RING),
+            themed_dark.color(Token::PRIMARY_HOVER)
+        );
+        assert!(themed_dark.color(Token::SELECTION).a > 0.15);
+        assert!(themed_light.color(Token::PRIMARY).is_finite());
+
+        // 高对比度调色板保持不受系统强调色覆写
+        assert_eq!(
+            themed.palette(ThemeKind::HighContrast),
+            base.palette(ThemeKind::HighContrast)
+        );
+
+        // 生成 4 KiB LUT 合法
+        let lut = ThemeLut::from_palette(themed_dark);
+        assert_eq!(lut.bytes().len(), 4096);
     }
 }

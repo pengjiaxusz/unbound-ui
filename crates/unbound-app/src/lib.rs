@@ -742,6 +742,8 @@ pub struct AppContext {
     pub preset: unbound_theme::ProductPreset,
     /// 当前 OKLCH 品牌强调色预设（共 10 套）。
     pub accent: unbound_theme::AccentBrand,
+    /// 可选操作系统主题强调色覆盖（`None` 时在默认 Win11 蓝色预设下自动读取平台系统强调色）。
+    pub system_accent: Option<unbound_math::Color>,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
     /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
@@ -837,6 +839,7 @@ impl AppContext {
             follow_system_theme: true,
             preset: unbound_theme::ProductPreset::Win11,
             accent: unbound_theme::AccentBrand::Blue,
+            system_accent: None,
             window_maximized: false,
             window_focused: true,
             os_scale: 1.0,
@@ -979,6 +982,26 @@ impl AppContext {
     /// 切换 OKLCH 品牌强调色。
     pub fn set_accent_brand(&mut self, accent: unbound_theme::AccentBrand) {
         self.accent = accent;
+    }
+
+    /// 显式设置或清除覆盖用的系统主题强调色。
+    pub fn set_system_accent(&mut self, accent: Option<unbound_math::Color>) {
+        self.system_accent = accent;
+    }
+
+    /// 解析当前生效的系统强调色：优先取显式覆盖，其次在默认 Win11 预设下读取平台系统强调色。
+    #[must_use]
+    pub fn resolved_system_accent(&self) -> Option<unbound_math::Color> {
+        if let Some(color) = self.system_accent {
+            return Some(color);
+        }
+        if self.preset == unbound_theme::ProductPreset::Win11
+            && self.accent == unbound_theme::AccentBrand::Blue
+        {
+            unbound_platform::read_system_accent_color()
+        } else {
+            None
+        }
     }
 
     /// 读取指定 `TextInputDesc` 控件键当前的文本内容。
@@ -1507,6 +1530,8 @@ pub struct TreeViewRowSnapshot {
     row: unbound_world::TreeRow,
     /// 该行在内容空间中的顺序索引。
     item: usize,
+    /// 该行在内容空间中的精确纵向起始偏移（已计入上方 `14px` 独立分区分隔行）。
+    y_offset: f32,
     /// 是否处于选中态。
     selected: bool,
     /// 行前置图标槽配置。
@@ -2816,7 +2841,7 @@ impl<'a> ViewBuilder<'a> {
             }
         }
         let scroll_y = state.scroll_offset();
-        let content_height = state.row_count() as f32 * desc.row_height;
+        let content_height = state.content_height_with_row_height(desc.row_height);
         let hovered_row = state.hovered_row();
         let rows = state
             .rows(&query_desc)
@@ -2826,6 +2851,7 @@ impl<'a> ViewBuilder<'a> {
                 TreeViewRowSnapshot {
                     row: row.row,
                     item: row.item,
+                    y_offset: state.item_y_with_row_height(row.item, desc.row_height),
                     selected: state.selected.contains(&id),
                     icon: state.row_icon(id),
                     label: state.row_label(id).map(str::to_owned),
@@ -6577,16 +6603,11 @@ impl<A: Application> AppRuntime<A> {
                     ]);
                     self.collector.push_clip(clip_node, desc.rect);
 
-                    let font_size = if desc.density == unbound_widgets::TreeViewDensity::Compact {
-                        12.5
-                    } else {
-                        13.0
-                    };
+                    let font_size = unbound_widgets::TREE_FONT_SIZE;
                     let mut any_row_hovered = false;
                     for snap in rows {
-                        // 基于布局求解后的最终 `desc.rect` 重算每行世界坐标，杜绝 `(0, 0)` 原点烘焙溢出。
-                        let row_y = desc.rect.origin.y + snap.item as f32 * desc.row_height
-                            - effective_scroll_y;
+                        // 基于布局求解后的最终 `desc.rect` 与独立分区分隔行偏移重算每行世界坐标。
+                        let row_y = desc.rect.origin.y + snap.y_offset - effective_scroll_y;
                         let row_rect =
                             Rect::new(desc.rect.origin.x, row_y, desc.rect.size.x, desc.row_height);
                         if row_rect.max().y < desc.rect.origin.y
@@ -6827,13 +6848,19 @@ impl<A: Application> AppRuntime<A> {
                             addr_glyphs.extend(text_ctx.shape_line(
                                 edit_text,
                                 scrolled_edit_rect,
-                                13.0,
+                                unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                 400,
                                 unbound_widgets::AlignX::Left,
                                 unbound_widgets::AlignY::Middle,
                             ));
                             if let Some(suffix) = desc.inline_completion_suffix(edit_text) {
-                                let prefix_w = text_ctx.measure_line(edit_text, 13.0, 400).x;
+                                let prefix_w = text_ctx
+                                    .measure_line(
+                                        edit_text,
+                                        unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                        400,
+                                    )
+                                    .x;
                                 let ghost_x = scrolled_edit_rect.origin.x + prefix_w;
                                 let ghost_w = (edit_rect.max().x - ghost_x).max(0.0);
                                 if ghost_w > 0.0 {
@@ -6845,7 +6872,7 @@ impl<A: Application> AppRuntime<A> {
                                             ghost_w,
                                             edit_rect.size.y,
                                         ),
-                                        13.0,
+                                        unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                         400,
                                         unbound_widgets::AlignX::Left,
                                         unbound_widgets::AlignY::Middle,
@@ -6857,7 +6884,15 @@ impl<A: Application> AppRuntime<A> {
                             &bar_state.edit_core,
                             edit_rect,
                             !state.disabled,
-                            |candidate| text_ctx.measure_line(candidate, 13.0, 400).x,
+                            |candidate| {
+                                text_ctx
+                                    .measure_line(
+                                        candidate,
+                                        unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                        400,
+                                    )
+                                    .x
+                            },
                         );
                     } else {
                         for seg_layout in &layout.segments {
@@ -6868,13 +6903,21 @@ impl<A: Application> AppRuntime<A> {
                                         &seg.label,
                                         avail_w,
                                         unbound_widgets::ElideMode::End,
-                                        |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                        |candidate| {
+                                            text_ctx
+                                                .measure_line(
+                                                    candidate,
+                                                    unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                                    400,
+                                                )
+                                                .x
+                                        },
                                     );
                                     if !elided.display.is_empty() {
                                         addr_glyphs.extend(text_ctx.shape_line(
                                             &elided.display,
                                             seg_layout.label_rect,
-                                            12.5,
+                                            unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                             400,
                                             unbound_widgets::AlignX::Center,
                                             unbound_widgets::AlignY::Middle,
@@ -6929,14 +6972,20 @@ impl<A: Application> AppRuntime<A> {
                                                 text_r.width(),
                                                 unbound_widgets::ElideMode::End,
                                                 |candidate| {
-                                                    text_ctx.measure_line(candidate, 12.5, 400).x
+                                                    text_ctx
+                                                        .measure_line(
+                                                            candidate,
+                                                            unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                                            400,
+                                                        )
+                                                        .x
                                                 },
                                             );
                                             if !elided.display.is_empty() {
                                                 dd_glyphs.extend(text_ctx.shape_line(
                                                     &elided.display,
                                                     text_r,
-                                                    12.5,
+                                                    unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                                     400,
                                                     unbound_widgets::AlignX::Left,
                                                     unbound_widgets::AlignY::Middle,
@@ -7003,7 +7052,7 @@ impl<A: Application> AppRuntime<A> {
                                     search_primary_glyphs.extend(text_ctx.shape_line(
                                         search_text,
                                         scrolled_search_rect,
-                                        12.5,
+                                        unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                         400,
                                         unbound_widgets::AlignX::Left,
                                         unbound_widgets::AlignY::Middle,
@@ -7013,13 +7062,21 @@ impl<A: Application> AppRuntime<A> {
                                         display,
                                         search_w,
                                         unbound_widgets::ElideMode::End,
-                                        |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                        |candidate| {
+                                            text_ctx
+                                                .measure_line(
+                                                    candidate,
+                                                    unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                                    400,
+                                                )
+                                                .x
+                                        },
                                     );
                                     if !elided.display.is_empty() {
                                         let shaped = text_ctx.shape_line(
                                             &elided.display,
                                             search_text_rect,
-                                            12.5,
+                                            unbound_widgets::ADDRESS_BAR_FONT_SIZE,
                                             400,
                                             unbound_widgets::AlignX::Left,
                                             unbound_widgets::AlignY::Middle,
@@ -7037,7 +7094,15 @@ impl<A: Application> AppRuntime<A> {
                                     &bar_state.search_core,
                                     search_text_rect,
                                     !state.disabled,
-                                    |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                                    |candidate| {
+                                        text_ctx
+                                            .measure_line(
+                                                candidate,
+                                                unbound_widgets::ADDRESS_BAR_FONT_SIZE,
+                                                400,
+                                            )
+                                            .x
+                                    },
                                 );
                             }
                             let search_clip = GpuClipNode::from_aabb([
@@ -7187,7 +7252,7 @@ impl<A: Application> AppRuntime<A> {
                             let quads = text_ctx.shape_line(
                                 &tab.title,
                                 tab_rect,
-                                12.0,
+                                unbound_theme::typography::font_size::BODY,
                                 500,
                                 unbound_widgets::AlignX::Left,
                                 unbound_widgets::AlignY::Middle,
@@ -7317,7 +7382,7 @@ impl<A: Application> AppRuntime<A> {
                             let (shortcut_glyphs, right_reserved) = if item.has_submenu() {
                                 (Vec::new(), 30.0)
                             } else if !item.shortcut.is_empty() {
-                                let sc_size = 11.5;
+                                let sc_size = unbound_theme::typography::font_size::CAPTION;
                                 let sc_w = text_ctx.measure_line(&item.shortcut, sc_size, 400).x;
                                 let max_sc_w = (pill_right - 10.0 - label_left).max(0.0);
                                 let sc_box_w = (sc_w + 4.0).min(max_sc_w);
@@ -7349,7 +7414,15 @@ impl<A: Application> AppRuntime<A> {
                                     &item.label,
                                     label_avail_w,
                                     unbound_widgets::ElideMode::End,
-                                    |cand| text_ctx.measure_line(cand, 13.0, 400).x,
+                                    |cand| {
+                                        text_ctx
+                                            .measure_line(
+                                                cand,
+                                                unbound_theme::typography::font_size::BODY,
+                                                400,
+                                            )
+                                            .x
+                                    },
                                 );
                                 if !elided.display.is_empty() {
                                     let label_rect = Rect::new(
@@ -7361,7 +7434,7 @@ impl<A: Application> AppRuntime<A> {
                                     text_ctx.shape_line(
                                         &elided.display,
                                         label_rect,
-                                        13.0,
+                                        unbound_theme::typography::font_size::BODY,
                                         400,
                                         unbound_widgets::AlignX::Left,
                                         unbound_widgets::AlignY::Middle,
@@ -7442,7 +7515,7 @@ impl<A: Application> AppRuntime<A> {
                             let label_quads = text_ctx.shape_line(
                                 &cmd.title,
                                 row_rect,
-                                13.0,
+                                unbound_theme::typography::font_size::BODY,
                                 400,
                                 unbound_widgets::AlignX::Left,
                                 unbound_widgets::AlignY::Middle,
@@ -7451,7 +7524,7 @@ impl<A: Application> AppRuntime<A> {
                                 Some(shortcut) if !shortcut.is_empty() => text_ctx.shape_line(
                                     shortcut,
                                     row_rect,
-                                    11.0,
+                                    unbound_theme::typography::font_size::CAPTION,
                                     400,
                                     unbound_widgets::AlignX::Right,
                                     unbound_widgets::AlignY::Middle,
@@ -9282,7 +9355,7 @@ mod tests {
         let bar_rect = rt.widget_rect(30).expect("address bar laid out");
         assert!(
             (bar_rect.height() - ADDRESS_BAR_HEIGHT).abs() < 0.5,
-            "address bar must fall back to ADDRESS_BAR_HEIGHT (32.0), got {}",
+            "address bar must fall back to ADDRESS_BAR_HEIGHT (36.0), got {}",
             bar_rect.height()
         );
 

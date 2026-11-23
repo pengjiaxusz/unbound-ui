@@ -30,6 +30,7 @@ pub mod pacing;
 pub mod popup_host;
 pub mod resize;
 pub mod screen_capture;
+pub mod system_accent;
 pub mod tray;
 #[cfg(windows)]
 pub mod uia_win32;
@@ -64,6 +65,10 @@ pub use popup_host::{
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{
     capture_screen_region, clamp_to_screen, screen_rect_uv, CaptureError, CapturedScreen,
+};
+pub use system_accent::{
+    decode_abgr_accent, decode_argb_colorization, read_system_accent_color, system_accent_color,
+    DEFAULT_SYSTEM_ACCENT_SRGB,
 };
 pub use tray::{
     set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,

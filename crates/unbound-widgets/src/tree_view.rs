@@ -39,8 +39,14 @@ pub const TREE_OVERSCAN: f32 = 1.0;
 /// 行前置图标槽尺寸（`16×16px`）。
 pub const TREE_ICON_SIZE: f32 = 16.0;
 
-/// 行图标槽与文本标签之间的水平间距（`6px`）。
-pub const TREE_ICON_GAP: f32 = 6.0;
+/// 行图标槽与文本标签之间的水平间距（对齐 Win11 Fluent `10–12px` 尺度，取 `10px`）。
+pub const TREE_ICON_GAP: f32 = 10.0;
+
+/// 分区分隔线独占行高（`14px`，上下各留呼吸空白而非 `0px` 叠画）。
+pub const TREE_DIVIDER_HEIGHT: f32 = 14.0;
+
+/// 导航树与树形视图默认正文基准字号（`14px`，对齐 Win11 `font_size::BODY`）。
+pub const TREE_FONT_SIZE: f32 = unbound_theme::typography::font_size::BODY;
 
 /// 树形行前置图标槽类型别名（向后兼容 [`WidgetIcon`]）。
 pub type TreeRowIcon = WidgetIcon;
@@ -730,14 +736,67 @@ impl TreeViewState {
         self.renaming = None;
     }
 
+    /// 统计扁平化列表中 `0..=item` 范围内带前置分区分隔线的行数。
+    #[must_use]
+    pub fn divider_count_up_to(&self, item: usize) -> usize {
+        if self.row_dividers_before.is_empty() || self.order.is_empty() {
+            return 0;
+        }
+        let end = item.min(self.order.len().saturating_sub(1));
+        self.order[..=end]
+            .iter()
+            .filter(|row| self.row_dividers_before.contains(&row.id))
+            .count()
+    }
+
+    /// 统计当前扁平化可见行中已激活的分区分隔线总数。
+    #[must_use]
+    pub fn total_divider_count(&self) -> usize {
+        if self.row_dividers_before.is_empty() || self.order.is_empty() {
+            return 0;
+        }
+        self.order
+            .iter()
+            .filter(|row| self.row_dividers_before.contains(&row.id))
+            .count()
+    }
+
+    /// 计算第 `item` 行在内容空间中的精确纵向起始坐标（已累加上方所有 `14px` 独立分区分隔行）。
+    #[must_use]
+    pub fn item_y(&self, item: usize) -> f32 {
+        self.item_y_with_row_height(item, self.row_height())
+    }
+
+    /// 使用显式行高计算第 `item` 行在内容空间中的精确纵向起始坐标（含独立 `14px` 分区分隔行）。
+    #[must_use]
+    pub fn item_y_with_row_height(&self, item: usize, row_height: f32) -> f32 {
+        item as f32 * row_height + self.divider_count_up_to(item) as f32 * TREE_DIVIDER_HEIGHT
+    }
+
+    /// 使用显式行高计算扁平化行与所有独立分区分隔行的总内容高度。
+    #[must_use]
+    pub fn content_height_with_row_height(&self, row_height: f32) -> f32 {
+        self.order.len() as f32 * row_height
+            + self.total_divider_count() as f32 * TREE_DIVIDER_HEIGHT
+    }
+
+    fn effective_scroll_desc(&self, desc: &TreeViewDesc) -> ScrollViewDesc {
+        ScrollViewDesc::new(
+            desc.rect,
+            unbound_math::Vec2::new(
+                desc.rect.size.x,
+                self.content_height_with_row_height(desc.row_height),
+            ),
+        )
+    }
+
     /// 滚动使指定扁平化行可见。
     pub fn reveal(&mut self, item: usize) {
-        let rows = self.order.len();
         let desc = ScrollViewDesc::new(
             Rect::new(0.0, 0.0, 1.0, self.viewport_height),
-            unbound_math::Vec2::new(1.0, rows as f32 * self.row_height()),
+            unbound_math::Vec2::new(1.0, self.content_height()),
         );
-        let y = item as f32 * self.row_height();
+        let y = self.item_y(item);
         if y < self.scroll_offset() {
             self.scroll.jump_to(&desc, unbound_math::Vec2::new(0.0, y));
         } else if y + self.row_height() > self.scroll_offset() + self.viewport_height {
@@ -761,40 +820,62 @@ impl TreeViewState {
 
     /// 单帧的实例化行列表。
     ///
-    /// 仅返回视口内（及紧邻周围）的槽位，这是虚拟化器恒定实体数量的保证。
+    /// 仅返回视口内（及紧邻周围）的槽位，这是虚拟化器恒定实体数量的保证；
+    /// 当存在分区分隔线时，自动为每条分隔线预留独立 [`TREE_DIVIDER_HEIGHT`]（`14px`）行高。
     pub fn rows(&mut self, desc: &TreeViewDesc) -> Vec<TreeViewRow> {
         self.set_viewport_height(desc.rect.size.y);
         if desc.rect.size.x <= 0.0 || desc.rect.size.y <= 0.0 {
             return Vec::new();
         }
-        let scroll_desc = desc.scroll_desc(self.order.len());
+        let scroll_desc = self.effective_scroll_desc(desc);
         let clamped_scroll_y = scroll_desc.clamp_offset(self.scroll.offset()).y;
         self.last_window = self.tree.update(clamped_scroll_y, desc.rect.size.y);
-        let mut out = Vec::with_capacity(self.tree.slot_count());
-        for slot in 0..self.tree.slot_count() {
-            let (Some(row), Some(item)) = (self.tree.row_at(slot), self.tree.slot_item(slot))
-            else {
-                continue;
-            };
-            let y = desc.rect.origin.y + self.tree.item_y(item) - clamped_scroll_y;
+        if self.row_dividers_before.is_empty() {
+            let mut out = Vec::with_capacity(self.tree.slot_count());
+            for slot in 0..self.tree.slot_count() {
+                let (Some(row), Some(item)) = (self.tree.row_at(slot), self.tree.slot_item(slot))
+                else {
+                    continue;
+                };
+                let y = desc.rect.origin.y + self.tree.item_y(item) - clamped_scroll_y;
+                let rect = Rect::new(desc.rect.origin.x, y, desc.rect.size.x, desc.row_height);
+                if rect.max().y < desc.rect.origin.y || rect.origin.y > desc.rect.max().y {
+                    continue;
+                }
+                out.push(TreeViewRow { row, item, rect });
+            }
+            return out;
+        }
+
+        let mut out = Vec::with_capacity(desc.visible_capacity() + 4);
+        let mut cursor_y = 0.0f32;
+        for (item, &row) in self.order.iter().enumerate() {
+            if self.row_dividers_before.contains(&row.id) {
+                cursor_y += TREE_DIVIDER_HEIGHT;
+            }
+            let y = desc.rect.origin.y + cursor_y - clamped_scroll_y;
             let rect = Rect::new(desc.rect.origin.x, y, desc.rect.size.x, desc.row_height);
-            if rect.max().y < desc.rect.origin.y || rect.origin.y > desc.rect.max().y {
+            cursor_y += desc.row_height;
+            if rect.max().y < desc.rect.origin.y {
                 continue;
+            }
+            if rect.origin.y > desc.rect.max().y {
+                break;
             }
             out.push(TreeViewRow { row, item, rect });
         }
         out
     }
 
-    /// 扁平化行的总内容高度。
+    /// 扁平化行的总内容高度（含所有独立分区分隔行高度）。
     #[must_use]
     pub fn content_height(&self) -> f32 {
-        self.order.len() as f32 * self.row_height()
+        self.content_height_with_row_height(self.row_height())
     }
 
     /// 按滚轮增量滚动。
     pub fn scroll_by(&mut self, desc: &TreeViewDesc, delta: f32) -> bool {
-        let scroll_desc = desc.scroll_desc(self.order.len());
+        let scroll_desc = self.effective_scroll_desc(desc);
         self.scroll
             .scroll_by(&scroll_desc, unbound_math::Vec2::new(0.0, delta));
         self.scroll.is_animating()
@@ -802,7 +883,7 @@ impl TreeViewState {
 
     /// 推进滚动弹簧步进，返回是否仍在运动。
     pub fn advance(&mut self, desc: &TreeViewDesc, dt: f32) -> bool {
-        let scroll_desc = desc.scroll_desc(self.order.len());
+        let scroll_desc = self.effective_scroll_desc(desc);
         self.scroll.step(&scroll_desc, dt)
     }
 }
@@ -1195,7 +1276,8 @@ pub const fn tree_toggle_node(row_id: u64) -> u64 {
     row_id ^ 0x5452_4545_0001
 }
 
-/// 输出位于树行顶部上方的柔和 1px 水平分区分隔线（左右各留白 `12px`）。
+/// 输出位于树行上方独立 [`TREE_DIVIDER_HEIGHT`]（`14px`）分隔行垂直居中处的柔和 1px 水平分区分隔线
+/// （左右各留白 `12px`，上下各留呼吸空白而非 `0px` 叠画）。
 #[must_use]
 pub fn emit_tree_row_divider(
     desc: &TreeViewDesc,
@@ -1205,7 +1287,8 @@ pub fn emit_tree_row_divider(
     let inset = 12.0;
     let width = (row.rect.size.x - inset * 2.0).max(0.0);
     let primitives = if width > 0.0 {
-        let line_rect = Rect::new(row.rect.origin.x + inset, row.rect.origin.y, width, 1.0);
+        let line_y = row.rect.origin.y - TREE_DIVIDER_HEIGHT * 0.5;
+        let line_rect = Rect::new(row.rect.origin.x + inset, line_y, width, 1.0);
         vec![instance(
             line_rect,
             [0.0; 4],
@@ -1795,7 +1878,9 @@ mod tests {
         let prim = &div_out.primitives[0];
         assert_eq!(prim.fill_token_or_uv, Token::DIVIDER.raw() as u32);
         assert!((prim.local_pos[0] - (row2.rect.origin.x + 12.0)).abs() < 0.01);
-        assert!((prim.local_pos[1] - row2.rect.origin.y).abs() < 0.01);
+        assert!(
+            (prim.local_pos[1] - (row2.rect.origin.y - TREE_DIVIDER_HEIGHT * 0.5)).abs() < 0.01
+        );
         assert!((prim.size[0] - (row2.rect.size.x - 24.0)).abs() < 0.01);
         assert!((prim.size[1] - 1.0).abs() < 0.01);
 
@@ -2003,5 +2088,50 @@ mod tests {
                 u32::from(SubElement::Content as u8)
             );
         }
+    }
+
+    #[test]
+    fn divider_occupies_independent_14px_row_height_and_shifts_following_rows() {
+        let mut state = TreeViewState::new_with_density(TreeViewDensity::Standard);
+        state.rebuild(&[root(1), root(2), root(3)], |_| Vec::new());
+        let desc = TreeViewDesc::new(Rect::new(0.0, 20.0, 240.0, 300.0))
+            .with_density(TreeViewDensity::Standard)
+            .with_navigation_pane(true);
+
+        let base_height = state.content_height();
+        assert!((base_height - TREE_ROW * 3.0).abs() < f32::EPSILON);
+
+        state.set_row_divider_before(2, true);
+        assert!(
+            (state.content_height() - (base_height + TREE_DIVIDER_HEIGHT)).abs() < f32::EPSILON
+        );
+
+        let rows = state.rows(&desc);
+        assert_eq!(rows.len(), 3);
+        assert!((rows[0].rect.origin.y - 20.0).abs() < f32::EPSILON);
+        assert!(
+            (rows[1].rect.origin.y - (20.0 + TREE_ROW + TREE_DIVIDER_HEIGHT)).abs() < f32::EPSILON
+        );
+        assert!(
+            (rows[2].rect.origin.y - (20.0 + TREE_ROW * 2.0 + TREE_DIVIDER_HEIGHT)).abs()
+                < f32::EPSILON
+        );
+
+        let div_out = emit_tree_row_divider(&desc, &rows[1], TreeViewTokens::navigation_pane());
+        let line_y = div_out.primitives[0].local_pos[1];
+        assert!(line_y > rows[0].rect.max().y + 4.0);
+        assert!(line_y < rows[1].rect.origin.y - 4.0);
+    }
+
+    #[test]
+    fn tree_icon_gap_matches_fluent_scale() {
+        assert!((10.0..=12.0).contains(&TREE_ICON_GAP));
+        assert!((TREE_DIVIDER_HEIGHT - 14.0).abs() < f32::EPSILON);
+        assert!((TREE_FONT_SIZE - 14.0).abs() < f32::EPSILON);
+
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 240.0, 200.0));
+        let no_icon_x = tree_row_label_x(&desc, 0, false);
+        let with_icon_x = tree_row_label_x(&desc, 0, true);
+        assert!((with_icon_x - no_icon_x - (TREE_ICON_SIZE + TREE_ICON_GAP)).abs() < f32::EPSILON);
     }
 }

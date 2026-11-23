@@ -23,8 +23,10 @@ use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
 
-/// 地址栏标准高度（`32px`）。
-pub const ADDRESS_BAR_HEIGHT: f32 = 32.0;
+/// 地址栏标准高度（对齐 Win11 Fluent 胶囊尺度 `36px`，落在原生 `34–36px` 区间）。
+pub const ADDRESS_BAR_HEIGHT: f32 = 36.0;
+/// 地址栏、面包屑与内联搜索框默认正文基准字号（`14px`，对齐 Win11 `font_size::BODY`）。
+pub const ADDRESS_BAR_FONT_SIZE: f32 = unbound_theme::typography::font_size::BODY;
 /// 外部导航按钮尺寸（`32×32px`）。
 const NAV_BUTTON_SIZE: f32 = 32.0;
 /// 外部导航按钮间距（`4px`）。
@@ -55,8 +57,8 @@ const SEARCH_COLLAPSE_THRESHOLD: f32 = 420.0;
 const EDIT_CLEAR_SIZE: f32 = 22.0;
 /// 主地址框最右侧历史下拉箭头按钮（`⌄`）宽度（`24px`）。
 const HISTORY_DROPDOWN_BUTTON_WIDTH: f32 = 24.0;
-/// 历史/补全下拉浮层单行高度（`28px`）。
-const DROPDOWN_ROW_HEIGHT: f32 = 28.0;
+/// 历史/补全下拉浮层单行高度（`32px`，适配 `14px` 正文字号）。
+const DROPDOWN_ROW_HEIGHT: f32 = 32.0;
 /// 历史/补全下拉浮层内边距（`4px`）。
 const DROPDOWN_PADDING: f32 = 4.0;
 /// 历史/补全下拉浮层与地址框之间的垂直间距（`4px`）。
@@ -698,7 +700,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     {
         let collapsed = r.size.x < SEARCH_COLLAPSE_THRESHOLD;
         let sw = if collapsed {
-            r.size.y.clamp(28.0, 32.0)
+            r.size.y.clamp(28.0, ADDRESS_BAR_HEIGHT)
         } else {
             (r.size.x * 0.28).clamp(220.0, 340.0)
         };
@@ -3814,5 +3816,14 @@ mod tests {
         empty_state.begin_edit("C:/");
         assert!(!empty_state.handle_key(&empty_desc, KeyChord::named("Tab")));
         assert!(empty_state.drain_events().is_empty());
+    }
+
+    #[test]
+    fn fluent_address_bar_metrics_match_win11_scale() {
+        assert!((34.0..=36.0).contains(&ADDRESS_BAR_HEIGHT));
+        assert!((ADDRESS_BAR_FONT_SIZE - 14.0).abs() < f32::EPSILON);
+        let desc = sample_desc();
+        let layout = compute_layout(&desc);
+        assert!((layout.address_rect.size.y - ADDRESS_BAR_HEIGHT).abs() < f32::EPSILON);
     }
 }

@@ -28,11 +28,8 @@ pub const TAB_MIN_WIDTH: f32 = 100.0;
 /// 自适应模式下单个标签页的最大宽度（WinUI `TabViewItemMaxWidth = 240`）。
 pub const TAB_MAX_WIDTH: f32 = 240.0;
 
-/// 标签页栏默认高度。
-///
-/// 对齐 WinUI `TabViewItemMinHeight = 32` 叠加 `TabViewHeaderPadding = 0,8,0,0`
-/// 的顶部留白，即 32 + 8 = 40。
-pub const TAB_STRIP_HEIGHT: f32 = 40.0;
+/// 标签页栏默认高度（对齐 Win11 融合标题栏 `48px`：`38px` 标签卡片 + `10px` 顶部留白）。
+pub const TAB_STRIP_HEIGHT: f32 = 48.0;
 
 /// 标签页标准圆角半径。对齐 WinUI `ControlCornerRadius = 4`。
 const TAB_RADIUS: f32 = 4.0;
@@ -40,13 +37,16 @@ const TAB_RADIUS: f32 = 4.0;
 /// 壳层融合态选中标签顶部圆角半径（对齐 WinUI `OverlayCornerRadius = 8`）。
 pub const TAB_SHELL_CORNER_RADIUS: f32 = 8.0;
 
-/// 壳层融合态顶部留白（40px 标题栏减去 32px 标签卡片高度）。
-pub const TAB_SHELL_TOP_INSET: f32 = 8.0;
+/// 壳层融合态标签卡片高度（对齐 Win11 原生 `36–38px` 尺度，取 `38px`）。
+pub const TAB_SHELL_ITEM_HEIGHT: f32 = 38.0;
 
-/// 关闭按钮图标宽度。对齐 WinUI `TabViewItemHeaderCloseButtonSize = 16`。
-pub const TAB_CLOSE: f32 = 16.0;
+/// 壳层融合态顶部留白（`48px` 融合标题栏减去 `38px` 标签卡片高度 = `10px`）。
+pub const TAB_SHELL_TOP_INSET: f32 = 10.0;
 
-/// 壳层融合态关闭按钮独立命中盒边长（24×24，内部居中 16×16 图标）。
+/// 关闭按钮图标宽度（对齐 Win11 标签页 `12px` 关闭叉号尺度）。
+pub const TAB_CLOSE: f32 = 12.0;
+
+/// 壳层融合态关闭按钮独立命中盒边长（24×24，内部居中 12×12 关闭叉号图标）。
 pub const TAB_CLOSE_HIT_SIZE: f32 = 24.0;
 
 /// 壳层融合态“+”新增按钮宽度（32×28，圆角 4px）。
@@ -375,7 +375,9 @@ impl TabsDesc {
     fn shell_top_inset(&self) -> f32 {
         match self.style {
             TabViewStyle::Standard => 0.0,
-            TabViewStyle::ShellChrome => (self.rect.size.y - 32.0).clamp(0.0, TAB_SHELL_TOP_INSET),
+            TabViewStyle::ShellChrome => {
+                (self.rect.size.y - TAB_SHELL_ITEM_HEIGHT).clamp(0.0, TAB_SHELL_TOP_INSET)
+            }
         }
     }
 
@@ -1152,9 +1154,9 @@ pub fn emit_tab_close(
             )
         }
     };
-    // Win11 标准 `16×16` 图标盒内对角线跨度取 `8.5px`（落在 `8.0..=9.0px` 区间），
+    // Win11 标准 `12×12` 关闭叉号图标盒内对角线跨度取 `8.0px`（落在 `8.0..=9.0px` 区间），
     // 兼顾 100% 与高 DPI 下的锐利度。
-    let span = 8.5f32.min(glyph_rect.size.x - 4.0).max(4.0);
+    let span = 8.0f32.min(glyph_rect.size.x - 2.0).max(4.0);
     let inset = (glyph_rect.size.x - span) * 0.5;
     let thickness = 1.4;
     for (start, end) in [
@@ -1342,7 +1344,7 @@ pub fn emit_tabs_with_control_states(
             text_ctx.shape_line(
                 title,
                 label_r,
-                12.5,
+                unbound_theme::typography::font_size::BODY,
                 if idx == active_idx { 600 } else { 400 },
                 align_x,
                 crate::ergonomics::AlignY::Middle,
@@ -1567,8 +1569,8 @@ mod tests {
     fn the_add_button_sits_at_the_trailing_edge() {
         let desc = desc().with_addable(true);
         let add = desc.add_rect().expect("addable");
-        assert_eq!(add.origin.x, 260.0);
-        assert_eq!(desc.strip_width(), 260.0);
+        assert_eq!(add.origin.x, 300.0 - TAB_STRIP_HEIGHT);
+        assert_eq!(desc.strip_width(), 300.0 - TAB_STRIP_HEIGHT);
     }
 
     #[test]
@@ -1966,5 +1968,17 @@ mod tests {
             out.sub_hits.iter().any(|h| h.node == tab_add_node(tabs_key)),
             "add button sub_hit must be registered"
         );
+    }
+
+    #[test]
+    fn fluent_shell_tab_metrics_match_win11_scale() {
+        assert!((TAB_STRIP_HEIGHT - 48.0).abs() < f32::EPSILON);
+        assert!((36.0..=38.0).contains(&TAB_SHELL_ITEM_HEIGHT));
+        assert!((TAB_CLOSE - 12.0).abs() < f32::EPSILON);
+
+        let desc = shell_desc(600.0, 2);
+        let tab0 = desc.tab_rect(0, 0.0);
+        assert!((tab0.origin.y - TAB_SHELL_TOP_INSET).abs() < f32::EPSILON);
+        assert!((tab0.size.y - TAB_SHELL_ITEM_HEIGHT).abs() < f32::EPSILON);
     }
 }

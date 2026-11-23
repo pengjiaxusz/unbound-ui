@@ -33,12 +33,12 @@ pub use unbound_abi::{Align, Dim, Display, FlexDirection, Justify, NodeFlags, Ra
 pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
 pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
-    open_file, open_file_async, open_files, save_file, save_file_async, set_taskbar_progress,
-    set_tray_icon, show_tray_balloon, FileDialogConfig, FileDragEffect, FrameHitMetrics,
-    OutboundFileDragOutcome, OutboundFileDragRequest, PlatformError, PopupWindowConfig,
-    RenderThrottlePolicy, RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState,
-    TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig, WindowId, WindowPlacement,
-    WindowPosition,
+    open_file, open_file_async, open_files, read_system_accent_color, save_file, save_file_async,
+    set_taskbar_progress, set_tray_icon, show_tray_balloon, system_accent_color, FileDialogConfig,
+    FileDragEffect, FrameHitMetrics, OutboundFileDragOutcome, OutboundFileDragRequest,
+    PlatformError, PopupWindowConfig, RenderThrottlePolicy, RenderThrottleState, ScreenRect,
+    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowBackdropMaterial,
+    WindowConfig, WindowId, WindowPlacement, WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
@@ -88,11 +88,13 @@ pub use unbound_widgets::{
     VirtualMasonryState, WatermarkDesc, WidgetCatalogId, WidgetIcon, WidgetOutput,
     WindowCaptionButton, WindowCaptionButtonControlStates, WindowCaptionButtonEntry,
     WindowCaptionButtons, WindowCaptionButtonsLayout, WindowCaptionButtonsOutput,
-    WindowCaptionFrameHitContract, WindowCaptionKind, ADDRESS_BAR_HEIGHT, COLUMN_DEFAULT_MAX_WIDTH,
-    COLUMN_DEFAULT_MIN_WIDTH, COLUMN_DIVIDER_WIDTH, COLUMN_FILTER_BUTTON_WIDTH,
-    COLUMN_HEADER_BAR_HEIGHT, COLUMN_RESIZE_HANDLE_WIDTH, TITLE_BAR_CAPTION_WIDTH,
-    TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT,
-    TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH, TREE_ROW_COMPACT,
+    WindowCaptionFrameHitContract, WindowCaptionKind, ADDRESS_BAR_FONT_SIZE, ADDRESS_BAR_HEIGHT,
+    COLUMN_DEFAULT_MAX_WIDTH, COLUMN_DEFAULT_MIN_WIDTH, COLUMN_DIVIDER_WIDTH,
+    COLUMN_FILTER_BUTTON_WIDTH, COLUMN_HEADER_BAR_HEIGHT, COLUMN_RESIZE_HANDLE_WIDTH, TAB_CLOSE,
+    TAB_SHELL_ITEM_HEIGHT, TAB_STRIP_HEIGHT, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID,
+    TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
+    TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH, TREE_DIVIDER_HEIGHT, TREE_FONT_SIZE,
+    TREE_ICON_GAP, TREE_ROW_COMPACT,
 };
 pub use unbound_widgets::{
     emit_menu, emit_menu_with_rows, menu_item_node, Command, CommandPaletteDesc,
