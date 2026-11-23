@@ -17,7 +17,7 @@ use unbound_backdrop::{BackdropSource, MaterialKind};
 use unbound_platform::screen_capture::{
     capture_screen_region, screen_rect_uv, CaptureError, CapturedScreen,
 };
-use unbound_platform::{ScreenRect, Window};
+use unbound_platform::{NativeWindow, ScreenRect};
 
 use crate::png_diff::heat_color;
 use crate::shell::GalleryApp;
@@ -201,7 +201,7 @@ impl BackdropCompareRun {
     /// 在每个已呈现的帧末尾推进一次。
     ///
     /// 调用方应在返回 [`CompareStep::Pending`] 时继续请求下一帧。
-    pub fn step(&mut self, app: &mut GalleryApp, window: &Window) -> CompareStep {
+    pub fn step(&mut self, app: &mut GalleryApp, window: &NativeWindow) -> CompareStep {
         match self.phase {
             Phase::Prepare => self.prepare(app),
             Phase::NativeWarmup { frames, since } => self.step_native(app, window, frames, since),
@@ -233,7 +233,7 @@ impl BackdropCompareRun {
     fn step_native(
         &mut self,
         app: &mut GalleryApp,
-        window: &Window,
+        window: &NativeWindow,
         frames: u32,
         since: Instant,
     ) -> CompareStep {
@@ -268,7 +268,7 @@ impl BackdropCompareRun {
     fn step_self_drawn(
         &mut self,
         app: &mut GalleryApp,
-        window: &Window,
+        window: &NativeWindow,
         frames: u32,
         since: Instant,
     ) -> CompareStep {
@@ -353,7 +353,7 @@ impl BackdropCompareRun {
     }
 }
 
-fn capture_window(window: &Window) -> Result<CapturedScreen, String> {
+fn capture_window(window: &NativeWindow) -> Result<CapturedScreen, String> {
     capture_screen_region(window.client_rect_on_screen()).map_err(|error| match error {
         CaptureError::Unsupported(reason) | CaptureError::Failed(reason) => {
             format!("screen capture failed: {reason}")
