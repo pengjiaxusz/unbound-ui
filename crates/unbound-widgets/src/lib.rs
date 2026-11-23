@@ -695,9 +695,14 @@ pub use ruler::{
     RULER_MINOR_PER_MAJOR, RULER_MIN_STEP,
 };
 pub use scroll::{
-    emit_scroll_view, update_virtual_list, ScrollAxis, ScrollPointerEvent, ScrollState,
-    ScrollViewDesc, ScrollViewOutput, ScrollViewWidget, ScrollbarAxis, SmoothWheelHandler,
-    VirtualWindow,
+    emit_scroll_view, emit_scrollbar, scrollbar_thumb_node, scrollbar_track_node,
+    update_virtual_list, ScrollAxis, ScrollBarDesc, ScrollBarOutput, ScrollBarVisibility,
+    ScrollPointerEvent, ScrollState, ScrollViewDesc, ScrollViewOutput, ScrollViewWidget,
+    ScrollbarAxis, SmoothWheelHandler, VirtualWindow, SCROLLBAR_EDGE_INSET,
+    SCROLLBAR_EXPANDED_OPACITY, SCROLLBAR_HORIZONTAL_THUMB_HIT_MASK,
+    SCROLLBAR_HORIZONTAL_TRACK_HIT_MASK, SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH,
+    SCROLLBAR_THUMB_WIDTH, SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_VERTICAL_THUMB_HIT_MASK,
+    SCROLLBAR_VERTICAL_TRACK_HIT_MASK, SCROLLBAR_WIDTH,
 };
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};

@@ -474,18 +474,28 @@ fn tree_view_keeps_row_highlighted_on_toggle_hover_and_hides_scrollbar_when_idle
     let mut rt = AppRuntime::new(TreeInteractionApp, Vec2::new(800.0, 600.0));
     rt.frame(0.0);
 
-    // 1. 内容溢出但指针未悬停且未滚动时，滚动条不强制常显（opacity == 0）
+    // 1. 内容溢出但指针未悬停且未滚动时，按 ADR-0031 渲染克制的 2px 半透明细指示条（轨道胶囊透明）
     let sb_key = TREE_KEY ^ 0x5452_4545_0003;
     let (sb_start, sb_end) = rt.scene().node_spans[&sb_key];
-    assert!(
-        sb_end > sb_start,
-        "overflowing tree must emit scrollbar thumb primitive"
+    let sb_prims = &rt.scene().primitives[sb_start as usize..sb_end as usize];
+    assert_eq!(
+        sb_prims.len(),
+        2,
+        "overflowing tree must emit stable two-slot scrollbar primitives"
+    );
+    assert_eq!(
+        sb_prims[0].opacity(),
+        0.0,
+        "idle track capsule must remain transparent"
+    );
+    assert_eq!(
+        sb_prims[1].size[0],
+        unbound_widgets::SCROLLBAR_THUMB_IDLE_WIDTH,
+        "idle overflowing tree scrollbar must render 2px thin indicator"
     );
     assert!(
-        rt.scene().primitives[sb_start as usize..sb_end as usize]
-            .iter()
-            .all(|p| p.opacity() <= 0.01),
-        "idle unhovered tree scrollbar must remain hidden"
+        (sb_prims[1].opacity() - unbound_widgets::SCROLLBAR_IDLE_OPACITY).abs() < 0.02,
+        "idle overflowing tree scrollbar must use restrained idle opacity"
     );
 
     // 2. 将指针移至第 1 行的展开箭头热区 `tree_toggle_node(1)`，验证整行仍保持 NAV_HOVER 高亮且滚动条显露
