@@ -21,12 +21,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  linux-check-test:
-    name: linux-check-test
+  linux-clippy:
+    name: linux-clippy
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: 安装 lld 链接器
@@ -39,21 +39,48 @@ jobs:
       - name: 复用 Cargo 与 target 缓存
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: unbound-ui-linux
+          shared-key: unbound-ui-linux-clippy
           cache-on-failure: true
       - name: 全量 Clippy 门禁
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  linux-test:
+    name: linux-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - name: 安装 lld 链接器
+        run: sudo apt-get update && sudo apt-get install -y lld
+      - name: 安装并锁定 Rust nightly 工具链
+        run: |
+          rustup toolchain install "$CI_RUST_TOOLCHAIN" --profile minimal --component rustfmt
+          rustup override set "$CI_RUST_TOOLCHAIN"
+          rustc -vV
+      - name: 安装 cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: 复用 Cargo 与 target 缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: unbound-ui-linux-test
+          cache-on-failure: true
       - name: 预构建 app-guest 动态库
         run: cargo build -p app-guest
-      - name: 全量单元测试与集成测试
-        run: cargo test --workspace --all-features
+      - name: 全量单元测试与集成测试（nextest）
+        run: cargo nextest run --workspace --all-features --no-fail-fast
+      - name: 全量文档测试
+        run: cargo test --workspace --all-features --doc
 
   windows-check:
     name: windows-check
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: 安装并锁定 Rust nightly 工具链
