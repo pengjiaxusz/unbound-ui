@@ -817,6 +817,13 @@ impl PlatformApp for Showcase {
         state.pacer.set_fps_limit(initial_fps_limit);
 
         self.os_scale = window.scale_factor() as f32;
+        if let Some(output) = unbound_platform::primary_output_metrics() {
+            unbound_backdrop::set_primary_screen_metrics(
+                output.physical_width,
+                output.physical_height,
+                output.scale_factor,
+            );
+        }
         self.primary = Some(window.id());
 
         let metrics = Arc::new(FrameHitMetrics::new());
@@ -944,6 +951,13 @@ impl PlatformApp for Showcase {
             }
             PlatformEvent::ScaleFactorChanged(factor) => {
                 self.os_scale = factor as f32;
+                if let Some(output) = unbound_platform::primary_output_metrics() {
+                    unbound_backdrop::set_primary_screen_metrics(
+                        output.physical_width,
+                        output.physical_height,
+                        output.scale_factor,
+                    );
+                }
                 // 缩放改变逻辑视口，帧则从已提交范围推导视口。
                 // 标记失效使下一帧按新尺寸重建场景。
                 //
