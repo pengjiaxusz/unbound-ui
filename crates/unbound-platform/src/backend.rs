@@ -113,10 +113,10 @@ pub struct PlatformWindow {
 }
 
 impl PlatformWindow {
-    /// 创建原生 Win32 平台窗口运行器。
+    /// 创建原生平台窗口运行器（Windows 走 Win32，Linux 走原生 Wayland）。
     ///
     /// # Errors
-    /// 在非 Windows 平台或系统初始化失败时返回 [`PlatformError`]。
+    /// 在不支持的平台或系统初始化失败时返回 [`PlatformError`]。
     pub fn new(config: &WindowConfig) -> Result<Self, PlatformError> {
         #[cfg(windows)]
         {
@@ -125,16 +125,25 @@ impl PlatformWindow {
                 config: config.clone(),
             })
         }
-        #[cfg(not(windows))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+        {
+            Ok(Self {
+                config: config.clone(),
+            })
+        }
+        #[cfg(not(any(
+            windows,
+            all(unix, not(target_os = "macos"), not(target_os = "android"))
+        )))]
         {
             let _ = config;
             Err(PlatformError::EventLoop(
-                "native Win32 backend requires Windows".to_string(),
+                "native window backend is not implemented on this platform".to_string(),
             ))
         }
     }
 
-    /// 运行 Win32 消息循环直至主窗口关闭或应用退出。
+    /// 运行原生平台事件循环直至主窗口关闭或应用退出。
     ///
     /// # Errors
     /// 当窗口创建或事件循环失败时返回 [`PlatformError`]。
@@ -143,11 +152,18 @@ impl PlatformWindow {
         {
             win32::run_event_loop(self.config, app)
         }
-        #[cfg(not(windows))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+        {
+            crate::wayland_backend::run_event_loop(self.config, app)
+        }
+        #[cfg(not(any(
+            windows,
+            all(unix, not(target_os = "macos"), not(target_os = "android"))
+        )))]
         {
             let _ = app;
             Err(PlatformError::EventLoop(
-                "native Win32 backend requires Windows".to_string(),
+                "native window backend is not implemented on this platform".to_string(),
             ))
         }
     }

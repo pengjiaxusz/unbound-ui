@@ -25,6 +25,9 @@ use crate::window::{PlatformError, ScreenRect};
 pub(crate) enum NativeWindowInner {
     /// Win32 后端窗口句柄。
     Win32(Win32Window),
+    /// Linux 原生 Wayland 后端窗口句柄。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    Wayland(crate::wayland_backend::WaylandWindowHandle),
 }
 
 /// 跨平台原生窗口句柄。
@@ -38,9 +41,19 @@ pub struct NativeWindow {
 impl NativeWindow {
     /// 从 Win32 窗口对象构造跨平台句柄。
     #[must_use]
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn from_win32(window: Win32Window) -> Self {
         Self {
             inner: NativeWindowInner::Win32(window),
+        }
+    }
+
+    /// 从 Wayland 窗口句柄构造跨平台句柄。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[must_use]
+    pub(crate) fn from_wayland(window: crate::wayland_backend::WaylandWindowHandle) -> Self {
+        Self {
+            inner: NativeWindowInner::Wayland(window),
         }
     }
 
@@ -67,6 +80,8 @@ impl NativeWindow {
     pub fn is_popup(&self) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.is_popup(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_popup(),
         }
     }
 
@@ -75,6 +90,8 @@ impl NativeWindow {
     pub fn popup_id(&self) -> Option<u64> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.popup_id(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.popup_id(),
         }
     }
 
@@ -83,6 +100,8 @@ impl NativeWindow {
     pub fn id(&self) -> NativeWindowId {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.id(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.id(),
         }
     }
 
@@ -91,6 +110,8 @@ impl NativeWindow {
     pub fn current_cursor(&self) -> CursorIcon {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.current_cursor(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.current_cursor(),
         }
     }
 
@@ -99,6 +120,8 @@ impl NativeWindow {
     pub fn inner_size(&self) -> PhysicalSize {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.inner_size(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.inner_size(),
         }
     }
 
@@ -107,6 +130,8 @@ impl NativeWindow {
     pub fn client_rect_on_screen(&self) -> ScreenRect {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.client_rect_on_screen(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.client_rect_on_screen(),
         }
     }
 
@@ -115,6 +140,8 @@ impl NativeWindow {
     pub fn scale_factor(&self) -> f64 {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.scale_factor(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.scale_factor(),
         }
     }
 
@@ -123,6 +150,8 @@ impl NativeWindow {
     pub fn refresh_rate_hz(&self) -> Option<f32> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.refresh_rate_hz(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.refresh_rate_hz(),
         }
     }
 
@@ -131,6 +160,8 @@ impl NativeWindow {
     pub fn is_visible(&self) -> Option<bool> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.is_visible(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_visible(),
         }
     }
 
@@ -139,6 +170,8 @@ impl NativeWindow {
     pub fn is_maximized(&self) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.is_maximized(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_maximized(),
         }
     }
 
@@ -147,6 +180,8 @@ impl NativeWindow {
     pub fn is_decorated(&self) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.is_decorated(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_decorated(),
         }
     }
 
@@ -154,6 +189,8 @@ impl NativeWindow {
     pub fn set_visible(&self, visible: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_visible(visible),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_visible(visible),
         }
     }
 
@@ -161,6 +198,8 @@ impl NativeWindow {
     pub fn set_minimized(&self, minimized: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_minimized(minimized),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_minimized(minimized),
         }
     }
 
@@ -168,6 +207,8 @@ impl NativeWindow {
     pub fn set_maximized(&self, maximized: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_maximized(maximized),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_maximized(maximized),
         }
     }
 
@@ -175,6 +216,8 @@ impl NativeWindow {
     pub fn set_title(&self, title: &str) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_title(title),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_title(title),
         }
     }
 
@@ -182,6 +225,8 @@ impl NativeWindow {
     pub fn set_cursor(&self, cursor: CursorIcon) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_cursor(cursor),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_cursor(cursor),
         }
     }
 
@@ -189,6 +234,8 @@ impl NativeWindow {
     pub fn request_redraw(&self) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.request_redraw(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.request_redraw(),
         }
     }
 
@@ -196,6 +243,8 @@ impl NativeWindow {
     pub fn request_close(&self) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.request_close(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.request_close(),
         }
     }
 
@@ -204,6 +253,8 @@ impl NativeWindow {
     pub fn is_destroyed(&self) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.is_destroyed(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_destroyed(),
         }
     }
 
@@ -214,6 +265,8 @@ impl NativeWindow {
     pub fn drag_window(&self) -> Result<(), PlatformError> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.drag_window(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.drag_window(),
         }
     }
 
@@ -224,6 +277,8 @@ impl NativeWindow {
     pub fn drag_resize_window(&self, direction: ResizeDirection) -> Result<(), PlatformError> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.drag_resize_window(direction),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.drag_resize_window(direction),
         }
     }
 
@@ -231,6 +286,10 @@ impl NativeWindow {
     pub fn set_ime_allowed(&self, allowed: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_ime_allowed(allowed),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => {
+                let _ = allowed;
+            }
         }
     }
 
@@ -238,6 +297,10 @@ impl NativeWindow {
     pub fn set_ime_cursor_area(&self, position: PhysicalPosition, size: PhysicalSize) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_ime_cursor_area(position, size),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => {
+                let _ = (position, size);
+            }
         }
     }
 
@@ -245,13 +308,19 @@ impl NativeWindow {
     pub fn install_custom_frame(&self, metrics: Arc<FrameHitMetrics>) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => install_custom_frame(w.hwnd(), metrics),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.install_custom_frame(metrics),
         }
     }
 
     /// 下发沉浸式深色模式外观标记（不支持的平台安全无操作）。
-    pub fn set_dark_mode(&self, dark: bool) -> bool {
+    pub fn set_dark_mode(&self, dark: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => set_window_dark_mode(w.hwnd(), dark),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => {
+                let _ = dark;
+            }
         }
     }
 
@@ -259,6 +328,11 @@ impl NativeWindow {
     pub fn set_backdrop(&self, material: WindowBackdropMaterial) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => set_window_backdrop(w.hwnd(), material),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => {
+                let _ = material;
+                false
+            }
         }
     }
 
@@ -266,6 +340,11 @@ impl NativeWindow {
     pub fn set_accent_tint(&self, argb: u32) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => set_window_accent_tint(w.hwnd(), argb),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => {
+                let _ = argb;
+                false
+            }
         }
     }
 
@@ -273,6 +352,8 @@ impl NativeWindow {
     pub fn clear_accent_tint(&self) -> bool {
         match &self.inner {
             NativeWindowInner::Win32(w) => clear_window_accent_tint(w.hwnd()),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) => false,
         }
     }
 
@@ -307,6 +388,8 @@ impl HasWindowHandle for NativeWindow {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.window_handle(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.window_handle(),
         }
     }
 }
@@ -315,6 +398,8 @@ impl HasDisplayHandle for NativeWindow {
     fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.display_handle(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.display_handle(),
         }
     }
 }
