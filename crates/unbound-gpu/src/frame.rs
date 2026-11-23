@@ -100,18 +100,22 @@ impl Camera {
 
 /// UI 请求的毛玻璃背景虚化区域。
 ///
-/// 矩形使用渲染目标的**物理像素**坐标。GPU 渲染主场景后，使用 Dual-Kawase 滤镜
-/// 模糊该矩形后方区域并按圆角遮罩合成回目标，随后模态层自身半透明表面由常规图元 Pass 绘制。
+/// 矩形使用渲染目标的**物理像素**坐标。GPU 先绘制 `z < split_z` 的底层主场景，
+/// 再使用 Dual-Kawase 滤镜模糊该矩形后方区域并按 `corner_radii` 圆角遮罩合成回目标，
+/// 最后绘制 `z >= split_z` 的浮层自身半透明表面与内容。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BackdropRequest {
     /// 物理像素坐标 `(x, y, width, height)`。
     pub rect: [f32; 4],
-    /// 统一物理像素圆角半径。
+    /// Dual-Kawase 模糊半径（物理像素）。
     pub radius: f32,
-    /// 四角独立圆角半径 `(左上, 右上, 右下, 左下)`。
+    /// 四角独立圆角半径 `(左上, 右上, 右下, 左下)`（物理像素）。
     pub corner_radii: [f32; 4],
-    /// 所属图元所在的图层，保留供未来分层渲染器在对应图层下方精确合成。
+    /// 所属图元所在的图层，保留供分层渲染器在对应图层下方精确合成。
     pub layer_key_prefix: u64,
+    /// 底层场景与浮层的 Z 切分阈值：非零时渲染器先画 `z < split_z`，
+    /// 再执行毛玻璃模糊与合成，最后以 `LOAD` 模式叠加 `z >= split_z` 的浮层图元。
+    pub split_z: u16,
 }
 
 impl Default for BackdropRequest {
@@ -121,7 +125,186 @@ impl Default for BackdropRequest {
             radius: 0.0,
             corner_radii: [0.0; 4],
             layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+            split_z: 0,
         }
+    }
+}
+
+/// 计算本帧毛玻璃背板请求的浮层 Z 切分阈值（取全部正 `split_z` 的最小值）。
+#[must_use]
+pub(crate) fn backdrop_overlay_split_z(backdrops: &[BackdropRequest]) -> Option<u16> {
+    backdrops.iter().map(|b| b.split_z).filter(|&z| z > 0).min()
+}
+
+/// 向上对齐至 `align` 的整数倍（用于满足存储缓冲与非一致显存刷写对齐要求）。
+#[inline]
+pub(crate) const fn align_up(value: u64, align: u64) -> u64 {
+    let a = if align == 0 { 1 } else { align };
+    let rem = value % a;
+    if rem == 0 {
+        value
+    } else {
+        value + (a - rem)
+    }
+}
+
+/// 按在飞帧槽位切分的关键 CPU/GPU 缓冲步长布局。
+///
+/// 在 `frames_in_flight >= 2` 时，帧 `N+1` 的 CPU 写入（`patches`）与 GPU 计算/光栅化
+/// （`keys`/`idx`/`sort_scratch`/`commands`/`counters`）严格落在各自槽位区间内，
+/// 彻底消除跨帧写读踩踏。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FrameBufferSlices {
+    pub frame_count: usize,
+    pub keys_stride: u64,
+    pub idx_stride: u64,
+    pub sort_scratch_stride: u64,
+    pub commands_stride: u64,
+    pub counters_stride: u64,
+    pub patches_stride: u64,
+}
+
+impl FrameBufferSlices {
+    /// 按设备存储缓冲偏移对齐与非一致内存刷写粒度计算各缓冲的单帧切片步长。
+    #[must_use]
+    pub(crate) const fn new(
+        frame_count: usize,
+        max_primitives: u64,
+        radix_blocks: u64,
+        max_draw_runs: u32,
+        storage_align: u64,
+        non_coherent_align: u64,
+    ) -> Self {
+        let frame_count = if frame_count == 0 { 1 } else { frame_count };
+        let device_align = if storage_align > 64 {
+            storage_align
+        } else {
+            64
+        };
+        let host_align = if non_coherent_align > device_align {
+            non_coherent_align
+        } else {
+            device_align
+        };
+        Self {
+            frame_count,
+            keys_stride: align_up(max_primitives * 8, device_align),
+            idx_stride: align_up(max_primitives * 4, device_align),
+            sort_scratch_stride: align_up(
+                radix_blocks * (RADIX_BLOCK as u64) * 4 * 2,
+                device_align,
+            ),
+            commands_stride: align_up((max_draw_runs as u64) * 16, device_align),
+            counters_stride: align_up(64, host_align),
+            patches_stride: align_up(64 * 1024 * 16, host_align),
+        }
+    }
+
+    #[inline]
+    pub(crate) const fn total_keys(&self) -> u64 {
+        self.keys_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn total_idx(&self) -> u64 {
+        self.idx_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn total_sort_scratch(&self) -> u64 {
+        self.sort_scratch_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn total_commands(&self) -> u64 {
+        self.commands_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn total_counters(&self) -> u64 {
+        self.counters_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn total_patches(&self) -> u64 {
+        self.patches_stride * (self.frame_count as u64)
+    }
+
+    #[inline]
+    pub(crate) const fn keys_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.keys_stride
+    }
+
+    #[inline]
+    pub(crate) const fn idx_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.idx_stride
+    }
+
+    #[inline]
+    pub(crate) const fn idx_dynamic_offset(&self, slot: usize) -> u32 {
+        self.idx_offset(slot) as u32
+    }
+
+    #[inline]
+    pub(crate) const fn sort_scratch_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.sort_scratch_stride
+    }
+
+    #[inline]
+    pub(crate) const fn commands_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.commands_stride
+    }
+
+    #[inline]
+    pub(crate) const fn counters_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.counters_stride
+    }
+
+    #[inline]
+    pub(crate) const fn patches_offset(&self, slot: usize) -> u64 {
+        ((slot % self.frame_count) as u64) * self.patches_stride
+    }
+}
+
+/// 单帧槽位独占的深度附件图像与视图（避免双帧飞行时两帧并发读写同一深度图）。
+#[derive(Debug)]
+struct DepthAttachment {
+    image: vk::Image,
+    memory: vk::DeviceMemory,
+    view: vk::ImageView,
+    alloc: (u32, u32),
+}
+
+impl DepthAttachment {
+    fn new(gpu: &Gpu, width: u32, height: u32) -> Result<Self, GpuError> {
+        let alloc_w = width.max(1);
+        let alloc_h = height.max(1);
+        // SAFETY: 创建自有深度图像、显存与视图，所有权移交调用方。
+        let (image, memory, view) = unsafe {
+            RenderTarget::create_image(
+                gpu,
+                alloc_w,
+                alloc_h,
+                DEPTH_FORMAT,
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+                true,
+            )?
+        };
+        Ok(Self {
+            image,
+            memory,
+            view,
+            alloc: (alloc_w, alloc_h),
+        })
+    }
+
+    /// # Safety
+    /// 设备必须处于空闲状态。
+    unsafe fn destroy(&self, gpu: &Gpu) {
+        let device = &gpu.device;
+        device.destroy_image_view(self.view, None);
+        device.destroy_image(self.image, None);
+        device.free_memory(self.memory, None);
     }
 }
 
@@ -726,6 +909,10 @@ pub struct Renderer {
     counters: Buffer,
     patches: Buffer,
     staging: Buffer,
+    /// 按在飞帧槽位隔离的缓冲切片步长布局。
+    frame_slices: FrameBufferSlices,
+    /// 每个在飞帧槽位独占一份深度附件，防止双帧飞行并发读写踩踏。
+    frame_depths: Vec<DepthAttachment>,
 
     capacity_primitives: u32,
     /// 持久化池当前所处的上传版本号。
@@ -998,19 +1185,47 @@ impl Renderer {
         // 最坏情况下的图元数量受持久化池与瞬态环容量共同约束。
         let capacity_primitives = (pool_bytes / 64).min(1 << 20) as u32;
         let max = capacity_primitives as u64;
-        let keys_a = gpu.create_buffer(max * 8, bda_usage, MemoryKind::DeviceLocal, "keys-a")?;
-        let keys_b = gpu.create_buffer(max * 8, bda_usage, MemoryKind::DeviceLocal, "keys-b")?;
-        let idx_a = gpu.create_buffer(max * 4, bda_usage, MemoryKind::DeviceLocal, "idx-a")?;
-        let idx_b = gpu.create_buffer(max * 4, bda_usage, MemoryKind::DeviceLocal, "idx-b")?;
         let blocks = max.div_ceil(RADIX_BLOCK as u64);
+        let frame_slices = FrameBufferSlices::new(
+            frames.len(),
+            max,
+            blocks,
+            MAX_DRAW_RUNS,
+            gpu.properties.limits.min_storage_buffer_offset_alignment,
+            gpu.properties.limits.non_coherent_atom_size,
+        );
+        let keys_a = gpu.create_buffer(
+            frame_slices.total_keys(),
+            bda_usage,
+            MemoryKind::DeviceLocal,
+            "keys-a",
+        )?;
+        let keys_b = gpu.create_buffer(
+            frame_slices.total_keys(),
+            bda_usage,
+            MemoryKind::DeviceLocal,
+            "keys-b",
+        )?;
+        let idx_a = gpu.create_buffer(
+            frame_slices.total_idx(),
+            bda_usage,
+            MemoryKind::DeviceLocal,
+            "idx-a",
+        )?;
+        let idx_b = gpu.create_buffer(
+            frame_slices.total_idx(),
+            bda_usage,
+            MemoryKind::DeviceLocal,
+            "idx-b",
+        )?;
         let sort_scratch = gpu.create_buffer(
-            blocks * RADIX_BLOCK as u64 * 4 * 2,
+            frame_slices.total_sort_scratch(),
             bda_usage,
             MemoryKind::DeviceLocal,
             "sort-scratch",
         )?;
         let commands = gpu.create_buffer(
-            u64::from(MAX_DRAW_RUNS) * 16,
+            frame_slices.total_commands(),
             // `vkCmdDrawIndirectCount` 要求命令缓冲区与计数缓冲区除计算阶段所需的
             // BDA/STORAGE 用途外，还必须具备 `INDIRECT_BUFFER` 用途。
             bda_usage | vk::BufferUsageFlags::INDIRECT_BUFFER,
@@ -1018,7 +1233,7 @@ impl Renderer {
             "indirect",
         )?;
         let counters = gpu.create_buffer(
-            64,
+            frame_slices.total_counters(),
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::TRANSFER_SRC
@@ -1030,7 +1245,7 @@ impl Renderer {
             "counters",
         )?;
         let patches = gpu.create_buffer(
-            64 * 1024 * 16,
+            frame_slices.total_patches(),
             vk::BufferUsageFlags::STORAGE_BUFFER
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::TRANSFER_DST,
@@ -1043,9 +1258,13 @@ impl Renderer {
             MemoryKind::HostVisible,
             "staging",
         )?;
+        let mut frame_depths = Vec::with_capacity(frames.len());
+        for _ in 0..frames.len() {
+            frame_depths.push(DepthAttachment::new(&gpu, width, height)?);
+        }
 
-        // SAFETY: 缓冲区为持久化资源且当前尚无在飞任务。
-        unsafe { pipelines.bind_sorted_indices(&gpu, &idx_a) };
+        // SAFETY: 缓冲区为持久化资源且当前尚无在飞任务；动态范围等于单帧切片步长。
+        unsafe { pipelines.bind_sorted_indices_range(&gpu, &idx_a, frame_slices.idx_stride) };
 
         let ring = TransientRing::new(ring_bytes as u32, gpu.frames_in_flight());
 
@@ -1078,6 +1297,8 @@ impl Renderer {
             counters,
             patches,
             staging,
+            frame_slices,
+            frame_depths,
             capacity_primitives,
             generation: UploadGeneration::empty(),
             frame_index: 0,
@@ -1228,6 +1449,7 @@ impl Renderer {
         // SAFETY: 设备处于空闲状态。
         unsafe { self.target.destroy(&self.gpu) };
         self.target = RenderTarget::new(&self.gpu, width, height)?;
+        self.ensure_depth_size(width, height)?;
         Ok(())
     }
 
@@ -1245,11 +1467,25 @@ impl Renderer {
         if width == 0 || height == 0 {
             return Ok(());
         }
-        if width <= self.target.depth_alloc.0 && height <= self.target.depth_alloc.1 {
+        let cur_w = self
+            .frame_depths
+            .iter()
+            .map(|d| d.alloc.0)
+            .min()
+            .unwrap_or(self.target.depth_alloc.0)
+            .min(self.target.depth_alloc.0);
+        let cur_h = self
+            .frame_depths
+            .iter()
+            .map(|d| d.alloc.1)
+            .min()
+            .unwrap_or(self.target.depth_alloc.1)
+            .min(self.target.depth_alloc.1);
+        if width <= cur_w && height <= cur_h {
             return Ok(());
         }
-        let alloc_w = width.max(self.target.depth_alloc.0).div_ceil(256) * 256;
-        let alloc_h = height.max(self.target.depth_alloc.1).div_ceil(256) * 256;
+        let alloc_w = width.max(cur_w).div_ceil(256) * 256;
+        let alloc_h = height.max(cur_h).div_ceil(256) * 256;
         let gpu = &self.gpu;
         gpu.wait_idle();
         // SAFETY: 设备空闲且旧图像归本结构体所有。
@@ -1270,6 +1506,10 @@ impl Renderer {
             self.target.depth_memory = depth_memory;
             self.target.depth_view = depth_view;
             self.target.depth_alloc = (alloc_w, alloc_h);
+            for slot_depth in &mut self.frame_depths {
+                slot_depth.destroy(gpu);
+                *slot_depth = DepthAttachment::new(gpu, alloc_w, alloc_h)?;
+            }
         }
         Ok(())
     }
@@ -1354,7 +1594,7 @@ impl Renderer {
             self.pool.reclaim(retired_timeline);
         }
 
-        let upload = self.prepare_upload(scene)?;
+        let upload = self.prepare_upload(scene, frame_slot)?;
         self.stats.patches = upload.patch_count;
         self.stats.bytes_uploaded = upload.bytes;
 
@@ -1442,26 +1682,205 @@ impl Renderer {
         Ok(self.stats)
     }
 
+    /// 对当前帧槽位录制一次「清零计数 → 视口剔除（可选 Z 区间）→ 基数排序 → 间接命令压缩」。
+    #[allow(clippy::too_many_arguments)]
+    fn record_cull_sort_indirect(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        scene: &SceneUpload<'_>,
+        n: u32,
+        frame_slot: usize,
+        min_z: u32,
+        max_z: u32,
+        emit_marks: bool,
+    ) -> Result<(), GpuError> {
+        let keys_offset = self.frame_slices.keys_offset(frame_slot);
+        let idx_offset = self.frame_slices.idx_offset(frame_slot);
+        let scratch_offset = self.frame_slices.sort_scratch_offset(frame_slot);
+        let commands_offset = self.frame_slices.commands_offset(frame_slot);
+        let counters_offset = self.frame_slices.counters_offset(frame_slot);
+
+        // ---- 清零本帧槽位计数器 ---------------------------------------------
+        // SAFETY: 自有命令缓冲区，向本帧槽位 64 字节计数器区域写入 64 字节零值。
+        unsafe {
+            self.gpu
+                .device
+                .cmd_fill_buffer(cmd, self.counters.raw, counters_offset, 64, 0);
+        }
+
+        // ---- 3. 视口剔除 -----------------------------------------------------
+        // 未使用槽位预填充最大键值使其排到末尾（供 `indirect.comp` 哨兵终止）；
+        // 必须在剔除 Pass 之前执行，剔除 Pass 会覆写 `[0, visible)` 槽位。
+        self.clear_keys_tail(cmd, n, frame_slot)?;
+        let barrier = vk::MemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
+        let barriers = [barrier];
+        // SAFETY: 向自有命令缓冲区录制命令。
+        unsafe {
+            self.gpu.device.cmd_pipeline_barrier2(
+                cmd,
+                &vk::DependencyInfo::default().memory_barriers(&barriers),
+            );
+        }
+        let mut pc = PushConstants {
+            frame: self.frame_constants(scene),
+            prim_count: n,
+            digit: min_z,
+            aux: max_z,
+            scratch_bda: self.keys_a.address + keys_offset,
+            scratch_bda2: self.counters.address + counters_offset,
+            scratch_bda3: self.idx_a.address + idx_offset,
+            scratch_bda4: scene.key_prefix,
+            ..Default::default()
+        };
+        self.dispatch(
+            cmd,
+            crate::pipeline::ComputeStage::Cull,
+            &mut pc,
+            n.div_ceil(256),
+        );
+        self.stats.compute_dispatches += 1;
+
+        if emit_marks {
+            self.mark(cmd, 2, vk::PipelineStageFlags::COMPUTE_SHADER);
+        }
+
+        // ---- 4. 基数排序 -----------------------------------------------------
+        if n > 0 {
+            let barrier = vk::MemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
+            let barriers = [barrier];
+            // SAFETY: 向自有命令缓冲区录制命令。
+            unsafe {
+                self.gpu.device.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().memory_barriers(&barriers),
+                );
+            }
+
+            let blocks = n.div_ceil(RADIX_BLOCK);
+            for pass in 0..RADIX_PASSES {
+                let (src_keys, dst_keys, src_idx, dst_idx) = if pass % 2 == 0 {
+                    (&self.keys_a, &self.keys_b, &self.idx_a, &self.idx_b)
+                } else {
+                    (&self.keys_b, &self.keys_a, &self.idx_b, &self.idx_a)
+                };
+                let shift = pass * 8;
+
+                let mut hist = PushConstants {
+                    prim_count: n,
+                    digit: shift,
+                    block_count: blocks,
+                    scratch_bda: src_keys.address + keys_offset,
+                    scratch_bda5: self.sort_scratch.address + scratch_offset,
+                    ..Default::default()
+                };
+                self.dispatch(
+                    cmd,
+                    crate::pipeline::ComputeStage::SortHist,
+                    &mut hist,
+                    blocks,
+                );
+                self.pipeline_barrier(cmd);
+
+                let mut scan = PushConstants {
+                    prim_count: n,
+                    digit: shift,
+                    block_count: blocks,
+                    scratch_bda5: self.sort_scratch.address + scratch_offset,
+                    ..Default::default()
+                };
+                self.dispatch(cmd, crate::pipeline::ComputeStage::SortScan, &mut scan, 1);
+                self.pipeline_barrier(cmd);
+
+                let mut scatter = PushConstants {
+                    prim_count: n,
+                    digit: shift,
+                    block_count: blocks,
+                    scratch_bda: src_keys.address + keys_offset,
+                    scratch_bda2: dst_keys.address + keys_offset,
+                    scratch_bda3: src_idx.address + idx_offset,
+                    scratch_bda4: dst_idx.address + idx_offset,
+                    scratch_bda5: self.sort_scratch.address + scratch_offset,
+                    ..Default::default()
+                };
+                self.dispatch(
+                    cmd,
+                    crate::pipeline::ComputeStage::SortScatter,
+                    &mut scatter,
+                    blocks,
+                );
+                self.stats.sort_dispatches += 3;
+                self.stats.compute_dispatches += 3;
+                self.pipeline_barrier(cmd);
+            }
+        }
+
+        if emit_marks {
+            self.mark(cmd, 3, vk::PipelineStageFlags::COMPUTE_SHADER);
+        }
+
+        // ---- 5. 间接命令压缩 -------------------------------------------------
+        let mut pc = PushConstants {
+            prim_count: n,
+            aux: MAX_DRAW_RUNS,
+            scratch_bda: self.keys_a.address + keys_offset,
+            scratch_bda2: self.commands.address + commands_offset,
+            scratch_bda3: self.counters.address + counters_offset,
+            ..Default::default()
+        };
+        self.dispatch(cmd, crate::pipeline::ComputeStage::Indirect, &mut pc, 1);
+        self.stats.compute_dispatches += 1;
+
+        // 计算阶段写入了绘制命令与批次数；必须通过屏障显式对 `DRAW_INDIRECT` 阶段可见，
+        // 仅用 COMPUTE→COMPUTE 屏障会导致绘制零个实例。
+        {
+            let barrier = vk::MemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .dst_stage_mask(
+                    vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::VERTEX_SHADER,
+                )
+                .dst_access_mask(
+                    vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_READ,
+                );
+            let barriers = [barrier];
+            // SAFETY: 向自有命令缓冲区录制命令。
+            unsafe {
+                self.gpu.device.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().memory_barriers(&barriers),
+                );
+            }
+        }
+
+        if emit_marks {
+            self.mark(cmd, 4, vk::PipelineStageFlags::DRAW_INDIRECT);
+        }
+        Ok(())
+    }
+
     /// 重置可见性计数器并打包解析后的 BDA 帧推送常量。
     fn record_frame(
         &mut self,
         cmd: vk::CommandBuffer,
         scene: &SceneUpload<'_>,
         upload: &UploadPlan,
-        _frame_slot: usize,
+        frame_slot: usize,
     ) -> Result<(), GpuError> {
-        let gpu = &self.gpu;
-        let device = &gpu.device;
-
-        // ---- 清零计数器 -----------------------------------------------------
-        // SAFETY: 自有命令缓冲区，向 64 字节缓冲区写入 64 字节。
-        unsafe { device.cmd_fill_buffer(cmd, self.counters.raw, 0, 64, 0) };
+        let patches_offset = self.frame_slices.patches_offset(frame_slot);
 
         // ---- 1/2. 增量散布更新 -----------------------------------------------
         if upload.patch_count > 0 {
             let mut pc = PushConstants {
                 prim_count: upload.patch_count,
-                scratch_bda: self.patches.address,
+                scratch_bda: self.patches.address + patches_offset,
                 scratch_bda2: self.pool_buffer.address,
                 scratch_bda3: self.ring_buffer.address,
                 ..Default::default()
@@ -1485,172 +1904,75 @@ impl Renderer {
             let barriers = [barrier];
             // SAFETY: 向自有命令缓冲区录制命令。
             unsafe {
-                device.cmd_pipeline_barrier2(
+                self.gpu.device.cmd_pipeline_barrier2(
                     cmd,
                     &vk::DependencyInfo::default().memory_barriers(&barriers),
-                )
-            };
+                );
+            }
         }
 
         self.mark(cmd, 1, vk::PipelineStageFlags::COMPUTE_SHADER);
 
-        // ---- 3. 视口剔除 -----------------------------------------------------
         let n = scene.primitives.len() as u32;
-        // 未使用槽位预填充最大键值使其排到末尾（供 `indirect.comp` 哨兵终止）；
-        // 必须在剔除 Pass 之前执行，剔除 Pass 会覆写 `[0, visible)` 槽位。
-        self.clear_keys_tail(cmd, n)?;
-        let barrier = vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
-        let barriers = [barrier];
-        // SAFETY: 向自有命令缓冲区录制命令。
-        unsafe {
-            device.cmd_pipeline_barrier2(
-                cmd,
-                &vk::DependencyInfo::default().memory_barriers(&barriers),
-            )
-        };
-        let mut pc = PushConstants {
-            frame: self.frame_constants(scene),
-            prim_count: n,
-            scratch_bda: self.keys_a.address,
-            scratch_bda2: self.counters.address,
-            scratch_bda3: self.idx_a.address,
-            scratch_bda4: scene.key_prefix,
-            ..Default::default()
-        };
-        self.dispatch(
-            cmd,
-            crate::pipeline::ComputeStage::Cull,
-            &mut pc,
-            n.div_ceil(256),
-        );
-        self.stats.compute_dispatches += 1;
+        if let Some(split_z) = backdrop_overlay_split_z(scene.backdrops) {
+            // ---- 6a. 底层场景 Pass（z < split_z）-----------------------------
+            self.record_cull_sort_indirect(cmd, scene, n, frame_slot, 0, u32::from(split_z), true)?;
+            self.begin_rendering(cmd, frame_slot, true);
+            self.record_graphics(cmd, scene, frame_slot);
+            self.end_rendering(cmd);
 
-        self.mark(cmd, 2, vk::PipelineStageFlags::COMPUTE_SHADER);
+            // ---- 6b. 毛玻璃背景虚化（仅采样底层场景，再按圆角合成） -----------
+            self.record_backdrop(cmd, scene)?;
 
-        // ---- 4. 基数排序 -----------------------------------------------------
-        if n > 0 {
-            let barrier = vk::MemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE);
-            let barriers = [barrier];
-            // SAFETY: 向自有命令缓冲区录制命令。
-            unsafe {
-                device.cmd_pipeline_barrier2(
-                    cmd,
-                    &vk::DependencyInfo::default().memory_barriers(&barriers),
+            // 在同一帧槽位复用排序/间接缓冲前，等待前一次绘制消费完毕。
+            let reuse_barrier = [vk::MemoryBarrier2::default()
+                .src_stage_mask(
+                    vk::PipelineStageFlags2::DRAW_INDIRECT
+                        | vk::PipelineStageFlags2::VERTEX_SHADER
+                        | vk::PipelineStageFlags2::COMPUTE_SHADER,
                 )
-            };
-
-            let blocks = n.div_ceil(RADIX_BLOCK);
-            for pass in 0..RADIX_PASSES {
-                let (src_keys, dst_keys, src_idx, dst_idx) = if pass % 2 == 0 {
-                    (&self.keys_a, &self.keys_b, &self.idx_a, &self.idx_b)
-                } else {
-                    (&self.keys_b, &self.keys_a, &self.idx_b, &self.idx_a)
-                };
-                let shift = pass * 8;
-
-                let mut hist = PushConstants {
-                    prim_count: n,
-                    digit: shift,
-                    block_count: blocks,
-                    scratch_bda: src_keys.address,
-                    scratch_bda5: self.sort_scratch.address,
-                    ..Default::default()
-                };
-                self.dispatch(
-                    cmd,
-                    crate::pipeline::ComputeStage::SortHist,
-                    &mut hist,
-                    blocks,
-                );
-                self.pipeline_barrier(cmd);
-
-                let mut scan = PushConstants {
-                    prim_count: n,
-                    digit: shift,
-                    block_count: blocks,
-                    scratch_bda5: self.sort_scratch.address,
-                    ..Default::default()
-                };
-                self.dispatch(cmd, crate::pipeline::ComputeStage::SortScan, &mut scan, 1);
-                self.pipeline_barrier(cmd);
-
-                let mut scatter = PushConstants {
-                    prim_count: n,
-                    digit: shift,
-                    block_count: blocks,
-                    scratch_bda: src_keys.address,
-                    scratch_bda2: dst_keys.address,
-                    scratch_bda3: src_idx.address,
-                    scratch_bda4: dst_idx.address,
-                    scratch_bda5: self.sort_scratch.address,
-                    ..Default::default()
-                };
-                self.dispatch(
-                    cmd,
-                    crate::pipeline::ComputeStage::SortScatter,
-                    &mut scatter,
-                    blocks,
-                );
-                self.stats.sort_dispatches += 3;
-                self.stats.compute_dispatches += 3;
-                self.pipeline_barrier(cmd);
-            }
-        }
-
-        self.mark(cmd, 3, vk::PipelineStageFlags::COMPUTE_SHADER);
-
-        // ---- 5. 间接命令压缩 -------------------------------------------------
-        let mut pc = PushConstants {
-            prim_count: n,
-            aux: MAX_DRAW_RUNS,
-            scratch_bda: self.keys_a.address,
-            scratch_bda2: self.commands.address,
-            scratch_bda3: self.counters.address,
-            ..Default::default()
-        };
-        self.dispatch(cmd, crate::pipeline::ComputeStage::Indirect, &mut pc, 1);
-        self.stats.compute_dispatches += 1;
-
-        // 计算阶段写入了绘制命令与批次数；必须通过屏障显式对 `DRAW_INDIRECT` 阶段可见，
-        // 仅用 COMPUTE→COMPUTE 屏障会导致绘制零个实例。
-        {
-            let barrier = vk::MemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .src_access_mask(
+                    vk::AccessFlags2::INDIRECT_COMMAND_READ
+                        | vk::AccessFlags2::SHADER_READ
+                        | vk::AccessFlags2::SHADER_WRITE,
+                )
                 .dst_stage_mask(
-                    vk::PipelineStageFlags2::DRAW_INDIRECT | vk::PipelineStageFlags2::VERTEX_SHADER,
+                    vk::PipelineStageFlags2::TRANSFER | vk::PipelineStageFlags2::COMPUTE_SHADER,
                 )
                 .dst_access_mask(
-                    vk::AccessFlags2::INDIRECT_COMMAND_READ | vk::AccessFlags2::SHADER_READ,
-                );
-            let barriers = [barrier];
+                    vk::AccessFlags2::TRANSFER_WRITE
+                        | vk::AccessFlags2::SHADER_READ
+                        | vk::AccessFlags2::SHADER_WRITE,
+                )];
             // SAFETY: 向自有命令缓冲区录制命令。
             unsafe {
-                device.cmd_pipeline_barrier2(
+                self.gpu.device.cmd_pipeline_barrier2(
                     cmd,
-                    &vk::DependencyInfo::default().memory_barriers(&barriers),
-                )
-            };
+                    &vk::DependencyInfo::default().memory_barriers(&reuse_barrier),
+                );
+            }
+
+            // ---- 6c. 浮层 Overlay Pass（z >= split_z，叠在模糊背板之上） ------
+            self.record_cull_sort_indirect(
+                cmd,
+                scene,
+                n,
+                frame_slot,
+                u32::from(split_z),
+                0,
+                false,
+            )?;
+            self.begin_rendering(cmd, frame_slot, false);
+            self.record_graphics(cmd, scene, frame_slot);
+            self.end_rendering(cmd);
+        } else {
+            // 无浮层切分请求：单 Pass 绘制全部图元，再按需执行全场景毛玻璃虚化。
+            self.record_cull_sort_indirect(cmd, scene, n, frame_slot, 0, 0, true)?;
+            self.begin_rendering(cmd, frame_slot, true);
+            self.record_graphics(cmd, scene, frame_slot);
+            self.end_rendering(cmd);
+            self.record_backdrop(cmd, scene)?;
         }
-
-        self.mark(cmd, 4, vk::PipelineStageFlags::DRAW_INDIRECT);
-
-        // ---- 6/7. 图形渲染 ---------------------------------------------------
-        self.begin_rendering(cmd);
-        self.record_graphics(cmd, scene);
-        self.end_rendering(cmd);
-
-        // ---- 8. 毛玻璃背景虚化 -----------------------------------------------
-        // 模糊 Pass 采样颜色附件，因此在主 Pass 完成后、图像交付呈现前执行。
-        self.record_backdrop(cmd, scene)?;
 
         // 交换链图像必须以 `PRESENT_SRC_KHR` 布局交给呈现引擎，否则 `vkQueuePresentKHR` 会报错。
         if let (true, Some((image, _, _, _))) = (self.external_present, self.external_color) {
@@ -2010,14 +2332,11 @@ impl Renderer {
         color_view: vk::ImageView,
         descriptor_set: usize,
     ) {
-        let radii = if request.corner_radii == [0.0; 4] {
-            [request.radius; 4]
-        } else {
-            request.corner_radii
-        };
+        // `request.radius` 表示 Dual-Kawase 模糊半径，`request.corner_radii` 才是四角圆角半径；
+        // 不再将全零圆角误回退为模糊半径，避免直角或小圆角背板被错误裁切。
         let push = BackdropCompositePush {
             rect: request.rect,
-            radii,
+            radii: request.corner_radii,
         };
         let to_attachment = [image_barrier(
             color_image,
@@ -2539,11 +2858,19 @@ impl Renderer {
         self.stats
     }
 
-    /// 将 GPU 写入的帧计数器拷贝到统计结构体（仅在帧退役后有效）。
+    /// 将 GPU 写入的上一帧计数器拷贝到统计结构体（仅在帧退役后有效）。
     fn refresh_counters(&mut self) {
-        // SAFETY: 缓冲区在渲染器全生命周期内保持映射，且当前帧已退役。
-        let counters =
-            unsafe { core::slice::from_raw_parts(self.counters.mapped.cast::<u32>(), 4) };
+        let last_slot = if self.frame_index == 0 {
+            0
+        } else {
+            ((self.frame_index - 1) % (self.frames.len() as u64)) as usize
+        };
+        let offset = self.frame_slices.counters_offset(last_slot);
+        // SAFETY: 缓冲区在渲染器全生命周期内保持映射，且目标槽位帧已退役。
+        let Some(ptr) = self.counters.host_ptr(offset) else {
+            return;
+        };
+        let counters = unsafe { core::slice::from_raw_parts(ptr.cast::<u32>(), 4) };
         self.stats.visible = counters[2];
         self.stats.draw_calls = counters[1];
     }
@@ -2586,7 +2913,7 @@ impl Renderer {
                 self.pipelines.compute_layout,
                 0,
                 &[self.pipelines.set],
-                &[],
+                &[0],
             );
             device.cmd_push_constants(
                 cmd,
@@ -2625,7 +2952,12 @@ impl Renderer {
         self.pool.offset_of(handle).unwrap_or(0)
     }
 
-    fn clear_keys_tail(&self, cmd: vk::CommandBuffer, n: u32) -> Result<(), GpuError> {
+    fn clear_keys_tail(
+        &self,
+        cmd: vk::CommandBuffer,
+        n: u32,
+        frame_slot: usize,
+    ) -> Result<(), GpuError> {
         // 键按升序排列，未用槽位须填充 `0xFFFF…` 使其排至末尾；`vkCmdFillBuffer`
         // 按 32 位模式填充，写入 `0xFFFFFFFF` 即对应最大 `u64` 键值。
         // Vulkan 规范 `VUID-vkCmdFillBuffer-size-00026` 严禁 `size == 0`，故在 `n == 0` 时直接返回。
@@ -2633,49 +2965,74 @@ impl Renderer {
         if n == 0 {
             return Ok(());
         }
+        let keys_offset = self.frame_slices.keys_offset(frame_slot);
+        let idx_offset = self.frame_slices.idx_offset(frame_slot);
         let bytes = u64::from(n) * 8;
-        // SAFETY: `n > 0` 且填充范围位于缓冲区内（`capacity_primitives >= n`）。
+        // SAFETY: `n > 0` 且填充范围严格落在该帧槽位的切片区间内。
         unsafe {
             self.gpu
                 .device
-                .cmd_fill_buffer(cmd, self.keys_a.raw, 0, bytes, u32::MAX);
-            self.gpu
-                .device
-                .cmd_fill_buffer(cmd, self.idx_a.raw, 0, u64::from(n) * 4, 0);
+                .cmd_fill_buffer(cmd, self.keys_a.raw, keys_offset, bytes, u32::MAX);
+            self.gpu.device.cmd_fill_buffer(
+                cmd,
+                self.idx_a.raw,
+                idx_offset,
+                u64::from(n) * 4,
+                0,
+            );
         }
         Ok(())
     }
 
-    fn begin_rendering(&mut self, cmd: vk::CommandBuffer) {
+    fn begin_rendering(&mut self, cmd: vk::CommandBuffer, frame_slot: usize, clear_color: bool) {
         let device = &self.gpu.device;
-        // SAFETY: 处于录制状态且目标图像由本帧独占。
+        let depth_slot = &self.frame_depths[frame_slot % self.frame_depths.len()];
+        // SAFETY: 处于录制状态且目标颜色图像与本帧槽位深度图像均由本帧独占。
         unsafe {
-            // 颜色附件始末均需布局转换；借用的交换链图像初始为 `UNDEFINED`。
-            // 屏障结构体置于栈上，零堆分配。
-            let to_attachment = [match self.external_color {
-                Some((image, _, _, _)) => image_barrier(
+            // 首 Pass 清除颜色附件；Overlay 叠加 Pass 紧随 `record_backdrop` 之后执行，
+            // 颜色附件已处于 `COLOR_ATTACHMENT_OPTIMAL`，需以 `LOAD` 保留模糊背板并叠加浮层。
+            let to_attachment = if clear_color {
+                [match self.external_color {
+                    Some((image, _, _, _)) => image_barrier(
+                        image,
+                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::NONE,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                        false,
+                    ),
+                    None => image_barrier(
+                        self.target.color,
+                        self.target.layout,
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        vk::PipelineStageFlags2::TOP_OF_PIPE,
+                        vk::AccessFlags2::NONE,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                        false,
+                    ),
+                }]
+            } else {
+                let image = match self.external_color {
+                    Some((image, _, _, _)) => image,
+                    None => self.target.color,
+                };
+                [image_barrier(
                     image,
-                    vk::ImageLayout::UNDEFINED,
                     vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    vk::PipelineStageFlags2::TOP_OF_PIPE,
-                    vk::AccessFlags2::NONE,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                     vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                    false,
-                ),
-                None => image_barrier(
-                    self.target.color,
-                    self.target.layout,
-                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                    vk::PipelineStageFlags2::TOP_OF_PIPE,
-                    vk::AccessFlags2::NONE,
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     false,
-                ),
-            }];
+                )]
+            };
             let depth_ready = [image_barrier(
-                self.target.depth,
+                depth_slot.image,
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
                 vk::PipelineStageFlags2::TOP_OF_PIPE,
@@ -2710,7 +3067,7 @@ impl Renderer {
                     stencil: 0,
                 },
             };
-            // 颜色附件可能借用自交换链图像；深度附件始终归本渲染器所有。
+            // 颜色附件可能借用自交换链图像；深度附件按在飞帧槽位隔离并归本渲染器所有。
             let color_view = match self.external_color {
                 Some((_, view, _, _)) => view,
                 None => self.target.color_view,
@@ -2723,11 +3080,15 @@ impl Renderer {
             let color_attachment = [vk::RenderingAttachmentInfo::default()
                 .image_view(color_view)
                 .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .load_op(if clear_color {
+                    vk::AttachmentLoadOp::CLEAR
+                } else {
+                    vk::AttachmentLoadOp::LOAD
+                })
                 .store_op(vk::AttachmentStoreOp::STORE)
                 .clear_value(clear[0])];
             let depth_attachment = vk::RenderingAttachmentInfo::default()
-                .image_view(self.target.depth_view)
+                .image_view(depth_slot.view)
                 .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                 .load_op(vk::AttachmentLoadOp::CLEAR)
                 .store_op(vk::AttachmentStoreOp::STORE)
@@ -2757,8 +3118,16 @@ impl Renderer {
         }
     }
 
-    fn record_graphics(&mut self, cmd: vk::CommandBuffer, scene: &SceneUpload<'_>) {
+    fn record_graphics(
+        &mut self,
+        cmd: vk::CommandBuffer,
+        scene: &SceneUpload<'_>,
+        frame_slot: usize,
+    ) {
         let device = &self.gpu.device;
+        let idx_dynamic_offset = self.frame_slices.idx_dynamic_offset(frame_slot);
+        let commands_offset = self.frame_slices.commands_offset(frame_slot);
+        let counters_offset = self.frame_slices.counters_offset(frame_slot);
         // 视口尺寸跟随实际绘制的目标附件。
         let (width, height) = match self.external_color {
             Some((_, _, w, h)) => (w, h),
@@ -2789,7 +3158,7 @@ impl Renderer {
                 self.pipelines.graphics_layout,
                 0,
                 &[self.pipelines.set],
-                &[],
+                &[idx_dynamic_offset],
             );
             device.cmd_push_constants(
                 cmd,
@@ -2804,9 +3173,9 @@ impl Renderer {
                 device.cmd_draw_indirect_count(
                     cmd,
                     self.commands.raw,
-                    0,
+                    commands_offset,
                     self.counters.raw,
-                    4,
+                    counters_offset + 4,
                     MAX_DRAW_RUNS,
                     16,
                 );
@@ -2883,16 +3252,28 @@ impl Renderer {
             let mut out = vec![0u8; size as usize];
             core::ptr::copy_nonoverlapping(self.staging.mapped, out.as_mut_ptr(), size as usize);
 
-            // GPU 已空闲，计数器已最终落盘，同步到统计结构体。
-            let counters = core::slice::from_raw_parts(self.counters.mapped.cast::<u32>(), 4);
-            self.stats.visible = counters[2];
-            self.stats.draw_calls = counters[1];
+            // GPU 已空闲，同步最近提交槽位的计数器到统计结构体。
+            let last_slot = if self.frame_index == 0 {
+                0
+            } else {
+                ((self.frame_index - 1) % (self.frames.len() as u64)) as usize
+            };
+            let counters_offset = self.frame_slices.counters_offset(last_slot);
+            if let Some(ptr) = self.counters.host_ptr(counters_offset) {
+                let counters = core::slice::from_raw_parts(ptr.cast::<u32>(), 4);
+                self.stats.visible = counters[2];
+                self.stats.draw_calls = counters[1];
+            }
             Ok(out)
         }
     }
 
     /// 仅当场景发生变化时将场景上传至持久化池（支持全量与局部补丁两条路径）。
-    fn prepare_upload(&mut self, scene: &SceneUpload<'_>) -> Result<UploadPlan, GpuError> {
+    fn prepare_upload(
+        &mut self,
+        scene: &SceneUpload<'_>,
+        frame_slot: usize,
+    ) -> Result<UploadPlan, GpuError> {
         // 剔除与顶点着色器对*每个*图元都会读取 `transforms[0]`。静态 UI 场景
         // 完全不发射变换表；`ensure_pool_capacity` 仍会预留一个 stride，但其内容
         // 是未初始化的显存，垃圾仿射矩阵会把所有四边形移出屏幕，剔除阶段统计到
@@ -3047,26 +3428,28 @@ impl Renderer {
                 bytes.len(),
             );
             let patches = &self.staging_patches;
-            let max_patches = (self.patches.size as usize) / 16;
+            let patches_offset = self.frame_slices.patches_offset(frame_slot);
+            let max_patches = (self.frame_slices.patches_stride as usize) / 16;
             let patch_count = patches.len().min(max_patches);
             let patch_bytes = patch_count * 16;
             if patch_bytes > 0 {
                 core::ptr::copy_nonoverlapping(
                     patches.as_ptr().cast::<u8>(),
                     self.patches
-                        .host_ptr(0)
+                        .host_ptr(patches_offset)
                         .ok_or_else(|| GpuError::Allocation("patches not mapped".into()))?,
                     patch_bytes,
                 );
             }
             plan.patch_count = patch_count as u32;
-            // 缓冲区可能位于非一致性内存中，必须刷写以确保 GPU 不会读到上一帧的旧字节。
+            // 缓冲区可能位于非一致性内存中，必须按当前槽位偏移刷写，避免污染其他在飞帧。
             if !bytes.is_empty() {
                 self.gpu
                     .flush(&self.ring_buffer, u64::from(ring_slot), bytes.len() as u64);
             }
             if patch_bytes > 0 {
-                self.gpu.flush(&self.patches, 0, patch_bytes as u64);
+                self.gpu
+                    .flush(&self.patches, patches_offset, patch_bytes as u64);
             }
         }
 
@@ -3108,6 +3491,9 @@ impl Renderer {
         }
         // SAFETY: 设备已空闲且 `self` 正在被消费。
         unsafe {
+            for slot_depth in &this.frame_depths {
+                slot_depth.destroy(&this.gpu);
+            }
             this.target.destroy(&this.gpu);
             this.blur.destroy(&this.gpu);
             for b in [
@@ -3541,6 +3927,7 @@ mod tests {
             radius: 0.0,
             corner_radii: [0.0; 4],
             layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+            split_z: 0,
         }];
         let blurred_scene = SceneUpload {
             backdrops: &backdrops,
@@ -4521,5 +4908,65 @@ mod tests {
         }
         assert_eq!(renderer.pending_external_texture_destroys(), 0);
         renderer.destroy();
+    }
+
+    #[test]
+    fn frame_buffer_slices_isolate_all_buffers_for_double_buffering() {
+        let slices = FrameBufferSlices::new(2, 4096, 16, MAX_DRAW_RUNS, 256, 128);
+        assert_eq!(slices.frame_count, 2);
+
+        // 槽位 0 与槽位 1 的所有缓冲偏移严格互不重叠，且满足 256B 存储对齐。
+        assert_eq!(slices.keys_offset(0), 0);
+        assert!(slices.keys_offset(1) >= 4096 * 8);
+        assert_eq!(slices.keys_offset(1) % 256, 0);
+        assert_eq!(slices.total_keys(), slices.keys_stride * 2);
+
+        assert_eq!(slices.idx_offset(0), 0);
+        assert!(slices.idx_offset(1) >= 4096 * 4);
+        assert_eq!(slices.idx_dynamic_offset(1) as u64, slices.idx_offset(1));
+        assert_eq!(slices.idx_offset(1) % 256, 0);
+
+        assert_eq!(slices.sort_scratch_offset(0), 0);
+        assert!(slices.sort_scratch_offset(1) >= 16 * u64::from(RADIX_BLOCK) * 8);
+        assert_eq!(slices.sort_scratch_offset(1) % 256, 0);
+
+        assert_eq!(slices.commands_offset(0), 0);
+        assert!(slices.commands_offset(1) >= u64::from(MAX_DRAW_RUNS) * 16);
+        assert_eq!(slices.commands_offset(1) % 256, 0);
+
+        assert_eq!(slices.counters_offset(0), 0);
+        assert!(slices.counters_offset(1) >= 64);
+        assert_eq!(slices.counters_offset(1) % 256, 0);
+
+        assert_eq!(slices.patches_offset(0), 0);
+        assert!(slices.patches_offset(1) >= 64 * 1024 * 16);
+        assert_eq!(slices.patches_offset(1) % 256, 0);
+
+        // 槽位索引按帧数回环。
+        assert_eq!(slices.patches_offset(2), slices.patches_offset(0));
+        assert_eq!(slices.counters_offset(3), slices.counters_offset(1));
+    }
+
+    #[test]
+    fn backdrop_overlay_split_z_picks_lowest_positive_overlay_threshold() {
+        assert_eq!(backdrop_overlay_split_z(&[]), None);
+        let zero_only = [BackdropRequest::default()];
+        assert_eq!(backdrop_overlay_split_z(&zero_only), None);
+
+        let mixed = [
+            BackdropRequest {
+                split_z: 1132,
+                ..Default::default()
+            },
+            BackdropRequest {
+                split_z: 0,
+                ..Default::default()
+            },
+            BackdropRequest {
+                split_z: 1100,
+                ..Default::default()
+            },
+        ];
+        assert_eq!(backdrop_overlay_split_z(&mixed), Some(1100));
     }
 }

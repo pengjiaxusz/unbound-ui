@@ -36,6 +36,14 @@ void main() {
     PrimBuf prims = PrimBuf(pc.primitives_bda);
     Prim p = prims.p[i];
 
+    uint z16 = p.z_opacity >> 16;
+    // 可选 Z 区间过滤：用于毛玻璃 Backdrop Pass 之前/之后分别绘制底层 UI 与浮层 Overlay。
+    // `pc.digit` 为包含下界（非零时剔除 `z16 < pc.digit`）；
+    // `pc.aux` 为排除上界（非零时剔除 `z16 >= pc.aux`）。
+    if ((pc.digit != 0u && z16 < pc.digit) || (pc.aux != 0u && z16 >= pc.aux)) {
+        return;
+    }
+
     float shadow = unpack_shadow(p.border_and_shadow);
     float pad = shadow > 0.0 ? shadow * 3.0 : 0.0;
 
@@ -89,12 +97,16 @@ void main() {
         }
     }
 
-    // 64 位排序键：[layer 8 | barrier 16 | variant 4 | z 28 | sub 8]。
-    // `aux` 携带本次调度的 layer/barrier/variant 前缀，因此着色器无需二次查表。
-    uint z16 = p.z_opacity >> 16;
+    // 64 位排序键：[layer 8 | barrier 16 | variant 4 | z16 16 | sub 3 | order 17]。
+    // `scratch_bda4` 携带本次调度的 layer/barrier/variant 前缀（高 28 位）；
+    // 原始图元发射序号 `i` 编入低 17 位，消除同 `(z, SubElement)` 重叠图元因并发
+    // `atomicAdd` 无序写入槽位导致的每帧随机互盖。
     uint sub = (p.type_flags >> 16) & 0x7u;
-    uint64_t z28 = uint64_t(z16) << 12;       // 16 位 -> 28 位
-    uint64_t key = pc.scratch_bda4 | (z28 << 8) | uint64_t(sub);
+    uint order = min(i, 0x1FFFFu);
+    uint64_t key = pc.scratch_bda4
+        | (uint64_t(z16) << 20)
+        | (uint64_t(sub) << 17)
+        | uint64_t(order);
 
     uint slot = atomicAdd(CursorBuf(pc.scratch_bda2).c[0], 1u);
     KeyBuf(pc.scratch_bda).k[slot] = key;

@@ -184,7 +184,8 @@ pub fn emit_popover(
             ..Default::default()
         },
         entry: OverlayEntry::popover(node, anchor_node, rect),
-        backdrop: crate::overlay::BackdropRequest::new(node, rect, desc.backdrop_blur),
+        backdrop: crate::overlay::BackdropRequest::new(node, rect, desc.backdrop_blur)
+            .map(|req| req.with_corner_radius(desc.radius).with_z(desc.z)),
     }
 }
 

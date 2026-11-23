@@ -228,7 +228,7 @@ impl Pipelines {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(2)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::VERTEX),
         ];
@@ -590,7 +590,7 @@ impl Pipelines {
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(MAX_ATLAS_LAYERS + MAX_RGBA_BINDLESS_SLOTS),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
+                .ty(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
                 .descriptor_count(4),
         ];
         let descriptor_pool = device
@@ -801,14 +801,29 @@ impl Pipelines {
     /// # Safety
     /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活。
     pub unsafe fn bind_sorted_indices(&self, gpu: &Gpu, buffer: &crate::device::Buffer) {
+        self.bind_sorted_indices_range(gpu, buffer, vk::WHOLE_SIZE);
+    }
+
+    /// 将顶点着色器的动态存储缓冲绑定指向已排序索引缓冲区，并指定单帧切片字节范围。
+    ///
+    /// 配合 `cmd_bind_descriptor_sets` 传入的逐帧动态偏移，多帧飞行时各帧仅读取各自切片。
+    ///
+    /// # Safety
+    /// 在任何引用该缓冲区的帧处于在飞状态期间，`buffer` 必须保持存活。
+    pub unsafe fn bind_sorted_indices_range(
+        &self,
+        gpu: &Gpu,
+        buffer: &crate::device::Buffer,
+        range: u64,
+    ) {
         let info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.raw)
             .offset(0)
-            .range(vk::WHOLE_SIZE)];
+            .range(range)];
         let write = vk::WriteDescriptorSet::default()
             .dst_set(self.set)
             .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER_DYNAMIC)
             .buffer_info(&info);
         gpu.device.update_descriptor_sets(&[write], &[]);
     }
