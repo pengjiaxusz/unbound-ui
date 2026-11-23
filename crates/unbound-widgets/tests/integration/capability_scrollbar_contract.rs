@@ -240,12 +240,19 @@ fn probe_navigation_view(owner_node: u64) -> (ScrollbarProbe, ScrollbarProbe) {
         ScrollbarProbe {
             primitives: short_out.output.primitives,
             hits: short_out.output.sub_hits.to_vec(),
-            container_rect: short_out.layout.menu_viewport_rect,
+            // 对齐 WinUI 3：NavigationView 滚动条宿主铺满窗格宽度（右缘贴齐 pane 外缘）。
+            container_rect: short_out
+                .layout
+                .overlay_rect
+                .unwrap_or(short_out.layout.pane_rect),
         },
         ScrollbarProbe {
             primitives: overflow_out.output.primitives,
             hits: overflow_out.output.sub_hits.to_vec(),
-            container_rect: overflow_out.layout.menu_viewport_rect,
+            container_rect: overflow_out
+                .layout
+                .overlay_rect
+                .unwrap_or(overflow_out.layout.pane_rect),
         },
     )
 }
