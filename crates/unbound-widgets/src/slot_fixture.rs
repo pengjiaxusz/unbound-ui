@@ -1405,7 +1405,7 @@ pub fn emit_canonical_pips_pager_fixture(
 pub fn emit_canonical_command_bar_fixture(
     rect: Rect,
     state: FixtureState,
-    text_ctx: &mut TextCtx<'_>,
+    _text_ctx: &mut TextCtx<'_>,
     z: u16,
 ) -> CommandBarFixtureOutput {
     let mut out = WidgetOutput::default();

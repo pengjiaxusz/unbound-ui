@@ -1499,31 +1499,26 @@ mod tests {
     #[test]
     fn the_family_follows_the_scripts_inside_the_text() {
         let all_available = |_: &str| true;
-        assert_eq!(
-            east_asian_family(HAN_ONLY, all_available),
-            Some(MS_YAHEI_UI)
-        );
-        assert_eq!(
-            east_asian_family(JAPANESE, all_available),
-            Some(YU_GOTHIC_UI)
-        );
-        assert_eq!(
-            east_asian_family(KOREAN, all_available),
-            Some(MALGUN_GOTHIC)
-        );
-        assert_eq!(
-            east_asian_family(LATIN_ONLY, all_available),
-            Some(MS_YAHEI_UI)
-        );
+        #[cfg(windows)]
+        let (zh, ja, ko) = (MS_YAHEI_UI, YU_GOTHIC_UI, MALGUN_GOTHIC);
+        #[cfg(not(windows))]
+        let (zh, ja, ko) = (NOTO_SANS_CJK_SC, NOTO_SANS_CJK_JP, NOTO_SANS_CJK_KR);
+
+        assert_eq!(east_asian_family(HAN_ONLY, all_available), Some(zh));
+        assert_eq!(east_asian_family(JAPANESE, all_available), Some(ja));
+        assert_eq!(east_asian_family(KOREAN, all_available), Some(ko));
+        assert_eq!(east_asian_family(LATIN_ONLY, all_available), Some(zh));
     }
 
     #[test]
     fn a_missing_family_falls_back_to_the_next_available_one() {
-        let japanese_only = |family: &str| family == YU_GOTHIC_UI;
-        assert_eq!(
-            east_asian_family(HAN_ONLY, japanese_only),
-            Some(YU_GOTHIC_UI)
-        );
+        #[cfg(windows)]
+        let ja_family = YU_GOTHIC_UI;
+        #[cfg(not(windows))]
+        let ja_family = NOTO_SANS_CJK_JP;
+
+        let japanese_only = |family: &str| family == ja_family;
+        assert_eq!(east_asian_family(HAN_ONLY, japanese_only), Some(ja_family));
         let none_available = |_: &str| false;
         assert_eq!(east_asian_family(HAN_ONLY, none_available), None);
     }
