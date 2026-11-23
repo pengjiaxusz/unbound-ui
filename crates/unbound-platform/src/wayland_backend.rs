@@ -13,7 +13,7 @@ use core::ptr::NonNull;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -114,10 +114,28 @@ enum WaylandCommand {
     },
 }
 
-/// 跨线程唤醒事件循环的管道写端。
+/// 线程安全的管道唤醒信号句柄（事件循环退出时原子置 `-1`，杜绝向已关闭 FD 写入）。
+#[derive(Clone)]
+struct WakeSignal(Arc<AtomicI32>);
+
+impl WakeSignal {
+    fn signal(&self) {
+        let fd = self.0.load(Ordering::Acquire);
+        if fd < 0 {
+            return;
+        }
+        let byte: u8 = 1;
+        // SAFETY: `fd >= 0` 表示管道写端仍由 `WakePipe` 持有且未关闭。
+        unsafe {
+            let _ = libc::write(fd, (&raw const byte).cast::<c_void>(), 1);
+        }
+    }
+}
+
+/// 跨线程唤醒事件循环的管道，释放时先原子失效写端再关闭描述符。
 struct WakePipe {
     read_fd: RawFd,
-    write_fd: RawFd,
+    write_fd: Arc<AtomicI32>,
 }
 
 impl WakePipe {
@@ -138,12 +156,12 @@ impl WakePipe {
         }
         Ok(Self {
             read_fd: fds[0],
-            write_fd: fds[1],
+            write_fd: Arc::new(AtomicI32::new(fds[1])),
         })
     }
 
-    fn wake_fd(&self) -> RawFd {
-        self.write_fd
+    fn signal_handle(&self) -> WakeSignal {
+        WakeSignal(Arc::clone(&self.write_fd))
     }
 
     fn drain(&self) {
@@ -161,19 +179,23 @@ impl WakePipe {
 
 impl Drop for WakePipe {
     fn drop(&mut self) {
-        // SAFETY: 仅在释放时关闭一次自身持有的管道描述符。
+        let write_fd = self.write_fd.swap(-1, Ordering::AcqRel);
+        // SAFETY: 写端已原子失效，释放自身持有的管道描述符各一次。
         unsafe {
+            if write_fd >= 0 {
+                let _ = libc::close(write_fd);
+            }
             let _ = libc::close(self.read_fd);
-            let _ = libc::close(self.write_fd);
         }
     }
 }
 
-fn wake_pipe_signal(write_fd: RawFd) {
-    let byte: u8 = 1;
-    // SAFETY: 向非阻塞唤醒管道写入单字节，失败（如缓冲区已满）可安全忽略。
-    unsafe {
-        let _ = libc::write(write_fd, (&raw const byte).cast::<c_void>(), 1);
+/// RAII 守卫：确保 `run_event_loop` 任意正常或异常退出路径都注销全局 Wayland 剪贴板桥接。
+struct ClipboardRegistrationGuard;
+
+impl Drop for ClipboardRegistrationGuard {
+    fn drop(&mut self) {
+        register_wayland_clipboard(None);
     }
 }
 
@@ -193,7 +215,7 @@ struct WaylandWindowShared {
     cursor: AtomicU8,
     frame_metrics: Mutex<Option<Arc<FrameHitMetrics>>>,
     cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
-    wake_fd: RawFd,
+    wake_signal: WakeSignal,
 }
 
 /// Wayland 原生窗口句柄（由 [`NativeWindow`] 包装并暴露给上层应用）。
@@ -206,7 +228,7 @@ impl WaylandWindowHandle {
     fn send(&self, cmd: WaylandCommand) {
         if let Ok(tx) = self.shared.cmd_tx.lock() {
             let _ = tx.send(cmd);
-            wake_pipe_signal(self.shared.wake_fd);
+            self.shared.wake_signal.signal();
         }
     }
 
@@ -364,7 +386,7 @@ struct WaylandClipboardBridge {
     /// 最近一次读取或写入的缓存文本，供同步读路径无阻塞返回。
     cached_text: Arc<Mutex<Option<String>>>,
     cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
-    wake_fd: RawFd,
+    wake_signal: WakeSignal,
 }
 
 impl WaylandClipboardBackend for WaylandClipboardBridge {
@@ -383,7 +405,7 @@ impl WaylandClipboardBackend for WaylandClipboardBridge {
                 })
                 .is_ok();
             if ok {
-                wake_pipe_signal(self.wake_fd);
+                self.wake_signal.signal();
             }
             ok
         } else {
@@ -447,18 +469,22 @@ struct ToplevelEntry {
     configured: bool,
     resizable: bool,
     throttle: WaylandFrameThrottle,
+    was_suspended: bool,
+    csd_edge_active: bool,
     pending_events: Vec<PlatformEvent>,
     cursor_logical: (f64, f64),
 }
 
 /// 越界原生弹出窗（`xdg_popup`）运行时条目。
 struct PopupEntry {
+    owner_window_id: isize,
     popup: Popup,
     native_window: NativeWindow,
     shared: Arc<WaylandWindowShared>,
     state: PlatformState,
     pending_events: Vec<PlatformEvent>,
     configured: bool,
+    dismissed: bool,
 }
 
 /// Wayland 事件循环主状态（实现所有 `sctk` Handler trait）。
@@ -493,7 +519,7 @@ struct WaylandState {
     surface_to_popup: HashMap<u32, u64>,
 
     cmd_tx: mpsc::Sender<WaylandCommand>,
-    wake_fd: RawFd,
+    wake_signal: WakeSignal,
     display_ptr: usize,
     exit_requested: bool,
 }
@@ -553,7 +579,7 @@ impl WaylandState {
             cursor: AtomicU8::new(CursorIcon::Default as u8),
             frame_metrics: Mutex::new(None),
             cmd_tx: Mutex::new(self.cmd_tx.clone()),
-            wake_fd: self.wake_fd,
+            wake_signal: self.wake_signal.clone(),
         });
         let handle = WaylandWindowHandle {
             shared: Arc::clone(&shared),
@@ -577,6 +603,8 @@ impl WaylandState {
             configured: false,
             resizable: config.resizable,
             throttle: WaylandFrameThrottle::default(),
+            was_suspended: false,
+            csd_edge_active: false,
             pending_events: Vec::new(),
             cursor_logical: (0.0, 0.0),
         });
@@ -597,6 +625,7 @@ impl WaylandState {
         let Some(owner_entry) = owner_entry else {
             return false;
         };
+        let owner_window_id = owner_entry.id;
         let parent_xdg = owner_entry.sctk_window.xdg_surface().clone();
         let owner_scale = owner_entry.native_window.scale_factor();
 
@@ -690,7 +719,7 @@ impl WaylandState {
             cursor: AtomicU8::new(CursorIcon::Default as u8),
             frame_metrics: Mutex::new(None),
             cmd_tx: Mutex::new(self.cmd_tx.clone()),
-            wake_fd: self.wake_fd,
+            wake_signal: self.wake_signal.clone(),
         });
         let handle = WaylandWindowHandle {
             shared: Arc::clone(&shared),
@@ -714,12 +743,14 @@ impl WaylandState {
         self.popups.insert(
             popup_id,
             PopupEntry {
+                owner_window_id,
                 popup,
                 native_window,
                 shared,
                 state: pstate,
                 pending_events: Vec::new(),
                 configured: false,
+                dismissed: false,
             },
         );
         true
@@ -885,6 +916,7 @@ impl CompositorHandler for WaylandState {
     ) {
         let proto_id = surface.id().protocol_id();
         if let Some(entry) = self.window_by_surface_mut(proto_id) {
+            entry.throttle.set_hidden_or_minimized(false);
             entry.throttle.on_frame_done();
         }
     }
@@ -962,6 +994,9 @@ impl WindowHandler for WaylandState {
             let scale = entry.native_window.scale_factor();
             let maximized = configure.is_maximized();
             entry.shared.maximized.store(maximized, Ordering::Release);
+            if configure.is_activated() {
+                entry.throttle.set_hidden_or_minimized(false);
+            }
 
             let (cur_w, cur_h) = {
                 let sz = entry.native_window.inner_size();
@@ -1019,7 +1054,7 @@ impl PopupHandler for WaylandState {
         let proto_id = popup.wl_surface().id().protocol_id();
         if let Some(&popup_id) = self.surface_to_popup.get(&proto_id) {
             if let Some(entry) = self.popups.get_mut(&popup_id) {
-                entry.pending_events.push(PlatformEvent::CloseRequested);
+                entry.dismissed = true;
             }
         }
     }
@@ -1208,7 +1243,11 @@ impl PointerHandler for WaylandState {
                                 logical_h,
                                 WAYLAND_CSD_RESIZE_BORDER,
                             ) {
+                                entry.csd_edge_active = true;
                                 pending_cursor = Some(cursor_for_resize_direction(dir));
+                            } else if entry.csd_edge_active {
+                                entry.csd_edge_active = false;
+                                pending_cursor = Some(entry.native_window.current_cursor());
                             }
                         }
                         push_coalesced_event(
@@ -1483,7 +1522,10 @@ impl DataSourceHandler for WaylandState {
         _mime: String,
         mut fd: WritePipe,
     ) {
-        let _ = fd.write_all(self.clipboard_owned_text.as_bytes());
+        let payload = self.clipboard_owned_text.as_bytes().to_vec();
+        std::thread::spawn(move || {
+            let _ = fd.write_all(&payload);
+        });
     }
 
     fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
@@ -1597,15 +1639,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
 
     let wake_pipe = WakePipe::new()?;
-    let wake_write_fd = wake_pipe.wake_fd();
+    let wake_signal = wake_pipe.signal_handle();
     let (cmd_tx, cmd_rx) = mpsc::channel::<WaylandCommand>();
     let clipboard_cache = Arc::new(Mutex::new(None));
 
     // 注册全局 Wayland 剪贴板后端，使 `SystemClipboard` 在 Linux/WSLg 下透明读写。
+    let _clipboard_guard = ClipboardRegistrationGuard;
     register_wayland_clipboard(Some(Arc::new(WaylandClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
         cmd_tx: Mutex::new(cmd_tx.clone()),
-        wake_fd: wake_write_fd,
+        wake_signal: wake_signal.clone(),
     })));
 
     let mut wl = WaylandState {
@@ -1635,7 +1678,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         surface_to_window: HashMap::new(),
         surface_to_popup: HashMap::new(),
         cmd_tx,
-        wake_fd: wake_write_fd,
+        wake_signal: wake_signal.clone(),
         display_ptr,
         exit_requested: false,
     };
@@ -1645,7 +1688,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     wl.refresh_primary_output();
 
     // 安装跨线程事件循环唤醒回调。
-    app.attach_waker(Arc::new(move || wake_pipe_signal(wake_write_fd)));
+    let waker_sig = wake_signal.clone();
+    app.attach_waker(Arc::new(move || waker_sig.signal()));
 
     // 创建主顶层窗口并等待首次 configure。
     wl.create_toplevel(&qh, &config)?;
@@ -1678,11 +1722,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             }
         }
 
-        // 3. 派发所有顶层窗口的待处理事件。
+        // 3. 派发所有顶层窗口的待处理事件，并处理副窗（`Second Window`）独立关闭。
+        let mut closed_secondary_ids: Vec<isize> = Vec::new();
         for idx in 0..wl.windows.len() {
             let events: Vec<PlatformEvent> = std::mem::take(&mut wl.windows[idx].pending_events);
             let ev_now = Instant::now();
+            let mut close_requested = false;
             for ev in events {
+                if matches!(ev, PlatformEvent::CloseRequested) {
+                    close_requested = true;
+                }
                 let derived = apply(&mut wl.windows[idx].state, &ev, ev_now);
                 let entry = &mut wl.windows[idx];
                 for out_ev in derived {
@@ -1698,17 +1747,49 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             if wl.exit_requested {
                 break;
             }
+            if close_requested && idx > 0 {
+                closed_secondary_ids.push(wl.windows[idx].id);
+            }
         }
         if wl.exit_requested {
             break;
         }
+        for sec_id in closed_secondary_ids {
+            // 先级联关闭归属该副窗的所有 `xdg_popup`，再通知应用销毁副窗渲染表面。
+            let owned_popups: Vec<u64> = wl
+                .popups
+                .iter()
+                .filter(|(_, p)| p.owner_window_id == sec_id)
+                .map(|(&pid, _)| pid)
+                .collect();
+            for pid in owned_popups {
+                if let Some(pentry) = wl.popups.remove(&pid) {
+                    pentry.shared.destroyed.store(true, Ordering::Release);
+                    let proto_id = pentry.popup.wl_surface().id().protocol_id();
+                    wl.surface_to_popup.remove(&proto_id);
+                    app.window_closing(&pentry.native_window);
+                }
+            }
+            if let Some(pos) = wl.windows.iter().position(|w| w.id == sec_id) {
+                let entry = wl.windows.remove(pos);
+                entry.shared.destroyed.store(true, Ordering::Release);
+                let proto_id = entry.sctk_window.wl_surface().id().protocol_id();
+                wl.surface_to_window.remove(&proto_id);
+                app.window_closing(&entry.native_window);
+            }
+        }
 
-        // 4. 派发所有越界弹出窗的待处理事件。
+        // 4. 派发所有越界弹出窗事件，并回收合成器已 `done` 关闭的弹出窗。
         let popup_ids: Vec<u64> = wl.popups.keys().copied().collect();
+        let mut dismissed_popups: Vec<(u64, isize)> = Vec::new();
         for pid in popup_ids {
             let Some(pentry) = wl.popups.get_mut(&pid) else {
                 continue;
             };
+            if pentry.dismissed {
+                dismissed_popups.push((pid, pentry.owner_window_id));
+                continue;
+            }
             let events: Vec<PlatformEvent> = std::mem::take(&mut pentry.pending_events);
             let ev_now = Instant::now();
             for ev in events {
@@ -1726,6 +1807,19 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         }
         if wl.exit_requested {
             break;
+        }
+        for (pid, owner_id) in dismissed_popups {
+            if let Some(pentry) = wl.popups.remove(&pid) {
+                pentry.shared.destroyed.store(true, Ordering::Release);
+                let proto_id = pentry.popup.wl_surface().id().protocol_id();
+                wl.surface_to_popup.remove(&proto_id);
+                app.window_closing(&pentry.native_window);
+            }
+            if let Some(owner) = wl.window_by_id_mut(owner_id) {
+                owner
+                    .pending_events
+                    .push(PlatformEvent::PopupDismissed { id: pid });
+            }
         }
 
         // 5. 处理应用请求的新副窗（`Second Window`）与关闭请求。
@@ -1766,23 +1860,29 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             }
         }
 
-        // 7. 可见性驱动节流与出帧。
+        // 7. 可见性驱动节流与出帧（仅在状态跃迁至 Suspended 时边沿触发 `app.suspended`）。
         let frame_now = Instant::now();
         let mut min_wait: Option<Duration> = None;
         for idx in 0..wl.windows.len() {
             if wl.windows[idx].throttle.is_suspended(frame_now) {
-                app.suspended(&mut wl.windows[idx].state);
+                if !wl.windows[idx].was_suspended {
+                    wl.windows[idx].was_suspended = true;
+                    app.suspended(&mut wl.windows[idx].state);
+                }
                 continue;
             }
+            wl.windows[idx].was_suspended = false;
             let redraw = wl.windows[idx]
                 .shared
                 .redraw_requested
                 .swap(false, Ordering::AcqRel);
-            let should_draw = redraw || wl.windows[idx].state.pacer.should_render(frame_now);
-            if should_draw {
+            let pacer_due = wl.windows[idx].state.pacer.should_render(frame_now);
+            if redraw || pacer_due {
                 let surf = wl.windows[idx].sctk_window.wl_surface().clone();
                 surf.frame(&qh, surf.clone());
-                wl.windows[idx].throttle.on_frame_requested(frame_now);
+                if pacer_due {
+                    wl.windows[idx].throttle.on_frame_requested(frame_now);
+                }
                 let entry = &mut wl.windows[idx];
                 if app.frame(&mut entry.state, &entry.native_window) == Flow::Exit {
                     wl.exit_requested = true;
@@ -1825,6 +1925,15 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         }
     }
 
-    register_wayland_clipboard(None);
+    // 严格遵守 Vulkan 表面销毁契约：先通知应用销毁全部 `VkSurfaceKHR`，再释放 `wl_surface`/`wl_display`。
+    for (_, pentry) in wl.popups.drain() {
+        pentry.shared.destroyed.store(true, Ordering::Release);
+        app.window_closing(&pentry.native_window);
+    }
+    for entry in wl.windows.drain(..) {
+        entry.shared.destroyed.store(true, Ordering::Release);
+        app.window_closing(&entry.native_window);
+    }
+
     Ok(())
 }
