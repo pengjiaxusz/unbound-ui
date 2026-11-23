@@ -21,5 +21,13 @@ windows-core.workspace = true
 # 与 accesskit 0.25 配对的版本是 0.35.x。
 accesskit_windows = "0.35.2"
 
+
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))'.dependencies]
+smithay-client-toolkit = { version = "0.19", default-features = false }
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+libc = "0.2"
+
 [lints]
 workspace = true

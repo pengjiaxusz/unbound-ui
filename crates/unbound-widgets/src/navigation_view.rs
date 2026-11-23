@@ -2906,7 +2906,7 @@ fn emit_navigation_row(
             );
         }
         NavigationViewRowKind::Settings => {
-            let settings_icon = NavigationViewIcon::Glyph("\u{E713}".to_owned());
+            let settings_icon = NavigationViewIcon::Shell(ShellIcon::Settings);
             emit_interactive_nav_item(
                 parent_node,
                 row.rect,

@@ -234,20 +234,17 @@ fn command_bar_normal_and_disabled_and_focused_states() {
             .any(|p| p.border_token_or_tex as u16 == Token::FOCUS_RING.raw());
         assert!(has_focus_ring, "focused CommandBar must emit focus ring");
 
-        // 3. 禁用态契约：命令文字与图标降级为 TEXT_DISABLED
+        // 3. 禁用态契约：命令矢量图标降级为 TEXT_DISABLED
         let disabled =
             emit_canonical_command_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let glyph_tokens: Vec<Token> = disabled
+        let icon_tokens: Vec<Token> = disabled
             .output
             .primitives
             .iter()
-            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
-        assert!(!glyph_tokens.is_empty());
-        for tok in glyph_tokens {
-            assert_eq!(tok, Token::TEXT_DISABLED);
-        }
+        assert!(icon_tokens.contains(&Token::TEXT_DISABLED));
+        assert!(!icon_tokens.contains(&Token::TEXT_PRIMARY));
     });
 }
 

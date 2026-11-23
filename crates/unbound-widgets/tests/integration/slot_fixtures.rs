@@ -671,16 +671,16 @@ fn refresh_fixture_normal_outputs_indicator_and_card() {
             STANDARD_REFRESH_INDICATOR_SIZE
         );
 
-        // 2. 使用 Segoe Fluent Icons 刷新字形，不绘制占位弧线
+        // 2. 使用内置矢量 ShellIcon::Redo 绘制刷新图标，不依赖 Windows PUA 字体
         let arc_count = fixture
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
             .count();
-        assert_eq!(
-            arc_count, 0,
-            "RefreshContainer uses icon glyph instead of curves"
+        assert!(
+            arc_count > 0,
+            "RefreshContainer must emit vector ShellIcon primitives"
         );
 
         // 3. 内容卡片文本
@@ -932,21 +932,20 @@ fn command_bar_normal_renders_two_commands_separator_and_more_button() {
         );
         assert_eq!(fixture.total_size.y, 48.0, "bar height must be 48px");
 
-        // 2. 文本与图标颜色校验：正常态使用 TEXT_PRIMARY
-        let glyph_tokens: Vec<Token> = fixture
+        // 2. 矢量图标颜色校验：正常态使用 TEXT_PRIMARY
+        let icon_tokens: Vec<Token> = fixture
             .output
             .primitives
             .iter()
-            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
 
         assert!(
-            glyph_tokens.contains(&Token::TEXT_PRIMARY),
+            icon_tokens.contains(&Token::TEXT_PRIMARY),
             "command buttons must use TEXT_PRIMARY"
         );
         assert!(
-            !glyph_tokens.contains(&Token::TEXT_DISABLED),
+            !icon_tokens.contains(&Token::TEXT_DISABLED),
             "normal state must not use TEXT_DISABLED"
         );
     });
@@ -957,25 +956,24 @@ fn command_bar_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, 320.0, 48.0);
 
-        // 1. 禁用态校验：文本和图标全部衰减为 TEXT_DISABLED
+        // 1. 禁用态校验：命令矢量图标衰减为 TEXT_DISABLED
         let disabled_fixture =
             emit_canonical_command_bar_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let glyph_tokens: Vec<Token> = disabled_fixture
+        let icon_tokens: Vec<Token> = disabled_fixture
             .output
             .primitives
             .iter()
-            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
 
-        assert!(!glyph_tokens.is_empty(), "must emit glyph primitives");
-        for tok in glyph_tokens {
-            assert_eq!(
-                tok,
-                Token::TEXT_DISABLED,
-                "all command bar text must be TEXT_DISABLED in disabled state"
-            );
-        }
+        assert!(
+            icon_tokens.contains(&Token::TEXT_DISABLED),
+            "disabled command bar icons must use TEXT_DISABLED"
+        );
+        assert!(
+            !icon_tokens.contains(&Token::TEXT_PRIMARY),
+            "disabled command bar must not retain TEXT_PRIMARY"
+        );
 
         // 2. 聚焦态校验：首个命令按钮处必须绘制焦点环
         let focused_fixture =

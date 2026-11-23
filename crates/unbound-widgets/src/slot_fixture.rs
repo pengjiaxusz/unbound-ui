@@ -693,18 +693,11 @@ pub fn emit_canonical_path_fixture(
             // 分隔符实测取主文本色（浅色 core 55、深色 core 238），且禁用态不衰减。
             let sep_color = Token::TEXT_PRIMARY;
 
-            let sep_quads = text_ctx.shape_line_styled(
-                "\u{E76C}",
+            crate::shell::emit_shell_icon_primitives(
+                crate::shell::ShellIcon::ChevronRight,
                 sep_r,
-                10.0,
-                400,
-                Some("Segoe Fluent Icons"),
-                AlignX::Center,
-                AlignY::Middle,
-            );
-            primitive::glyphs(
-                &sep_quads,
                 sep_color,
+                Token::SURFACE,
                 z + 2,
                 &mut out.primitives,
                 &mut out.payloads,
@@ -1412,7 +1405,7 @@ pub fn emit_canonical_pips_pager_fixture(
 pub fn emit_canonical_command_bar_fixture(
     rect: Rect,
     state: FixtureState,
-    text_ctx: &mut TextCtx<'_>,
+    _text_ctx: &mut TextCtx<'_>,
     z: u16,
 ) -> CommandBarFixtureOutput {
     let mut out = WidgetOutput::default();
@@ -1457,18 +1450,16 @@ pub fn emit_canonical_command_bar_fixture(
             ));
         }
 
-        let icon_quads = text_ctx.shape_line_styled(
-            glyph,
+        let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
+            crate::shell::ShellIcon::Package
+        } else {
+            crate::shell::ShellIcon::Folder
+        };
+        crate::shell::emit_shell_icon_primitives(
+            shell_icon,
             btn_r,
-            16.0,
-            400,
-            Some("Segoe Fluent Icons"),
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        primitive::glyphs(
-            &icon_quads,
             icon_ink,
+            Token::SURFACE,
             z + 2,
             &mut out.primitives,
             &mut out.payloads,
@@ -1502,18 +1493,11 @@ pub fn emit_canonical_command_bar_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    let more_quads = text_ctx.shape_line_styled(
-        CANONICAL_COMMAND_MORE_GLYPH,
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::Ellipsis,
         more_r,
-        16.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &more_quads,
         more_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
@@ -1833,18 +1817,11 @@ pub fn emit_canonical_tab_view_fixture(
             16.0,
             t_rect.height(),
         );
-        let close_quads = text_ctx.shape_line_styled(
-            CANONICAL_TAB_CLOSE_GLYPH,
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Close,
             close_r,
-            11.0,
-            400,
-            Some("Segoe Fluent Icons"),
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        primitive::glyphs(
-            &close_quads,
             close_ink,
+            Token::SURFACE,
             z + 3,
             &mut out.primitives,
             &mut out.payloads,
@@ -2137,22 +2114,17 @@ pub fn emit_canonical_refresh_fixture(
     let card_rect = refresh_rect;
 
     let refresh_icon_ink = Token::TEXT_DISABLED;
-    let icon_quads = text_ctx.shape_line_styled(
-        "\u{E72C}",
-        ring_rect,
-        20.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &icon_quads,
-        refresh_icon_ink,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    if !state.disabled {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Redo,
+            ring_rect,
+            refresh_icon_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
@@ -2401,18 +2373,11 @@ pub fn emit_canonical_info_bar_fixture(
         16.0,
         16.0,
     );
-    let close_quads = text_ctx.shape_line_styled(
-        CANONICAL_INFOBAR_CLOSE_GLYPH,
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::Close,
         close_r,
-        14.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &close_quads,
         close_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
@@ -2512,18 +2477,11 @@ pub fn emit_canonical_expander_fixture(
         16.0,
         16.0,
     );
-    let chevron_quads = text_ctx.shape_line_styled(
-        CANONICAL_EXPANDER_CHEVRON_UP,
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::ChevronUp,
         chevron_r,
-        10.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &chevron_quads,
         chevron_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
@@ -2772,36 +2730,22 @@ pub fn emit_canonical_calendar_view_fixture(
     };
     // 上下导航三角箭头对齐参考图 y[38..43]，相对原 +17.0 整体下移 +1.0px。
     let up_r = Rect::new(total_r.max().x - 73.0, total_r.origin.y + 18.0, 16.0, 16.0);
-    let up_quads = text_ctx.shape_line_styled(
-        "\u{EDDB}",
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::ChevronUp,
         up_r,
-        8.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &up_quads,
         arrow_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
     );
 
     let down_r = Rect::new(total_r.max().x - 33.0, total_r.origin.y + 18.0, 16.0, 16.0);
-    let down_quads = text_ctx.shape_line_styled(
-        "\u{EDDC}",
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::ChevronDown,
         down_r,
-        8.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &down_quads,
         arrow_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
@@ -3207,18 +3151,12 @@ pub fn emit_canonical_font_icon_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    let quads = text_ctx.shape_line_styled(
-        CANONICAL_FONT_ICON_GLYPH,
+    let _ = text_ctx;
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::Sparkles,
         total_r,
-        CANONICAL_FONT_ICON_FONT_SIZE,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &quads,
         text_ink,
+        Token::SURFACE,
         z + 1,
         &mut out.primitives,
         &mut out.payloads,
@@ -3640,18 +3578,11 @@ pub fn emit_canonical_app_bar_button_fixture(
     // 在控件高度内垂直居中；参考截图的图标顶端因此在 y=33（64px 高时为 17）。
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
     let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    let icon_quads = text_ctx.shape_line_styled(
-        CANONICAL_APP_BAR_BUTTON_GLYPH,
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::Package,
         icon_r,
-        16.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &icon_quads,
         text_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,
@@ -3751,18 +3682,11 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     // 2. 顶部图标（与 AppBarButton 相同的 30px 内容栈居中）
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
     let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    let icon_quads = text_ctx.shape_line_styled(
-        CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
+    crate::shell::emit_shell_icon_primitives(
+        crate::shell::ShellIcon::Sliders,
         icon_r,
-        16.0,
-        400,
-        Some("Segoe Fluent Icons"),
-        AlignX::Center,
-        AlignY::Middle,
-    );
-    primitive::glyphs(
-        &icon_quads,
         text_ink,
+        Token::SURFACE,
         z + 2,
         &mut out.primitives,
         &mut out.payloads,

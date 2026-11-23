@@ -313,54 +313,8 @@ impl UiWidget for CalendarDatePickerDesc {
                 }
             }
         }
-        // WinUI 日历图标在 32px 触发器内为 12px 字号（墨迹 12×12），垂直居中后下移 1px。
-        let icon_place = {
-            let r = desc.icon_rect();
-            Rect::new(r.origin.x, r.origin.y + 1.0, r.size.x, r.size.y)
-        };
-        let icon_glyphs = text_ctx.shape_line_styled(
-            "\u{E787}",
-            icon_place,
-            12.0,
-            400,
-            Some("Segoe Fluent Icons"),
-            AlignX::Center,
-            AlignY::Middle,
-        );
-        let mut out = emit_calendar_date_picker(node, &desc, state, control, &mut glyphs);
-        if !icon_glyphs.is_empty() && out.primitives.len() >= 8 {
-            // 用 WinUI 官方 Segoe Fluent Icons 日历字形替换自绘几何线框（保留前 4 个容器图元与文本字形）。
-            // 图标墨色：对齐 WinUI `CalendarDatePickerCalendarGlyphForeground`（`TextFillColorSecondaryBrush`）。
-            let icon_ink = if control.disabled || desc.disabled {
-                Token::TEXT_DISABLED
-            } else {
-                Token::TEXT_SECONDARY
-            };
-            let mut rebuilt_prims =
-                Vec::with_capacity(out.primitives.len() - 4 + icon_glyphs.len());
-            rebuilt_prims.extend_from_slice(&out.primitives[..4]);
-            rebuilt_prims.extend_from_slice(&out.primitives[8..]);
-            if out.payloads.len() >= 2 {
-                out.payloads.drain(..2);
-                for prim in &mut rebuilt_prims[4..] {
-                    let pt = prim.prim_type_and_flags & 0xFF;
-                    if prim.extra_payload_idx >= 2
-                        && (pt == PrimType::Glyph as u32 || pt == PrimType::GlyphColor as u32)
-                    {
-                        prim.extra_payload_idx -= 2;
-                    }
-                }
-            }
-            out.primitives = rebuilt_prims;
-            emit_glyphs(
-                &icon_glyphs,
-                icon_ink,
-                desc.z + 2,
-                &mut out.primitives,
-                &mut out.payloads,
-            );
-        }
-        out
+        // 统一保留内置几何矢量日历图标，彻底消除对 Windows 专有 PUA 图标字体的依赖。
+        emit_calendar_date_picker(node, &desc, state, control, &mut glyphs)
     }
 }
 

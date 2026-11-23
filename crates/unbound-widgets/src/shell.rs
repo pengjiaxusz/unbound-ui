@@ -3553,4 +3553,31 @@ mod tests {
         );
         assert_eq!(payloads.len(), 6);
     }
+
+    #[test]
+    fn runtime_widgets_contain_no_segoe_fluent_icons_hardcoding() {
+        let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let entries = std::fs::read_dir(&src_dir).expect("read unbound-widgets/src");
+        let mut offenders = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).expect("read widget source");
+            for (idx, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if trimmed.contains("Some(\"Segoe Fluent Icons\")") {
+                    offenders.push(format!("{}:{}", path.display(), idx + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "runtime widgets must not hardcode Segoe Fluent Icons: {offenders:?}"
+        );
+    }
 }

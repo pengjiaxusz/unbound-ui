@@ -26,14 +26,18 @@ pub mod popup_style_bits {
 /// 越界无焦点原生弹出窗配置。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PopupWindowConfig {
-    /// 归属的宿主窗口 ID（用于 Win32 owner 关联与级联关闭）。
+    /// 归属的宿主窗口 ID（用于 Win32 owner 关联、Wayland `xdg_popup` 父表面绑定与级联关闭）。
     pub owner: WindowId,
-    /// 弹出窗期望的屏幕物理像素矩形。
+    /// 弹出窗期望的屏幕物理像素矩形（Win32 绝对坐标；Wayland 作为期望尺寸与回退锚点）。
     pub screen_rect: ScreenRect,
+    /// 可选的相对父窗口锚点矩形（物理像素；Wayland 直接映射至 `xdg_positioner::set_anchor_rect`）。
+    pub anchor_rect: Option<ScreenRect>,
     /// 是否置顶（`WS_EX_TOPMOST`）。
     pub topmost: bool,
     /// 是否按目标显示器工作区自动防越界裁剪。
     pub clamp_to_work_area: bool,
+    /// 是否启用鼠标穿透（`ToolTip` 等只读提示为 `true`，Wayland 下设置空输入区且不抢焦点）。
+    pub click_through: bool,
 }
 
 impl PopupWindowConfig {
@@ -43,8 +47,39 @@ impl PopupWindowConfig {
         Self {
             owner,
             screen_rect,
+            anchor_rect: None,
             topmost: true,
             clamp_to_work_area: true,
+            click_through: false,
+        }
+    }
+
+    /// 附加相对父窗口的锚点矩形（供 Wayland `xdg_positioner` 贴边翻转与 Win32 原点换算）。
+    #[must_use]
+    pub const fn with_anchor_rect(mut self, anchor_rect: ScreenRect) -> Self {
+        self.anchor_rect = Some(anchor_rect);
+        self
+    }
+
+    /// 设置是否鼠标穿透（`ToolTip` 应设为 `true`）。
+    #[must_use]
+    pub const fn with_click_through(mut self, click_through: bool) -> Self {
+        self.click_through = click_through;
+        self
+    }
+
+    /// 将相对父窗口锚点按父窗屏幕原点换算为全局屏幕矩形（供 Win32 后端复用）。
+    #[must_use]
+    pub const fn resolve_global_rect(&self, owner_origin: (i32, i32)) -> ScreenRect {
+        if let Some(anchor) = self.anchor_rect {
+            ScreenRect::new(
+                owner_origin.0.saturating_add(anchor.x),
+                owner_origin.1.saturating_add(anchor.y),
+                self.screen_rect.width,
+                self.screen_rect.height,
+            )
+        } else {
+            self.screen_rect
         }
     }
 

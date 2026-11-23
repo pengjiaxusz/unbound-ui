@@ -508,8 +508,16 @@ impl ClipboardProvider for SystemClipboard {
         }
         #[cfg(not(windows))]
         {
-            let _ = self.max_bytes;
-            Err(ClipboardError::Unavailable)
+            let Some(text) = crate::wayland_logic::read_wayland_clipboard_text() else {
+                return Ok(None);
+            };
+            if text.len() > self.max_bytes {
+                return Err(ClipboardError::TooLarge {
+                    bytes: text.len(),
+                    limit: self.max_bytes,
+                });
+            }
+            Ok(Some(text))
         }
     }
 
@@ -520,8 +528,17 @@ impl ClipboardProvider for SystemClipboard {
         }
         #[cfg(not(windows))]
         {
-            let _ = (text, self.max_bytes);
-            Err(ClipboardError::Unavailable)
+            if text.len() > self.max_bytes {
+                return Err(ClipboardError::TooLarge {
+                    bytes: text.len(),
+                    limit: self.max_bytes,
+                });
+            }
+            if crate::wayland_logic::write_wayland_clipboard_text(text) {
+                Ok(())
+            } else {
+                Err(ClipboardError::Unavailable)
+            }
         }
     }
 

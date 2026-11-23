@@ -147,6 +147,78 @@ pub struct DummyTexture {
     pub view: vk::ImageView,
 }
 
+/// 绑定到特定颜色附件格式的 4 条窗口图形管线集合。
+///
+/// 离屏渲染目标固定使用 [`COLOR_FORMAT`]（`B8G8R8A8_SRGB`）；当窗口交换链仅暴露
+/// `R8G8B8A8_SRGB` 等替代格式时，[`Pipelines`] 复用共享布局与着色器模块按格式懒缓存该集合。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct GraphicsPipelineSet {
+    pub uber_normal: vk::Pipeline,
+    pub uber_additive: vk::Pipeline,
+    pub opaque_core: vk::Pipeline,
+    pub backdrop: vk::Pipeline,
+}
+
+/// 按颜色附件格式懒缓存图形管线变体的纯逻辑容器。
+///
+/// 与 Vulkan 设备对象解耦，便于在无 GPU 环境下测试格式命中与去重语义。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FormatPipelineCache<T: Copy> {
+    default_format: vk::Format,
+    default_set: Option<T>,
+    variants: Vec<(vk::Format, T)>,
+}
+
+impl<T: Copy> FormatPipelineCache<T> {
+    pub(crate) const fn new(default_format: vk::Format, default_set: T) -> Self {
+        Self {
+            default_format,
+            default_set: Some(default_set),
+            variants: Vec::new(),
+        }
+    }
+
+    /// 查找或按需构建指定颜色附件格式对应的管线集合。
+    pub(crate) fn get_or_try_insert_with<E>(
+        &mut self,
+        format: vk::Format,
+        build: impl FnOnce(vk::Format) -> Result<T, E>,
+    ) -> Result<T, E> {
+        if format == self.default_format {
+            if let Some(default_set) = self.default_set {
+                return Ok(default_set);
+            }
+        }
+        if let Some((_, cached)) = self.variants.iter().find(|(f, _)| *f == format) {
+            return Ok(*cached);
+        }
+        let created = build(format)?;
+        self.variants.push((format, created));
+        Ok(created)
+    }
+
+    /// 已懒缓存的非默认格式变体数量。
+    #[must_use]
+    pub(crate) fn variant_count(&self) -> usize {
+        self.variants.len()
+    }
+
+    /// 遍历全部非默认格式变体（用于销毁清理）。
+    pub(crate) fn variants(&self) -> &[(vk::Format, T)] {
+        &self.variants
+    }
+}
+
+/// 供按格式懒构建图形管线变体复用的 6 个图形着色器模块。
+struct GraphicsShaderModules {
+    uber_vert: vk::ShaderModule,
+    uber_frag: vk::ShaderModule,
+    opaque_core_vert: vk::ShaderModule,
+    opaque_core_frag: vk::ShaderModule,
+    backdrop_vert: vk::ShaderModule,
+    backdrop_frag: vk::ShaderModule,
+}
+
 /// 所有图形/计算管线以及按在飞帧槽位分配的 Bindless 描述符集。
 pub struct Pipelines {
     pub graphics_layout: vk::PipelineLayout,
@@ -171,6 +243,10 @@ pub struct Pipelines {
     pub blur_up: vk::Pipeline,
     /// 全屏背景虚化合成图形管线。
     pub backdrop: vk::Pipeline,
+    /// 供按窗口表面格式懒编译 4 条图形管线变体复用的着色器模块。
+    graphics_shaders: GraphicsShaderModules,
+    /// 按颜色附件格式懒缓存的 4 条窗口图形管线变体。
+    format_cache: FormatPipelineCache<GraphicsPipelineSet>,
     pub sampler: vk::Sampler,
     pub dummy_r8: DummyTexture,
     pub dummy_rgba: DummyTexture,
@@ -283,157 +359,15 @@ impl Pipelines {
             )
             .map_err(GpuError::from)?;
 
-        // 着色器模块
-        let vert = shader_module(gpu, shader::uber_vert())?;
-        let frag = shader_module(gpu, shader::uber_frag())?;
-        let opaque_frag = shader_module(gpu, shader::opaque_core_frag())?;
-        let opaque_vert = shader_module(gpu, shader::opaque_core_vert())?;
-
-        let vert_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert)
-            .name(c"main");
-        let frag_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag)
-            .name(c"main");
-        let opaque_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(opaque_frag)
-            .name(c"main");
-        let opaque_vert_stage = vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(opaque_vert)
-            .name(c"main");
-
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
-        let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
-            .primitive_restart_enable(false);
-        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-            .viewport_count(1)
-            .scissor_count(1);
-        let raster = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false)
-            .line_width(1.0);
-        let multisample = vk::PipelineMultisampleStateCreateInfo::default()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-        // 反向 Z：最近为 1.0，因此“大于等于”通过测试的片元更近。
-        // 不透明预 Pass 写入深度，uber Pass 仅执行深度测试。
-        let depth_test_no_write = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(false)
-            .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
-            .depth_bounds_test_enable(false)
-            .stencil_test_enable(false);
-        let depth_write = vk::PipelineDepthStencilStateCreateInfo::default()
-            .depth_test_enable(true)
-            .depth_write_enable(true)
-            .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
-            .depth_bounds_test_enable(false)
-            .stencil_test_enable(false);
-
-        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-        let color_formats = [COLOR_FORMAT];
-        let mut rendering = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_formats)
-            .depth_attachment_format(DEPTH_FORMAT);
-
-        // 混合状态
-        let alpha_blend = vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-            .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-            .alpha_blend_op(vk::BlendOp::ADD)
-            .color_write_mask(vk::ColorComponentFlags::RGBA);
-        let additive_blend = vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(true)
-            .src_color_blend_factor(vk::BlendFactor::ONE)
-            .dst_color_blend_factor(vk::BlendFactor::ONE)
-            .color_blend_op(vk::BlendOp::ADD)
-            .src_alpha_blend_factor(vk::BlendFactor::ONE)
-            .dst_alpha_blend_factor(vk::BlendFactor::ONE)
-            .alpha_blend_op(vk::BlendOp::ADD)
-            .color_write_mask(vk::ColorComponentFlags::RGBA);
-        let blends = [alpha_blend];
-        let additive_blends = [additive_blend];
-        let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(&blends);
-        let color_blend_additive = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(&additive_blends);
-
-        let create_graphics = |stages: &[vk::PipelineShaderStageCreateInfo],
-                               depth: &vk::PipelineDepthStencilStateCreateInfo,
-                               blend: &vk::PipelineColorBlendStateCreateInfo,
-                               rendering: &mut vk::PipelineRenderingCreateInfo|
-         -> Result<vk::Pipeline, GpuError> {
-            device
-                .create_graphics_pipelines(
-                    vk::PipelineCache::null(),
-                    &[vk::GraphicsPipelineCreateInfo::default()
-                        .stages(stages)
-                        .vertex_input_state(&vertex_input)
-                        .input_assembly_state(&input_assembly)
-                        .viewport_state(&viewport_state)
-                        .rasterization_state(&raster)
-                        .multisample_state(&multisample)
-                        .depth_stencil_state(depth)
-                        .color_blend_state(blend)
-                        .dynamic_state(&dynamic)
-                        .layout(graphics_layout)
-                        .push_next(rendering)],
-                    None,
-                )
-                .map_err(|(_, e)| GpuError::from(e))
-                .map(|p| p[0])
+        // 保留 6 个图形着色器模块，供默认格式与后续按表面格式懒构建的窗口管线变体共享。
+        let graphics_shaders = GraphicsShaderModules {
+            uber_vert: shader_module(gpu, shader::uber_vert())?,
+            uber_frag: shader_module(gpu, shader::uber_frag())?,
+            opaque_core_vert: shader_module(gpu, shader::opaque_core_vert())?,
+            opaque_core_frag: shader_module(gpu, shader::opaque_core_frag())?,
+            backdrop_vert: shader_module(gpu, shader::backdrop_vert())?,
+            backdrop_frag: shader_module(gpu, shader::backdrop_frag())?,
         };
-
-        let uber_normal = create_graphics(
-            &[vert_stage, frag_stage],
-            &depth_test_no_write,
-            &color_blend,
-            &mut rendering,
-        )?;
-        let uber_additive = create_graphics(
-            &[vert_stage, frag_stage],
-            &depth_test_no_write,
-            &color_blend_additive,
-            &mut rendering,
-        )?;
-
-        // 不透明预 Pass 仍须声明与所属动态渲染 Pass 相同的附件格式——在其中声明零颜色
-        // 附件是非法的。此处改为屏蔽颜色写入掩码，零额外开销且保持纯深度写入。
-        let mut depth_only = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&color_formats)
-            .depth_attachment_format(DEPTH_FORMAT);
-        let masked_attachment = [vk::PipelineColorBlendAttachmentState::default()
-            .blend_enable(false)
-            .color_write_mask(vk::ColorComponentFlags::empty())];
-        let no_blend = vk::PipelineColorBlendStateCreateInfo::default()
-            .logic_op_enable(false)
-            .attachments(&masked_attachment);
-        let opaque_core = create_graphics(
-            &[opaque_vert_stage, opaque_stage],
-            &depth_write,
-            &no_blend,
-            &mut depth_only,
-        )?;
-
-        device.destroy_shader_module(vert, None);
-        device.destroy_shader_module(frag, None);
-        device.destroy_shader_module(opaque_frag, None);
-        device.destroy_shader_module(opaque_vert, None);
 
         // 计算管线
         let mut compute = [vk::Pipeline::null(); ComputeStage::COUNT];
@@ -516,48 +450,21 @@ impl Pipelines {
         let blur_down = make_compute(shader::blur_down())?;
         let blur_up = make_compute(shader::blur_up())?;
 
-        // 合成管线为无深度附件的普通 Alpha 混合全屏三角形：在主 Pass 之后运行，
-        // 仅在请求矩形区域内绘制模糊背景。
-        let backdrop = {
-            let vert = shader_module(gpu, shader::backdrop_vert())?;
-            let frag = shader_module(gpu, shader::backdrop_frag())?;
-            let stages = [
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::VERTEX)
-                    .module(vert)
-                    .name(c"main"),
-                vk::PipelineShaderStageCreateInfo::default()
-                    .stage(vk::ShaderStageFlags::FRAGMENT)
-                    .module(frag)
-                    .name(c"main"),
-            ];
-            let tri = vk::PipelineInputAssemblyStateCreateInfo::default()
-                .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-            let no_depth = vk::PipelineDepthStencilStateCreateInfo::default();
-            let mut rendering =
-                vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
-            let pipeline = device
-                .create_graphics_pipelines(
-                    vk::PipelineCache::null(),
-                    &[vk::GraphicsPipelineCreateInfo::default()
-                        .stages(&stages)
-                        .vertex_input_state(&vertex_input)
-                        .input_assembly_state(&tri)
-                        .viewport_state(&viewport_state)
-                        .rasterization_state(&raster)
-                        .multisample_state(&multisample)
-                        .depth_stencil_state(&no_depth)
-                        .color_blend_state(&color_blend)
-                        .dynamic_state(&dynamic)
-                        .layout(blur_layout)
-                        .push_next(&mut rendering)],
-                    None,
-                )
-                .map_err(|(_, e)| GpuError::from(e))?[0];
-            device.destroy_shader_module(vert, None);
-            device.destroy_shader_module(frag, None);
-            pipeline
-        };
+        // 为默认离屏颜色格式（`B8G8R8A8_SRGB`）构建首组 4 条图形管线。
+        let default_graphics = build_graphics_pipeline_set(
+            device,
+            graphics_layout,
+            blur_layout,
+            &graphics_shaders,
+            COLOR_FORMAT,
+        )?;
+        let GraphicsPipelineSet {
+            uber_normal,
+            uber_additive,
+            opaque_core,
+            backdrop,
+        } = default_graphics;
+        let format_cache = FormatPipelineCache::new(COLOR_FORMAT, default_graphics);
 
         let blur_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -649,6 +556,8 @@ impl Pipelines {
             blur_down,
             blur_up,
             backdrop,
+            graphics_shaders,
+            format_cache,
             sampler,
             dummy_r8,
             dummy_rgba,
@@ -895,6 +804,35 @@ impl Pipelines {
         gpu.device.update_descriptor_sets(&writes, &[]);
     }
 
+    /// 返回指定颜色附件格式对应的 4 条图形管线集合。
+    ///
+    /// 默认格式（[`COLOR_FORMAT`]）零开销直返；遇到 `R8G8B8A8_SRGB` 等替代窗口表面格式时，
+    /// 复用共享 `PipelineLayout` 与着色器模块懒构建并缓存一份变体。
+    ///
+    /// # Errors
+    /// 透传 Vulkan 管线编译错误。
+    pub fn graphics_for_format(
+        &mut self,
+        gpu: &Gpu,
+        format: vk::Format,
+    ) -> Result<GraphicsPipelineSet, GpuError> {
+        let graphics_layout = self.graphics_layout;
+        let blur_layout = self.blur_layout;
+        let shaders = &self.graphics_shaders;
+        self.format_cache.get_or_try_insert_with(format, |fmt| {
+            // SAFETY: 布局与着色器模块均归 `self` 所有且在 `destroy` 前保持存活。
+            unsafe {
+                build_graphics_pipeline_set(&gpu.device, graphics_layout, blur_layout, shaders, fmt)
+            }
+        })
+    }
+
+    /// 已懒缓存的非默认颜色格式管线变体数量。
+    #[must_use]
+    pub fn cached_format_variant_count(&self) -> usize {
+        self.format_cache.variant_count()
+    }
+
     /// # Safety
     /// 设备必须处于空闲状态。
     pub unsafe fn destroy(&self, gpu: &Gpu) {
@@ -902,6 +840,12 @@ impl Pipelines {
         device.destroy_pipeline(self.uber_normal, None);
         device.destroy_pipeline(self.uber_additive, None);
         device.destroy_pipeline(self.opaque_core, None);
+        for (_, variant) in self.format_cache.variants() {
+            device.destroy_pipeline(variant.uber_normal, None);
+            device.destroy_pipeline(variant.uber_additive, None);
+            device.destroy_pipeline(variant.opaque_core, None);
+            device.destroy_pipeline(variant.backdrop, None);
+        }
         for p in self.compute {
             if p != vk::Pipeline::null() {
                 device.destroy_pipeline(p, None);
@@ -910,6 +854,12 @@ impl Pipelines {
         device.destroy_pipeline(self.blur_down, None);
         device.destroy_pipeline(self.blur_up, None);
         device.destroy_pipeline(self.backdrop, None);
+        device.destroy_shader_module(self.graphics_shaders.uber_vert, None);
+        device.destroy_shader_module(self.graphics_shaders.uber_frag, None);
+        device.destroy_shader_module(self.graphics_shaders.opaque_core_vert, None);
+        device.destroy_shader_module(self.graphics_shaders.opaque_core_frag, None);
+        device.destroy_shader_module(self.graphics_shaders.backdrop_vert, None);
+        device.destroy_shader_module(self.graphics_shaders.backdrop_frag, None);
         device.destroy_descriptor_pool(self.blur_pool, None);
         device.destroy_pipeline_layout(self.blur_layout, None);
         device.destroy_descriptor_set_layout(self.blur_set_layout, None);
@@ -924,6 +874,199 @@ impl Pipelines {
         device.destroy_pipeline_layout(self.compute_layout, None);
         device.destroy_descriptor_set_layout(self.set_layout, None);
     }
+}
+
+/// 针对指定颜色附件格式，复用共享布局与着色器模块构建 4 条图形管线。
+unsafe fn build_graphics_pipeline_set(
+    device: &ash::Device,
+    graphics_layout: vk::PipelineLayout,
+    blur_layout: vk::PipelineLayout,
+    shaders: &GraphicsShaderModules,
+    color_format: vk::Format,
+) -> Result<GraphicsPipelineSet, GpuError> {
+    let vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shaders.uber_vert)
+        .name(c"main");
+    let frag_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shaders.uber_frag)
+        .name(c"main");
+    let opaque_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::FRAGMENT)
+        .module(shaders.opaque_core_frag)
+        .name(c"main");
+    let opaque_vert_stage = vk::PipelineShaderStageCreateInfo::default()
+        .stage(vk::ShaderStageFlags::VERTEX)
+        .module(shaders.opaque_core_vert)
+        .name(c"main");
+
+    let vertex_input = vk::PipelineVertexInputStateCreateInfo::default();
+    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_STRIP)
+        .primitive_restart_enable(false);
+    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+        .viewport_count(1)
+        .scissor_count(1);
+    let raster = vk::PipelineRasterizationStateCreateInfo::default()
+        .polygon_mode(vk::PolygonMode::FILL)
+        .cull_mode(vk::CullModeFlags::NONE)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+        .depth_bias_enable(false)
+        .line_width(1.0);
+    let multisample = vk::PipelineMultisampleStateCreateInfo::default()
+        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+    // 反向 Z：最近为 1.0，因此“大于等于”通过测试的片元更近。
+    // 不透明预 Pass 写入深度，uber Pass 仅执行深度测试。
+    let depth_test_no_write = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(false)
+        .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+    let depth_write = vk::PipelineDepthStencilStateCreateInfo::default()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::GREATER_OR_EQUAL)
+        .depth_bounds_test_enable(false)
+        .stencil_test_enable(false);
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+    let dynamic = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+    let color_formats = [color_format];
+    let mut rendering = vk::PipelineRenderingCreateInfo::default()
+        .color_attachment_formats(&color_formats)
+        .depth_attachment_format(DEPTH_FORMAT);
+
+    // 混合状态
+    let alpha_blend = vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+        .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+        .alpha_blend_op(vk::BlendOp::ADD)
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    let additive_blend = vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(true)
+        .src_color_blend_factor(vk::BlendFactor::ONE)
+        .dst_color_blend_factor(vk::BlendFactor::ONE)
+        .color_blend_op(vk::BlendOp::ADD)
+        .src_alpha_blend_factor(vk::BlendFactor::ONE)
+        .dst_alpha_blend_factor(vk::BlendFactor::ONE)
+        .alpha_blend_op(vk::BlendOp::ADD)
+        .color_write_mask(vk::ColorComponentFlags::RGBA);
+    let blends = [alpha_blend];
+    let additive_blends = [additive_blend];
+    let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
+        .logic_op_enable(false)
+        .attachments(&blends);
+    let color_blend_additive = vk::PipelineColorBlendStateCreateInfo::default()
+        .logic_op_enable(false)
+        .attachments(&additive_blends);
+
+    let create_graphics = |stages: &[vk::PipelineShaderStageCreateInfo],
+                           depth: &vk::PipelineDepthStencilStateCreateInfo,
+                           blend: &vk::PipelineColorBlendStateCreateInfo,
+                           rendering: &mut vk::PipelineRenderingCreateInfo|
+     -> Result<vk::Pipeline, GpuError> {
+        device
+            .create_graphics_pipelines(
+                vk::PipelineCache::null(),
+                &[vk::GraphicsPipelineCreateInfo::default()
+                    .stages(stages)
+                    .vertex_input_state(&vertex_input)
+                    .input_assembly_state(&input_assembly)
+                    .viewport_state(&viewport_state)
+                    .rasterization_state(&raster)
+                    .multisample_state(&multisample)
+                    .depth_stencil_state(depth)
+                    .color_blend_state(blend)
+                    .dynamic_state(&dynamic)
+                    .layout(graphics_layout)
+                    .push_next(rendering)],
+                None,
+            )
+            .map_err(|(_, e)| GpuError::from(e))
+            .map(|p| p[0])
+    };
+
+    let uber_normal = create_graphics(
+        &[vert_stage, frag_stage],
+        &depth_test_no_write,
+        &color_blend,
+        &mut rendering,
+    )?;
+    let uber_additive = create_graphics(
+        &[vert_stage, frag_stage],
+        &depth_test_no_write,
+        &color_blend_additive,
+        &mut rendering,
+    )?;
+
+    // 不透明预 Pass 仍须声明与所属动态渲染 Pass 相同的附件格式——在其中声明零颜色
+    // 附件是非法的。此处改为屏蔽颜色写入掩码，零额外开销且保持纯深度写入。
+    let mut depth_only = vk::PipelineRenderingCreateInfo::default()
+        .color_attachment_formats(&color_formats)
+        .depth_attachment_format(DEPTH_FORMAT);
+    let masked_attachment = [vk::PipelineColorBlendAttachmentState::default()
+        .blend_enable(false)
+        .color_write_mask(vk::ColorComponentFlags::empty())];
+    let no_blend = vk::PipelineColorBlendStateCreateInfo::default()
+        .logic_op_enable(false)
+        .attachments(&masked_attachment);
+    let opaque_core = create_graphics(
+        &[opaque_vert_stage, opaque_stage],
+        &depth_write,
+        &no_blend,
+        &mut depth_only,
+    )?;
+
+    // 合成管线为无深度附件的普通 Alpha 混合全屏三角形：在主 Pass 之后运行，
+    // 仅在请求矩形区域内绘制模糊背景。
+    let backdrop_stages = [
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::VERTEX)
+            .module(shaders.backdrop_vert)
+            .name(c"main"),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::FRAGMENT)
+            .module(shaders.backdrop_frag)
+            .name(c"main"),
+    ];
+    let tri = vk::PipelineInputAssemblyStateCreateInfo::default()
+        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
+    let no_depth = vk::PipelineDepthStencilStateCreateInfo::default();
+    let mut backdrop_rendering =
+        vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
+    let backdrop = device
+        .create_graphics_pipelines(
+            vk::PipelineCache::null(),
+            &[vk::GraphicsPipelineCreateInfo::default()
+                .stages(&backdrop_stages)
+                .vertex_input_state(&vertex_input)
+                .input_assembly_state(&tri)
+                .viewport_state(&viewport_state)
+                .rasterization_state(&raster)
+                .multisample_state(&multisample)
+                .depth_stencil_state(&no_depth)
+                .color_blend_state(&color_blend)
+                .dynamic_state(&dynamic)
+                .layout(blur_layout)
+                .push_next(&mut backdrop_rendering)],
+            None,
+        )
+        .map_err(|(_, e)| GpuError::from(e))?[0];
+
+    Ok(GraphicsPipelineSet {
+        uber_normal,
+        uber_additive,
+        opaque_core,
+        backdrop,
+    })
 }
 
 unsafe fn create_dummy_texture(gpu: &Gpu, format: vk::Format) -> Result<DummyTexture, GpuError> {
@@ -1086,8 +1229,69 @@ mod tests {
         assert_eq!(pipelines.sets.len(), gpu.frames_in_flight().max(1) as usize);
         assert_ne!(pipelines.uber_normal, vk::Pipeline::null());
         assert_ne!(pipelines.opaque_core, vk::Pipeline::null());
+        // 验证默认格式零开销命中，替代格式 `R8G8B8A8_SRGB` 首次懒构建、再次查询直接命中缓存。
+        let mut pipelines = pipelines;
+        let default_set = pipelines
+            .graphics_for_format(&gpu, COLOR_FORMAT)
+            .expect("default format pipelines");
+        assert_eq!(default_set.uber_normal, pipelines.uber_normal);
+        assert_eq!(pipelines.cached_format_variant_count(), 0);
+
+        let rgba_first = pipelines
+            .graphics_for_format(&gpu, vk::Format::R8G8B8A8_SRGB)
+            .expect("rgba8 srgb variant");
+        assert_ne!(rgba_first.uber_normal, vk::Pipeline::null());
+        assert_ne!(rgba_first.uber_normal, pipelines.uber_normal);
+        assert_ne!(rgba_first.backdrop, vk::Pipeline::null());
+        assert_eq!(pipelines.cached_format_variant_count(), 1);
+
+        let rgba_second = pipelines
+            .graphics_for_format(&gpu, vk::Format::R8G8B8A8_SRGB)
+            .expect("cached rgba8 srgb variant");
+        assert_eq!(rgba_first, rgba_second);
+        assert_eq!(pipelines.cached_format_variant_count(), 1);
+
         // SAFETY: 无在飞任务。
         unsafe { pipelines.destroy(&gpu) };
         gpu.destroy();
+    }
+
+    #[test]
+    fn format_pipeline_cache_reuses_default_and_deduplicates_fallback_variants() {
+        let mut cache = FormatPipelineCache::new(COLOR_FORMAT, 10u32);
+        let mut build_calls = 0usize;
+
+        // 默认格式直接命中，不触发构建回调。
+        let got_default = cache
+            .get_or_try_insert_with(COLOR_FORMAT, |_| -> Result<u32, ()> {
+                build_calls += 1;
+                Ok(99)
+            })
+            .expect("default hit");
+        assert_eq!(got_default, 10);
+        assert_eq!(build_calls, 0);
+        assert_eq!(cache.variant_count(), 0);
+
+        // 首次请求 `R8G8B8A8_SRGB` 触发一次懒构建。
+        let got_rgba = cache
+            .get_or_try_insert_with(vk::Format::R8G8B8A8_SRGB, |_| -> Result<u32, ()> {
+                build_calls += 1;
+                Ok(20)
+            })
+            .expect("first rgba build");
+        assert_eq!(got_rgba, 20);
+        assert_eq!(build_calls, 1);
+        assert_eq!(cache.variant_count(), 1);
+
+        // 第二次请求同一格式直接命中缓存。
+        let got_rgba_again = cache
+            .get_or_try_insert_with(vk::Format::R8G8B8A8_SRGB, |_| -> Result<u32, ()> {
+                build_calls += 1;
+                Ok(30)
+            })
+            .expect("cached rgba hit");
+        assert_eq!(got_rgba_again, 20);
+        assert_eq!(build_calls, 1);
+        assert_eq!(cache.variant_count(), 1);
     }
 }

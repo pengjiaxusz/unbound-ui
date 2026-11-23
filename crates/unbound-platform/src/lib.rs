@@ -24,6 +24,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
+pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
 pub mod pacing;
@@ -34,6 +35,9 @@ pub mod system_accent;
 pub mod tray;
 #[cfg(windows)]
 pub mod uia_win32;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod wayland_backend;
+pub mod wayland_logic;
 pub mod win32_frame;
 pub mod win32_window;
 pub mod window;
@@ -51,6 +55,7 @@ pub use dialogs::{
     save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
+pub use native_window::NativeWindow;
 pub use ole_drag::{
     begin_outbound_file_drag, build_cf_hdrop_payload, OutboundFileDragOutcome,
     OutboundFileDragRequest,
@@ -73,6 +78,11 @@ pub use system_accent::{
 pub use tray::{
     set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
     TrayNotificationSeverity,
+};
+pub use wayland_logic::{
+    compute_wayland_popup_placement, csd_resize_direction_at, cursor_for_resize_direction,
+    primary_output_metrics, set_primary_output_metrics, translate_evdev_key, wayland_cursor_name,
+    KeyRepeatState, PrimaryOutputMetrics, WaylandFrameThrottle, WaylandPopupPlacement,
 };
 pub use win32_frame::{
     accent_policy_export_available, clear_window_accent_tint, install_custom_frame,

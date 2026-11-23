@@ -53,5 +53,7 @@ pub use selection::{
 pub use state::{BackdropGenerator, MICA_READY_EVENT_ID};
 pub use stats::{texture_statistics, StatisticsRequest, TextureStatistics};
 pub use wallpaper::{
-    primary_screen_rect, primary_screen_scale, wallpaper_path, wallpaper_stamp, WallpaperStamp,
+    clear_primary_screen_metrics, primary_screen_logical_size, primary_screen_rect,
+    primary_screen_scale, procedural_fallback_wallpaper, set_primary_screen_metrics,
+    wallpaper_path, wallpaper_stamp, WallpaperSourceKind, WallpaperStamp, WALLPAPER_ENV_VAR,
 };

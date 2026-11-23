@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use unbound_math::{Rect, Vec2};
 
-use crate::window::{WindowConfig, WindowPosition};
+use crate::window::{ScreenRect, WindowConfig, WindowPosition};
 use crate::windows::{WindowId, WindowRegistry};
 
 /// 透明覆盖层与特殊浮窗的扩展窗口规格（在保持 [`WindowConfig`] 结构体字面量兼容的同时提供完整扩展）。
@@ -30,8 +30,10 @@ pub struct OverlayWindowSpec {
     pub skip_taskbar: bool,
     /// 点击或显示时是否不抢占前台焦点（`WS_EX_NOACTIVATE`）。
     pub no_activate: bool,
-    /// 所属父窗口或被跟随的目标进程窗口 `HWND`。
-    pub owner_hwnd: Option<isize>,
+    /// 所属父窗口逻辑 ID（跨平台：Win32 由父窗原点换算全局矩形，Wayland 映射为 `xdg_popup` 父表面）。
+    pub owner_window: Option<WindowId>,
+    /// 相对父窗口的锚点矩形（物理像素，用于越界浮层定位与贴边翻转）。
+    pub anchor_rect: Option<ScreenRect>,
 }
 
 impl Default for OverlayWindowSpec {
@@ -47,7 +49,8 @@ impl Default for OverlayWindowSpec {
             click_through: true,
             skip_taskbar: true,
             no_activate: true,
-            owner_hwnd: None,
+            owner_window: None,
+            anchor_rect: None,
         }
     }
 }
@@ -65,7 +68,8 @@ impl OverlayWindowSpec {
             click_through: true,
             skip_taskbar: true,
             no_activate: true,
-            owner_hwnd: None,
+            owner_window: None,
+            anchor_rect: None,
         }
     }
 
@@ -94,7 +98,8 @@ impl OverlayWindowSpec {
             click_through: false,
             skip_taskbar: false,
             no_activate: false,
-            owner_hwnd: None,
+            owner_window: None,
+            anchor_rect: None,
         }
     }
 
