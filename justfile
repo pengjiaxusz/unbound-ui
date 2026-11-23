@@ -176,6 +176,27 @@ text-baseline *ARGS:
 # 不保证在 target/<profile> 下生成该产物，故先显式构建一次，避免干净环境硬失败。
 # 覆盖机制见托管块的 allow-duplicate-recipes。
 
+# 快速测试：跳过 doc-tests，支持按包（-p <crate>）或用例名过滤；未指定 -p 时覆盖全工作区
+# 示例：just test-fast / just test-fast -p unbound-text / just test-fast -p showcase text_render
+[windows]
+test-fast *ARGS:
+    @$raw = '{{ARGS}}'; $hasPkg = $raw -match '(^|\s)(-p|--package)(\s|=|$)'; $needGuest = (-not $hasPkg) -or ($raw -match '(^|\s|=)app-guest(\s|$)'); if ($needGuest) { bque run -- cargo build -p app-guest; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }; if ($hasPkg) { bque run -- cargo test --all-features --lib --bins --tests {{ARGS}} } else { bque run -- cargo test --workspace --all-features --lib --bins --tests {{ARGS}} }
+[unix]
+test-fast *ARGS:
+    @has_pkg=0; need_guest=0; \
+    for arg in {{ARGS}}; do \
+        case "$arg" in \
+            -p|--package|-p=*|--package=*) has_pkg=1 ;; \
+            app-guest) need_guest=1 ;; \
+        esac; \
+    done; \
+    if [ "$has_pkg" -eq 0 ] || [ "$need_guest" -eq 1 ]; then cargo build -p app-guest; fi; \
+    if [ "$has_pkg" -eq 1 ]; then \
+        cargo test --all-features --lib --bins --tests {{ARGS}}; \
+    else \
+        cargo test --workspace --all-features --lib --bins --tests {{ARGS}}; \
+    fi
+
 # 覆盖框架 test：先产出 app-guest cdylib 再跑测试
 [windows]
 test *ARGS:
