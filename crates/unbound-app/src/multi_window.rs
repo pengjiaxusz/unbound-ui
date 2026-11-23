@@ -213,6 +213,7 @@ pub struct WindowContext<A: Application> {
         ThemeKind,
         unbound_theme::ProductPreset,
         unbound_theme::AccentBrand,
+        Option<[u32; 4]>,
     )>,
     appearance: WindowAppearance,
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
@@ -233,7 +234,14 @@ impl<A: Application> WindowContext<A> {
             unbound_platform::SystemClipboard::new(),
         ))));
         let ctx = runtime.context();
-        let theme = ThemeState::new(ThemeSet::for_product(ctx.preset, ctx.accent), ctx.theme);
+        let theme = ThemeState::new(
+            ThemeSet::for_product_with_system_accent(
+                ctx.preset,
+                ctx.accent,
+                ctx.resolved_system_accent(),
+            ),
+            ctx.theme,
+        );
         let surface_alpha = match config.backdrop {
             Some(material) if material != WindowBackdropMaterial::None => {
                 SurfaceAlpha::PreMultiplied
@@ -298,13 +306,19 @@ impl<A: Application> WindowContext<A> {
 
     fn sync_theme(&mut self, window: &Window) {
         let ctx = self.runtime.context();
-        let key = (ctx.theme, ctx.preset, ctx.accent);
+        let sys_accent = ctx.resolved_system_accent();
+        let sys_bits =
+            sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+        let key = (ctx.theme, ctx.preset, ctx.accent, sys_bits);
         if self.uploaded_theme == Some(key) {
             return;
         }
-        let prev_preset_accent = self.uploaded_theme.map(|(_, p, a)| (p, a));
-        if prev_preset_accent != Some((key.1, key.2)) {
-            self.theme = ThemeState::new(ThemeSet::for_product(key.1, key.2), key.0);
+        let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
+        if prev_preset_accent != Some((key.1, key.2, key.3)) {
+            self.theme = ThemeState::new(
+                ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
+                key.0,
+            );
         } else {
             self.theme.switch(key.0);
         }

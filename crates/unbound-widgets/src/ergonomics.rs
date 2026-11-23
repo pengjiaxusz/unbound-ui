@@ -2530,20 +2530,22 @@ impl UiWidget for AddressBarDesc {
                 primary_glyphs.extend(text_ctx.shape_line(
                     edit_text,
                     scrolled_edit_r,
-                    12.5,
+                    crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                     400,
                     AlignX::Left,
                     AlignY::Middle,
                 ));
                 if let Some(suffix) = desc.inline_completion_suffix(edit_text) {
-                    let prefix_w = text_ctx.measure_line(edit_text, 12.5, 400).x;
+                    let prefix_w = text_ctx
+                        .measure_line(edit_text, crate::address_bar::ADDRESS_BAR_FONT_SIZE, 400)
+                        .x;
                     let ghost_x = scrolled_edit_r.origin.x + prefix_w;
                     let ghost_w = (edit_r.max().x - ghost_x).max(0.0);
                     if ghost_w > 0.0 {
                         placeholder_glyphs.extend(text_ctx.shape_line(
                             suffix,
                             Rect::new(ghost_x, edit_r.origin.y, ghost_w, edit_r.size.y),
-                            12.5,
+                            crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                             400,
                             AlignX::Left,
                             AlignY::Middle,
@@ -2555,7 +2557,11 @@ impl UiWidget for AddressBarDesc {
                 &state.edit_core,
                 edit_r,
                 !control.disabled,
-                |candidate| text_ctx.measure_line(candidate, 12.5, 400).x,
+                |candidate| {
+                    text_ctx
+                        .measure_line(candidate, crate::address_bar::ADDRESS_BAR_FONT_SIZE, 400)
+                        .x
+                },
             );
         } else {
             for seg_layout in &layout.segments {
@@ -2566,13 +2572,21 @@ impl UiWidget for AddressBarDesc {
                             &seg.label,
                             avail_w,
                             crate::elided_text::ElideMode::End,
-                            |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                            |candidate| {
+                                text_ctx
+                                    .measure_line(
+                                        candidate,
+                                        crate::address_bar::ADDRESS_BAR_FONT_SIZE,
+                                        400,
+                                    )
+                                    .x
+                            },
                         );
                         if !elided.display.is_empty() {
                             primary_glyphs.extend(text_ctx.shape_line(
                                 &elided.display,
                                 seg_layout.label_rect,
-                                12.0,
+                                crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                                 400,
                                 AlignX::Center,
                                 AlignY::Middle,
@@ -2609,7 +2623,7 @@ impl UiWidget for AddressBarDesc {
                         primary_glyphs.extend(text_ctx.shape_line(
                             search_text,
                             scrolled_r,
-                            12.0,
+                            crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                             400,
                             AlignX::Left,
                             AlignY::Middle,
@@ -2619,13 +2633,21 @@ impl UiWidget for AddressBarDesc {
                             display,
                             search_w,
                             crate::elided_text::ElideMode::End,
-                            |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                            |candidate| {
+                                text_ctx
+                                    .measure_line(
+                                        candidate,
+                                        crate::address_bar::ADDRESS_BAR_FONT_SIZE,
+                                        400,
+                                    )
+                                    .x
+                            },
                         );
                         if !elided.display.is_empty() {
                             let shaped = text_ctx.shape_line(
                                 &elided.display,
                                 text_r,
-                                12.0,
+                                crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                                 400,
                                 AlignX::Left,
                                 AlignY::Middle,
@@ -2643,7 +2665,15 @@ impl UiWidget for AddressBarDesc {
                         &state.search_core,
                         text_r,
                         !control.disabled,
-                        |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                        |candidate| {
+                            text_ctx
+                                .measure_line(
+                                    candidate,
+                                    crate::address_bar::ADDRESS_BAR_FONT_SIZE,
+                                    400,
+                                )
+                                .x
+                        },
                     );
                 }
             }
@@ -2666,13 +2696,21 @@ impl UiWidget for AddressBarDesc {
                                     label,
                                     text_r.width(),
                                     crate::elided_text::ElideMode::End,
-                                    |candidate| text_ctx.measure_line(candidate, 12.0, 400).x,
+                                    |candidate| {
+                                        text_ctx
+                                            .measure_line(
+                                                candidate,
+                                                crate::address_bar::ADDRESS_BAR_FONT_SIZE,
+                                                400,
+                                            )
+                                            .x
+                                    },
                                 );
                                 if !elided.display.is_empty() {
                                     dropdown_glyphs.extend(text_ctx.shape_line(
                                         &elided.display,
                                         text_r,
-                                        12.0,
+                                        crate::address_bar::ADDRESS_BAR_FONT_SIZE,
                                         400,
                                         AlignX::Left,
                                         AlignY::Middle,

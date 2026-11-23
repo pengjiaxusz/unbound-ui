@@ -21,8 +21,8 @@ pub const TITLE_BAR_HEIGHT: f32 = 32.0;
 
 /// 壳层融合标题栏高度（逻辑像素）。
 ///
-/// 对齐 WinUI `TabView` 融合标题栏高度：`TabViewItemMinHeight = 32` + 顶部 `8px` 留白 = 40。
-pub const TITLE_BAR_FUSED_HEIGHT: f32 = 40.0;
+/// 对齐 Win11 Fluent 融合标题栏高度（`48px`）：`38px` 标签卡片 + 顶部 `10px` 留白。
+pub const TITLE_BAR_FUSED_HEIGHT: f32 = 48.0;
 
 /// 窗口控制按钮（最小化 / 最大化 / 关闭）的默认宽度（逻辑像素，与 Showcase 一致）。
 ///
@@ -911,7 +911,7 @@ impl TitleBarDesc {
         self
     }
 
-    /// 设置壳层融合态标题栏高度（常取 [`TITLE_BAR_FUSED_HEIGHT`] = `40.0`）。
+    /// 设置壳层融合态标题栏高度（常取 [`TITLE_BAR_FUSED_HEIGHT`] = `48.0`）。
     #[must_use]
     pub fn with_fused_height(mut self, height: f32) -> Self {
         self.height = height.max(24.0);
@@ -1536,5 +1536,10 @@ mod tests {
         let chrome = TitleBarChrome::from_desc(&desc, false);
         assert_eq!(chrome.caption_reserved_width, exported.total_width());
         assert_eq!(chrome.caption_reserved_width, TITLE_BAR_CAPTION_WIDTH * 2.0);
+    }
+
+    #[test]
+    fn fused_title_bar_height_matches_win11_fluent_scale() {
+        assert!((TITLE_BAR_FUSED_HEIGHT - 48.0).abs() < f32::EPSILON);
     }
 }

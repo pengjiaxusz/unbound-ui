@@ -13,8 +13,8 @@ use unbound_math::color::{Color, Oklch};
 
 use crate::{Palette, ThemeKind, Token};
 
-/// Win11 列表/网格项选中态近直角圆角半径（`2px`，配合 1px 浅灰白细描边与半透明深灰底）。
-pub const ITEM_SELECTED_CORNER_RADIUS: f32 = 2.0;
+/// Win11 列表/网格项选中态圆角半径（`4px`，对齐 Fluent `ControlCornerRadius = 4`）。
+pub const ITEM_SELECTED_CORNER_RADIUS: f32 = 4.0;
 
 /// 从 8 位 sRGB 分量构造调色板表项。
 fn c(r: u8, g: u8, b: u8, a: u8) -> Color {
@@ -388,6 +388,55 @@ pub fn accent_ramp(
     }
 }
 
+/// 从操作系统实时强调色派生 Win11 强调色五元组 `(primary, hover, pressed, soft, on_primary)`。
+///
+/// 保留原始系统强调色的 OKLCH 色相，在暗色模式下确保足够亮度可读性（避免深蓝/暗紫在深灰表面上发闷），
+/// 在浅色模式下钳制亮度保证白字对比度。
+#[must_use]
+pub fn accent_ramp_from_color(base: Color, dark_mode: bool) -> (Color, Color, Color, Color, Color) {
+    let oklch = base.to_oklch();
+    let hue = if oklch.h_deg.is_finite() {
+        oklch.h_deg
+    } else {
+        255.0
+    };
+    let raw_chroma = if oklch.c.is_finite() {
+        oklch.c.max(0.0)
+    } else {
+        0.10
+    };
+    if dark_mode {
+        let chroma = raw_chroma.min(0.14);
+        let l_primary = if oklch.l.is_finite() {
+            oklch.l.clamp(0.70, 0.84)
+        } else {
+            0.78
+        };
+        let primary = Oklch::new(l_primary, chroma, hue, 1.0).to_linear();
+        let hover = Oklch::new((l_primary + 0.06).min(0.90), chroma, hue, 1.0).to_linear();
+        let pressed = Oklch::new((l_primary - 0.07).max(0.58), chroma, hue, 1.0).to_linear();
+        let soft = Oklch::new(0.30, (chroma * 0.45).min(0.06), hue, 1.0).to_linear();
+        let on_primary = if primary.luminance_perceptual() > 0.62 {
+            Oklch::new(0.16, 0.02, hue, 1.0).to_linear()
+        } else {
+            Color::WHITE
+        };
+        (primary, hover, pressed, soft, on_primary)
+    } else {
+        let chroma = raw_chroma.min(0.16);
+        let l_primary = if oklch.l.is_finite() {
+            oklch.l.clamp(0.44, 0.58)
+        } else {
+            0.52
+        };
+        let primary = Oklch::new(l_primary, chroma, hue, 1.0).to_linear();
+        let hover = Oklch::new((l_primary + 0.06).min(0.66), chroma, hue, 1.0).to_linear();
+        let pressed = Oklch::new((l_primary - 0.07).max(0.36), chroma, hue, 1.0).to_linear();
+        let soft = Oklch::new(0.94, (chroma * 0.18).min(0.04), hue, 1.0).to_linear();
+        (primary, hover, pressed, soft, Color::WHITE)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,7 +465,7 @@ mod tests {
             (sel_border.r - sel_border.g).abs() < 1e-4
                 && (sel_border.g - sel_border.b).abs() < 1e-4
         );
-        assert!((ITEM_SELECTED_CORNER_RADIUS - 2.0).abs() < 1e-4);
+        assert!((ITEM_SELECTED_CORNER_RADIUS - 4.0).abs() < 1e-4);
 
         // 浅色模式同样具备非透明有效值
         for tok in [
@@ -428,5 +477,22 @@ mod tests {
         ] {
             assert!(light.color(tok).a > 0.0, "light {tok:?} must be visible");
         }
+    }
+
+    #[test]
+    fn accent_ramp_from_color_preserves_hue_and_ensures_dark_light_contrast() {
+        let orchid = Color::from_srgb8(0xDB, 0x9A, 0xE5, 255);
+        let (dp, dh, dpr, dsoft, don) = accent_ramp_from_color(orchid, true);
+        let (lp, lh, lpr, lsoft, lon) = accent_ramp_from_color(orchid, false);
+
+        for c in [dp, dh, dpr, dsoft, don, lp, lh, lpr, lsoft, lon] {
+            assert!(c.is_finite());
+            assert!((c.a - 1.0).abs() < 1e-4);
+        }
+        // 暗色强调色应比默认亮蓝显著偏紫红（红蓝分量高于绿分量）
+        assert!(dp.r > dp.g && dp.b > dp.g);
+        // 浅色强调色更深、配白色前景
+        assert!(lp.luminance_perceptual() < dp.luminance_perceptual());
+        assert_eq!(lon, Color::WHITE);
     }
 }

@@ -124,14 +124,47 @@ pub mod geometry {
     pub const COLOR_SWATCH_SIZE: f32 = 48.0;
     /// 相邻色块之间的间距。
     pub const COLOR_SWATCH_GAP: f32 = 4.0;
+
+    /// Win11 融合标题栏与标签条高度（`48px`）。
+    pub const TAB_STRIP_HEIGHT: f32 = 48.0;
+    /// Win11 壳层融合标签卡片高度（`38px`，落在原生 `36–38px` 区间）。
+    pub const TAB_SHELL_ITEM_HEIGHT: f32 = 38.0;
+    /// Win11 地址栏胶囊高度（`36px`，落在原生 `34–36px` 区间）。
+    pub const ADDRESS_BAR_HEIGHT: f32 = 36.0;
+    /// 导航树图标与文本标签之间的水平间距（`10px`）。
+    pub const TREE_ICON_GAP: f32 = 10.0;
+    /// 导航树分区分隔线独占行高（`14px`，上下各留呼吸空白）。
+    pub const TREE_DIVIDER_HEIGHT: f32 = 14.0;
+    /// 列表/网格项选中圆角半径（`4px`）。
+    pub const ITEM_SELECTED_RADIUS: f32 = 4.0;
 }
 
 /// 标题栏高度。
 ///
-/// Win11 原生应用的标题栏约 48px（含窗口控制按钮的拖拽区），
-/// 但那是「带系统标题栏」的形态；无边框窗口需要更紧凑的 40px，
-/// 才能让内容区的大标题像 Win11 那样贴近顶部。
+/// 无边框单层标题栏默认高度（`40px`）；带标签融合壳层标题栏见 [`TITLE_BAR_FUSED_HEIGHT`]（`48px`）。
 pub const TITLE_BAR_HEIGHT: f32 = 40.0;
 
-/// 状态栏高度。
-pub const STATUS_BAR_HEIGHT: f32 = 28.0;
+/// Win11 融合标题栏高度（`48px`，含标签卡片与顶部拖拽呼吸留白）。
+pub const TITLE_BAR_FUSED_HEIGHT: f32 = 48.0;
+
+/// 状态栏高度（对齐 Win11 原生 `32px`）。
+pub const STATUS_BAR_HEIGHT: f32 = 32.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn win11_fluent_typography_and_geometry_scale_constants() {
+        assert!((font_size::BODY - 14.0).abs() < f32::EPSILON);
+        assert!((font_size::CAPTION - 12.0).abs() < f32::EPSILON);
+        assert!((TITLE_BAR_FUSED_HEIGHT - 48.0).abs() < f32::EPSILON);
+        assert!((STATUS_BAR_HEIGHT - 32.0).abs() < f32::EPSILON);
+        assert!((geometry::TAB_STRIP_HEIGHT - 48.0).abs() < f32::EPSILON);
+        assert!((36.0..=38.0).contains(&geometry::TAB_SHELL_ITEM_HEIGHT));
+        assert!((34.0..=36.0).contains(&geometry::ADDRESS_BAR_HEIGHT));
+        assert!((10.0..=12.0).contains(&geometry::TREE_ICON_GAP));
+        assert!((geometry::TREE_DIVIDER_HEIGHT - 14.0).abs() < f32::EPSILON);
+        assert!((geometry::ITEM_SELECTED_RADIUS - 4.0).abs() < f32::EPSILON);
+    }
+}
