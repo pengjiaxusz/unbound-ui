@@ -42,8 +42,8 @@ use unbound_platform::window::{
     ButtonState, Modifiers, MouseButton, PlatformEvent, PlatformKey, PlatformState, WindowConfig,
 };
 use unbound_platform::{
-    CursorIcon, Extent, NativeWindowId, PhysicalPosition, PhysicalSize, ResizeDirection, Window,
-    WindowPosition,
+    CursorIcon, Extent, NativeWindow, NativeWindowId, PhysicalPosition, PhysicalSize,
+    ResizeDirection, WindowPosition,
 };
 use unbound_theme::{ThemeKind, ThemeState};
 
