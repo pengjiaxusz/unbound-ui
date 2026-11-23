@@ -20,6 +20,10 @@ pub enum PointerButton {
     Left,
     Right,
     Middle,
+    /// 鼠标后退侧键（例如 Win32 `XBUTTON1`）。
+    Back,
+    /// 鼠标前进侧键（例如 Win32 `XBUTTON2`）。
+    Forward,
 }
 
 /// 当前处于按住状态的按键掩码。
@@ -28,6 +32,8 @@ pub struct Buttons {
     pub left: bool,
     pub right: bool,
     pub middle: bool,
+    pub back: bool,
+    pub forward: bool,
 }
 
 impl Buttons {
@@ -36,6 +42,8 @@ impl Buttons {
             PointerButton::Left => self.left = pressed,
             PointerButton::Right => self.right = pressed,
             PointerButton::Middle => self.middle = pressed,
+            PointerButton::Back => self.back = pressed,
+            PointerButton::Forward => self.forward = pressed,
         }
     }
 }
@@ -202,12 +210,12 @@ impl PointerState {
     ) -> Option<PointerEvent> {
         self.position = position;
         self.buttons.set(button, true);
-        if button == PointerButton::Right {
-            // 次键按下并在释放时打开上下文菜单。它与其他按键一样被捕获，
-            // 但不得干扰双击计时器：先右键再左键属于两个不同的手势。
-            // 若主键拖拽已在进行中，则保留原捕获，次键仅上报自身事件。
-            //
-            //
+        if matches!(
+            button,
+            PointerButton::Right | PointerButton::Back | PointerButton::Forward
+        ) {
+            // 次键与导航侧键不得干扰左键双击计时器：先右键或侧键再左键属于不同手势。
+            // 若主键拖拽已在进行中，则保留原捕获，次键/侧键仅上报自身事件。
             let primary_active = matches!(
                 self.press_button,
                 Some(PointerButton::Left | PointerButton::Middle)
@@ -684,5 +692,82 @@ mod tests {
         assert_eq!(event, PointerEvent::CaptureLost { target: 1 });
         assert_eq!(p.capture(), None);
         assert!(p.release_capture().is_none(), "a second release is a no-op");
+    }
+
+    #[test]
+    fn side_buttons_emit_down_and_up_without_click_or_drag() {
+        for button in [PointerButton::Back, PointerButton::Forward] {
+            let mut p = state();
+            let down = p.on_down(Some(9), Vec2::new(12.0, 12.0), button, 0.0);
+            assert_eq!(
+                down,
+                Some(PointerEvent::Down {
+                    target: Some(9),
+                    position: Vec2::new(12.0, 12.0),
+                    button,
+                    click_count: 1,
+                })
+            );
+            assert_eq!(p.buttons().back, button == PointerButton::Back);
+            assert_eq!(p.buttons().forward, button == PointerButton::Forward);
+
+            // 侧键按住期间移动不应进入拖拽状态。
+            let mv = p.on_move(Vec2::new(40.0, 12.0));
+            assert!(matches!(mv, Some(PointerEvent::Move { .. })));
+            assert!(!p.is_dragging());
+
+            let events = p.on_up(Vec2::new(40.0, 12.0), button, 0.1);
+            assert_eq!(
+                events,
+                vec![PointerEvent::Up {
+                    target: Some(9),
+                    position: Vec2::new(40.0, 12.0),
+                    button,
+                }]
+            );
+            assert!(!p.buttons().back);
+            assert!(!p.buttons().forward);
+        }
+    }
+
+    #[test]
+    fn side_button_does_not_interrupt_primary_drag_or_arm_double_click() {
+        let mut p = state();
+        p.on_down(Some(3), Vec2::new(0.0, 0.0), PointerButton::Left, 0.0);
+        let _ = p.on_move(Vec2::new(20.0, 0.0));
+        assert!(p.is_dragging());
+
+        // 拖拽途中按下并释放后退侧键，不得中止左键拖拽捕获。
+        let down = p.on_down(Some(3), Vec2::new(25.0, 0.0), PointerButton::Back, 0.1);
+        assert!(matches!(
+            down,
+            Some(PointerEvent::Down {
+                button: PointerButton::Back,
+                ..
+            })
+        ));
+        let up = p.on_up(Vec2::new(25.0, 0.0), PointerButton::Back, 0.15);
+        assert_eq!(
+            up,
+            vec![PointerEvent::Up {
+                target: Some(3),
+                position: Vec2::new(25.0, 0.0),
+                button: PointerButton::Back,
+            }]
+        );
+        assert!(p.is_dragging());
+        assert_eq!(p.capture(), Some(3));
+
+        // 结束左键拖拽后，按下并释放前进侧键，随后左键点击不得被误判为双击。
+        let _ = p.on_up(Vec2::new(25.0, 0.0), PointerButton::Left, 0.2);
+        p.on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Forward, 1.0);
+        p.on_up(Vec2::new(10.0, 10.0), PointerButton::Forward, 1.05);
+        let left_down = p
+            .on_down(Some(3), Vec2::new(10.0, 10.0), PointerButton::Left, 1.1)
+            .unwrap();
+        assert!(matches!(
+            left_down,
+            PointerEvent::Down { click_count: 1, .. }
+        ));
     }
 }

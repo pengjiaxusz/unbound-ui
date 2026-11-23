@@ -604,6 +604,12 @@ pub enum AppEvent {
         /// 被关闭的原生弹出窗标识（对应浮层节点键）。
         id: u64,
     },
+    /// 覆盖层已被运行时关闭（如按下 `Escape` 或点击浮层外部），
+    /// 供应用侧同步清理业务打开态，避免残留幽灵状态。
+    OverlayDismissed {
+        /// 被关闭的浮层节点键。
+        node: u64,
+    },
 }
 
 impl AppEvent {
@@ -620,6 +626,7 @@ impl AppEvent {
             | AppEvent::PointerUp { target, .. }
             | AppEvent::Wheel { target, .. } => *target,
             AppEvent::A11y { target, .. } => Some(*target),
+            AppEvent::OverlayDismissed { node } => Some(*node),
             _ => None,
         }
     }
@@ -5006,14 +5013,13 @@ impl<A: Application> AppRuntime<A> {
                 flags = flags.merge(DirtyFlags::ALL);
             }
         }
-        if button == PointerButton::Left
-            && self
-                .overlays
-                .handle_pointer_down(pos, &mut self.focus)
-                .is_some()
-        {
-            self.sync_focus_context();
-            flags = flags.merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
+        if button == PointerButton::Left {
+            if let Some(node) = self.overlays.handle_pointer_down(pos, &mut self.focus) {
+                self.sync_focus_context();
+                flags = flags
+                    .merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT)
+                    .merge(self.dispatch(AppEvent::OverlayDismissed { node }));
+            }
         }
         let event = self.router.pointer_down_button(pos, button, self.time);
         self.ctx.pointer = pos;
@@ -5218,9 +5224,16 @@ impl<A: Application> AppRuntime<A> {
         }
 
         if pressed {
-            if key == AppKey::Escape && self.overlays.handle_escape(&mut self.focus).is_some() {
-                flags = flags.merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT);
+            let closed_overlay = if key == AppKey::Escape {
+                self.overlays.handle_escape(&mut self.focus)
+            } else {
+                None
+            };
+            if let Some(node) = closed_overlay {
                 self.sync_focus_context();
+                flags = flags
+                    .merge(DirtyFlags::PAINT | DirtyFlags::LAYOUT)
+                    .merge(self.dispatch(AppEvent::OverlayDismissed { node }));
             } else {
                 let focus_key = match key {
                     AppKey::Tab if modifiers.shift => Some(FocusKey::ShiftTab),
@@ -5906,6 +5919,7 @@ impl<A: Application> AppRuntime<A> {
         let _ = self.overlays.sync_declared_overlays(
             declared_overlays,
             &self.seen_keys,
+            &self.hit_owners,
             &mut self.focus,
         );
         if overlay_pending_ranges.is_empty() {
@@ -8032,7 +8046,7 @@ impl<A: Application> AppRuntime<A> {
                 target: Some(target_key),
                 button,
                 click_count,
-            } => {
+            } if !matches!(*button, PointerButton::Back | PointerButton::Forward) => {
                 if self.handle_select_option_click(*target_key) {
                     widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
                     widget_consumed = true;
@@ -8084,8 +8098,8 @@ impl<A: Application> AppRuntime<A> {
             AppEvent::PointerUp {
                 pos,
                 target: Some(target_key),
-                ..
-            } => {
+                button,
+            } if !matches!(*button, PointerButton::Back | PointerButton::Forward) => {
                 if let Some((rect, widget)) = self.mounted_widgets.get(target_key).cloned() {
                     let w_evt = unbound_widgets::WidgetInputEvent::PointerUp { pos: *pos };
                     let mut store = self.widget_state.borrow_mut();

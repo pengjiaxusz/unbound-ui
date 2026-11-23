@@ -146,6 +146,8 @@ fn translate_pointer_button(button: MouseButton) -> Option<PointerButton> {
         MouseButton::Left => Some(PointerButton::Left),
         MouseButton::Right => Some(PointerButton::Right),
         MouseButton::Middle => Some(PointerButton::Middle),
+        MouseButton::Back | MouseButton::Other(1) => Some(PointerButton::Back),
+        MouseButton::Forward | MouseButton::Other(2) => Some(PointerButton::Forward),
         MouseButton::Other(_) => None,
     }
 }
@@ -1616,5 +1618,25 @@ mod tests {
             unbound_platform::RenderThrottleState::Active
         );
         assert!(!runner.should_skip_frame_for_throttle(&state));
+
+    #[test]
+    fn translate_pointer_button_preserves_side_buttons() {
+        assert_eq!(
+            translate_pointer_button(MouseButton::Back),
+            Some(PointerButton::Back)
+        );
+        assert_eq!(
+            translate_pointer_button(MouseButton::Forward),
+            Some(PointerButton::Forward)
+        );
+        assert_eq!(
+            translate_pointer_button(MouseButton::Other(1)),
+            Some(PointerButton::Back)
+        );
+        assert_eq!(
+            translate_pointer_button(MouseButton::Other(2)),
+            Some(PointerButton::Forward)
+        );
+        assert_eq!(translate_pointer_button(MouseButton::Other(3)), None);
     }
 }
