@@ -297,6 +297,7 @@ pub fn emit_shell_icon_primitives(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
+    let start = primitives.len();
     let c = rect.center();
     match kind {
         ShellIcon::Dot => {
@@ -1359,31 +1360,67 @@ pub fn emit_shell_icon_primitives(
             }
         }
         ShellIcon::Refresh => {
-            // 环形轨迹 + 右上角刷新箭头尖。
-            primitives.push(outlined(
-                Rect::new(c.x - 5.6, c.y - 5.6, 11.2, 11.2),
-                5.6,
-                Token::NONE,
-                color,
+            // 约 290° 顺时针开口圆弧（4 段平滑二次贝塞尔曲线，右侧留出清晰缺口）+ 右上角 V 形箭头尖。
+            let p0 = [c.x + 4.42, c.y + 3.10];
+            let p1 = [c.x - 1.85, c.y + 5.07];
+            let p2 = [c.x - 5.38, c.y - 0.47];
+            let p3 = [c.x - 0.94, c.y - 5.32];
+            let p4 = [c.x + 4.42, c.y - 3.10];
+            quad_curve_stroke(
+                p0,
+                [c.x + 2.05, c.y + 6.49],
+                p1,
                 1.6,
-                0.0,
+                color,
                 z,
-            ));
-            curve_stroke(
-                [c.x + 1.4, c.y - 5.4],
-                [c.x + 5.2, c.y - 2.4],
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                p1,
+                [c.x - 5.74, c.y + 3.66],
+                p2,
                 1.6,
                 color,
-                z + 1,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                p2,
+                [c.x - 5.02, c.y - 4.60],
+                p3,
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                p3,
+                [c.x + 2.45, c.y - 5.92],
+                p4,
+                1.6,
+                color,
+                z,
                 primitives,
                 payloads,
             );
             curve_stroke(
-                [c.x + 5.2, c.y - 2.4],
-                [c.x + 5.4, c.y - 6.2],
+                [c.x + 4.42, c.y - 6.30],
+                p4,
                 1.6,
                 color,
-                z + 1,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.20, c.y - 3.10],
+                p4,
+                1.6,
+                color,
+                z,
                 primitives,
                 payloads,
             );
@@ -2258,6 +2295,14 @@ pub fn emit_shell_icon_primitives(
                 z,
             ));
         }
+    }
+
+    // 统一将 ShellIcon 全部矢量图元提升至 SubElement::Content，
+    // 确保图标恒定位于同层背景与行高亮胶囊（SubElement::Background）之上。
+    let sub_mask = 0x7u32 << 16;
+    let content_bits = u32::from(SubElement::Content as u8) << 16;
+    for prim in &mut primitives[start..] {
+        prim.prim_type_and_flags = (prim.prim_type_and_flags & !sub_mask) | content_bits;
     }
 }
 
@@ -3440,5 +3485,65 @@ mod tests {
                 "ShellIcon::{icon:?} disabled primitives must use TEXT_DISABLED"
             );
         }
+    }
+
+    #[test]
+    fn shell_icon_vector_primitives_are_all_promoted_to_content_subelement() {
+        let icons = [
+            ShellIcon::Dot,
+            ShellIcon::Menu,
+            ShellIcon::Search,
+            ShellIcon::Settings,
+            ShellIcon::Refresh,
+            ShellIcon::FolderOpen,
+            ShellIcon::Drive,
+            ShellIcon::Pin,
+            ShellIcon::Check,
+            ShellIcon::ChevronRight,
+        ];
+        let rect = Rect::new(0.0, 0.0, 16.0, 16.0);
+        for icon in icons {
+            let mut primitives = Vec::new();
+            let mut payloads = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                rect,
+                Token::TEXT_PRIMARY,
+                Token::OVERLAY_BG,
+                500,
+                &mut primitives,
+                &mut payloads,
+            );
+            assert!(!primitives.is_empty(), "ShellIcon::{icon:?} emitted no primitives");
+            for prim in &primitives {
+                let sub = (prim.prim_type_and_flags >> 16) & 0x7;
+                assert_eq!(
+                    sub,
+                    u32::from(SubElement::Content as u8),
+                    "ShellIcon::{icon:?} must emit only SubElement::Content primitives"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn refresh_icon_uses_open_arc_curves_instead_of_closed_ring() {
+        let mut primitives = Vec::new();
+        let mut payloads = Vec::new();
+        emit_shell_icon_primitives(
+            ShellIcon::Refresh,
+            Rect::new(0.0, 0.0, 16.0, 16.0),
+            Token::TEXT_PRIMARY,
+            Token::SURFACE,
+            500,
+            &mut primitives,
+            &mut payloads,
+        );
+        assert_eq!(primitives.len(), 6, "4 open-arc curves + 2 arrowhead strokes");
+        assert!(
+            primitives.iter().all(|p| p.prim_type() == PrimType::Curve),
+            "Refresh icon must use open curve strokes without a closed RoundedRect ring"
+        );
+        assert_eq!(payloads.len(), 6);
     }
 }

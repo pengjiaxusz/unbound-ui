@@ -612,8 +612,9 @@ pub use image::{
 pub use masonry::{emit_masonry, AspectRatioBoxDesc, MasonryDesc, MasonryItem};
 pub use menu::{
     emit_menu, emit_menu_with_rows, menu_item_node, MenuDesc, MenuItem, MenuItemRenderRow,
-    MenuState, MenuWidget, CONTEXT_MENU_ITEM_HEIGHT, MENU_ICON_SIZE, MENU_ITEM_HEIGHT,
-    MENU_ITEM_RADIUS, MENU_PANEL_PADDING, MENU_SEPARATOR_HEIGHT,
+    MenuState, MenuWidget, CONTEXT_MENU_ITEM_HEIGHT, MENU_ACRYLIC_SURFACE_OPACITY,
+    MENU_BACKDROP_BLUR, MENU_ICON_SIZE, MENU_ITEM_HEIGHT, MENU_ITEM_RADIUS, MENU_PANEL_PADDING,
+    MENU_RADIUS, MENU_SEPARATOR_HEIGHT,
 };
 pub use menubar::{
     emit_menubar, emit_menubar_item, reduce_menubar_key, MenuBarDesc, MenuBarItem, MenuBarKey,

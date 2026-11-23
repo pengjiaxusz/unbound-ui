@@ -458,13 +458,44 @@ pub struct BackdropRequest {
     pub rect: Rect,
     /// 模糊半径（逻辑像素）。
     pub blur: f32,
+    /// 四角独立圆角半径（逻辑像素：左上、右上、右下、左下）。
+    pub corner_radii: [f32; 4],
+    /// 所属浮层的基准绘制 Z 值（非零时 GPU 渲染器先绘制 `< z` 底层，再合成模糊背板，最后绘制 `>= z` 浮层）。
+    pub z: u16,
 }
 
 impl BackdropRequest {
     /// 构造请求；半径为零时返回 `None`。
     #[must_use]
     pub fn new(node: u64, rect: Rect, blur: f32) -> Option<Self> {
-        (blur > 0.0 && !rect.is_empty()).then_some(Self { node, rect, blur })
+        (blur > 0.0 && !rect.is_empty()).then_some(Self {
+            node,
+            rect,
+            blur,
+            corner_radii: [0.0; 4],
+            z: 0,
+        })
+    }
+
+    /// 为背板遮罩设置统一圆角半径（逻辑像素）。
+    #[must_use]
+    pub const fn with_corner_radius(mut self, radius: f32) -> Self {
+        self.corner_radii = [radius; 4];
+        self
+    }
+
+    /// 为背板遮罩设置四角独立圆角半径（逻辑像素）。
+    #[must_use]
+    pub const fn with_corner_radii(mut self, corner_radii: [f32; 4]) -> Self {
+        self.corner_radii = corner_radii;
+        self
+    }
+
+    /// 设置浮层基准 Z 切分阈值。
+    #[must_use]
+    pub const fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
     }
 }
 

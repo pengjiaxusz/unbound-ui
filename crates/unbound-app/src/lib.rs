@@ -7147,6 +7147,9 @@ impl<A: Application> AppRuntime<A> {
                         state,
                         &render_rows,
                     );
+                    if let Some(backdrop) = desc.backdrop_request(entry.key) {
+                        self.collector.backdrops.push(backdrop);
+                    }
                     if out.a11y.is_none() {
                         out.a11y = Some(A11yNode::new(Role::Menu, "ContextMenu", desc.rect));
                     }
@@ -9809,6 +9812,16 @@ mod tests {
         assert!(menu_prims.iter().any(|p| p.prim_type() == PrimType::Image
             && p.border_token_or_tex == 88
             && p.fill_token_or_uv == u32::from(Token::NONE.raw())));
+        // 校验右键菜单自动接入 Win11 亚克力毛玻璃背板与 DWM 标准圆角。
+        let menu_backdrop = rt
+            .scene()
+            .backdrops
+            .iter()
+            .find(|b| b.node == widget_key)
+            .expect("context menu must register an acrylic backdrop request");
+        assert_eq!(menu_backdrop.blur, unbound_widgets::MENU_BACKDROP_BLUR);
+        assert_eq!(menu_backdrop.corner_radii, [unbound_widgets::MENU_RADIUS; 4]);
+        assert!(menu_backdrop.z >= PORTAL_Z_BASE as u16);
 
         // 精确计算各行中心点（与 Win11 4px 内边距、32px 项高与 9px 分隔线对齐）。
         let row0_center = Vec2::new(

@@ -28,8 +28,14 @@ pub fn collect_backdrops(
                 b.rect.size.y * effective_scale,
             ],
             radius: b.blur * effective_scale,
-            corner_radii: [0.0; 4],
+            corner_radii: [
+                b.corner_radii[0] * effective_scale,
+                b.corner_radii[1] * effective_scale,
+                b.corner_radii[2] * effective_scale,
+                b.corner_radii[3] * effective_scale,
+            ],
             layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+            split_z: b.z,
         })
         .collect()
 }
@@ -58,5 +64,26 @@ pub fn scene_upload<'a>(
         dirty_ranges,
         aux_changed,
         backdrops,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_math::Rect;
+
+    #[test]
+    fn collect_backdrops_scales_blur_and_corner_radii_independently() {
+        let widget_req = WidgetBackdrop::new(7, Rect::new(10.0, 20.0, 200.0, 120.0), 24.0)
+            .expect("backdrop request")
+            .with_corner_radii([8.0, 8.0, 8.0, 8.0])
+            .with_z(1100);
+        let gpu_reqs = collect_backdrops(&[widget_req], 1.5);
+        assert_eq!(gpu_reqs.len(), 1);
+        let req = gpu_reqs[0];
+        assert_eq!(req.rect, [15.0, 30.0, 300.0, 180.0]);
+        assert_eq!(req.radius, 36.0);
+        assert_eq!(req.corner_radii, [12.0, 12.0, 12.0, 12.0]);
+        assert_eq!(req.split_z, 1100);
     }
 }

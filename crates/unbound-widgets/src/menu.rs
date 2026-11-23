@@ -43,6 +43,10 @@ pub const MENU_SHADOW: f32 = 18.0;
 pub const MENU_RADIUS: f32 = 8.0;
 /// 菜单浮层外描边厚度。对齐 WinUI `SurfaceStrokeColorFlyout`（1px 微描边）。
 pub const MENU_BORDER_WIDTH: f32 = 1.0;
+/// Win11 菜单亚克力毛玻璃模糊半径（逻辑像素，对齐 Fluent `AcrylicInAppFillColorDefault`）。
+pub const MENU_BACKDROP_BLUR: f32 = 24.0;
+/// Win11 菜单亚克力底板半透明叠色不透明度（约 82%，使底层 Dual-Kawase 虚化自然透出）。
+pub const MENU_ACRYLIC_SURFACE_OPACITY: f32 = 0.82;
 /// 下拉框选中项左侧强调条的宽度。
 const MENU_ACCENT_BAR_WIDTH: f32 = 3.0;
 /// 子菜单指示箭头尺寸（`12×12px`）。
@@ -216,6 +220,8 @@ pub struct MenuDesc {
     panel_padding: f32,
     /// 是否为分隔线行启用紧凑高度（`MENU_SEPARATOR_HEIGHT`）。
     compact_separators: bool,
+    /// 菜单亚克力毛玻璃模糊半径（`MenuDesc::context_menu` 默认启用 [`MENU_BACKDROP_BLUR`]）。
+    backdrop_blur: f32,
 }
 
 impl MenuDesc {
@@ -231,11 +237,12 @@ impl MenuDesc {
             viewport: None,
             panel_padding: 0.0,
             compact_separators: false,
+            backdrop_blur: 0.0,
         }
     }
 
     /// 创建符合 Win11 上下文菜单密度的描述符（无标题头、`item_height = CONTEXT_MENU_ITEM_HEIGHT (32.0)`、
-    /// 上下 `MENU_PANEL_PADDING (4.0)` 内边距与 `MENU_SEPARATOR_HEIGHT (9.0)` 分隔线）。
+    /// 上下 `MENU_PANEL_PADDING (4.0)` 内边距、`MENU_SEPARATOR_HEIGHT (9.0)` 分隔线与 Win11 亚克力毛玻璃底板）。
     #[must_use]
     pub fn context_menu(rect: Rect, items: Vec<MenuItem>) -> Self {
         Self {
@@ -247,6 +254,7 @@ impl MenuDesc {
             viewport: None,
             panel_padding: MENU_PANEL_PADDING,
             compact_separators: true,
+            backdrop_blur: MENU_BACKDROP_BLUR,
         }
     }
 
@@ -255,6 +263,26 @@ impl MenuDesc {
     pub fn with_item_height(mut self, height: f32) -> Self {
         self.item_height = height.max(1.0);
         self
+    }
+
+    /// 返回菜单亚克力毛玻璃模糊半径（`0.0` 表示不透明常规表面）。
+    #[must_use]
+    pub const fn backdrop_blur(&self) -> f32 {
+        self.backdrop_blur
+    }
+
+    /// 覆写菜单亚克力毛玻璃模糊半径（`0.0` 关闭亚克力虚化）。
+    #[must_use]
+    pub fn with_backdrop_blur(mut self, blur: f32) -> Self {
+        self.backdrop_blur = blur.max(0.0);
+        self
+    }
+
+    /// 构造带 DWM 标准圆角与浮层 Z 切分阈值的亚克力毛玻璃背板请求。
+    #[must_use]
+    pub fn backdrop_request(&self, node: u64) -> Option<crate::overlay::BackdropRequest> {
+        crate::overlay::BackdropRequest::new(node, self.rect, self.backdrop_blur)
+            .map(|req| req.with_corner_radius(self.radius).with_z(self.z))
     }
 
     /// 返回单行的实际高度（分隔线在上下文菜单模式下采用 `MENU_SEPARATOR_HEIGHT`）。
@@ -629,7 +657,7 @@ pub fn emit_menu_with_rows(
         SubElement::Shadow,
         desc.z,
     ));
-    primitives.push(surface(
+    let mut panel_bg = surface(
         rect,
         desc.radius,
         if control.disabled {
@@ -638,7 +666,17 @@ pub fn emit_menu_with_rows(
             Token::OVERLAY_BG
         },
         desc.z,
-    ));
+    );
+    if desc.backdrop_blur > 0.0 && !control.disabled {
+        // 启用 Win11 亚克力底板时降低菜单表面不透明度，让底层模糊纹理透过半透明叠色显现。
+        panel_bg.z_and_opacity =
+            GpuPrimitiveInstance::pack_z_opacity(desc.z, MENU_ACRYLIC_SURFACE_OPACITY);
+    }
+    primitives.push(panel_bg);
+
+    // 菜单行元素统一抬升至 `row_z = desc.z + 1`，与菜单底板严格分层：
+    // 面板阴影/底板(desc.z) < 行胶囊(row_z, Background) < 图标/字形/分隔线(row_z, Content) < 强调条/外框(row_z, Border)。
+    let row_z = desc.z.saturating_add(1);
 
     for (index, item) in desc.items.iter().enumerate() {
         let row = desc
@@ -652,10 +690,20 @@ pub fn emit_menu_with_rows(
                 (row.width() - inset_x * 2.0).max(0.0),
                 1.0,
             );
-            primitives.push(surface(line, 0.0, Token::DIVIDER, desc.z));
+            primitives.push(instance(
+                line,
+                [0.0; 4],
+                Token::DIVIDER,
+                Token::NONE,
+                0.0,
+                0.0,
+                PrimType::RoundedRect,
+                SubElement::Content,
+                row_z,
+            ));
             // 保持行数恒定：为高亮保留一个不可见槽位。
-            let mut placeholder = surface(Rect::ZERO, 0.0, Token::NONE, desc.z);
-            placeholder.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, 0.0);
+            let mut placeholder = surface(Rect::ZERO, 0.0, Token::NONE, row_z);
+            placeholder.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(row_z, 0.0);
             primitives.push(placeholder);
             continue;
         }
@@ -691,9 +739,9 @@ pub fn emit_menu_with_rows(
             (row.size.x - MENU_PANEL_PADDING * 2.0).max(0.0),
             (row.size.y - 4.0).max(0.0),
         );
-        let mut slot = surface(pill, MENU_ITEM_RADIUS, pill_fill, desc.z);
+        let mut slot = surface(pill, MENU_ITEM_RADIUS, pill_fill, row_z);
         if !pill_visible {
-            slot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, 0.0);
+            slot.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(row_z, 0.0);
         }
         primitives.push(slot);
 
@@ -724,10 +772,10 @@ pub fn emit_menu_with_rows(
                 0.0,
                 PrimType::Line,
                 SubElement::Content,
-                desc.z,
+                row_z,
             ));
         } else {
-            glyphs(label_glyphs, fg_color, desc.z, &mut primitives, &mut payloads);
+            glyphs(label_glyphs, fg_color, row_z, &mut primitives, &mut payloads);
         }
 
         // 统一前置图标（`16×16`，位于胶囊左侧内缩 10px 处垂直居中）；
@@ -752,7 +800,7 @@ pub fn emit_menu_with_rows(
                 fg_color,
                 row_bg,
                 item_disabled,
-                desc.z,
+                row_z,
                 &mut primitives,
                 &mut payloads,
             );
@@ -776,7 +824,7 @@ pub fn emit_menu_with_rows(
                 chevron_rect,
                 arrow_color,
                 row_bg,
-                desc.z,
+                row_z,
                 &mut primitives,
                 &mut payloads,
             );
@@ -789,7 +837,7 @@ pub fn emit_menu_with_rows(
             glyphs(
                 shortcut_glyphs,
                 shortcut_color,
-                desc.z,
+                row_z,
                 &mut primitives,
                 &mut payloads,
             );
@@ -812,7 +860,7 @@ pub fn emit_menu_with_rows(
                 0.0,
                 PrimType::RoundedRect,
                 SubElement::Border,
-                desc.z,
+                row_z,
             ));
         }
 
@@ -843,7 +891,7 @@ pub fn emit_menu_with_rows(
         0.0,
         PrimType::RoundedRect,
         SubElement::Border,
-        desc.z,
+        row_z,
     ));
 
     out.primitives = primitives;
@@ -1164,5 +1212,58 @@ mod tests {
             .find(|p| p.prim_type() == PrimType::Image && p.border_token_or_tex == 71)
             .expect("external icon image primitive");
         assert_eq!(ext_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
+    }
+
+    #[test]
+    fn context_menu_emits_acrylic_backdrop_and_strict_layer_ordering() {
+        let items = vec![
+            MenuItem::action("Refresh")
+                .with_widget_icon(WidgetIcon::Vector(ShellIcon::Refresh)),
+            MenuItem::action("Settings")
+                .disabled()
+                .with_widget_icon(WidgetIcon::Vector(ShellIcon::Settings)),
+        ];
+        let mut desc = MenuDesc::context_menu(Rect::new(40.0, 60.0, 220.0, 0.0), items);
+        desc.rect = Rect::new(40.0, 60.0, 220.0, desc.content_height());
+        desc.z = 1100;
+
+        let req = desc
+            .backdrop_request(42)
+            .expect("context menu must emit an acrylic backdrop request");
+        assert_eq!(req.blur, MENU_BACKDROP_BLUR);
+        assert_eq!(req.corner_radii, [MENU_RADIUS; 4]);
+        assert_eq!(req.z, 1100);
+
+        let (out, _) = emit_menu(42, 1, &desc, &MenuState::new(), ControlState::default());
+        // 索引 1 为菜单面板背景：应处于 desc.z 且为半透明亚克力叠色。
+        let panel_bg = out.primitives[1];
+        assert_eq!(panel_bg.depth_u16(), 1100);
+        assert!((panel_bg.opacity() - MENU_ACRYLIC_SURFACE_OPACITY).abs() < 0.02);
+
+        // 索引 2 为首行胶囊：应严格位于面板背景之上（desc.z + 1）。
+        let row_pill = out.primitives[2];
+        assert_eq!(row_pill.depth_u16(), 1101);
+        assert_eq!(
+            (row_pill.prim_type_and_flags >> 16) & 0x7,
+            u32::from(SubElement::Background as u8)
+        );
+
+        // 所有向量图标图元均处于 SubElement::Content 且 z >= row_pill.depth_u16()。
+        let icon_prims: Vec<_> = out
+            .primitives
+            .iter()
+            .filter(|p| {
+                p.fill_token_or_uv == u32::from(Token::TEXT_DISABLED.raw())
+                    || p.border_token_or_tex == u32::from(Token::TEXT_DISABLED.raw())
+            })
+            .collect();
+        assert!(!icon_prims.is_empty());
+        for prim in icon_prims {
+            assert!(prim.depth_u16() >= row_pill.depth_u16());
+            assert_eq!(
+                (prim.prim_type_and_flags >> 16) & 0x7,
+                u32::from(SubElement::Content as u8)
+            );
+        }
     }
 }

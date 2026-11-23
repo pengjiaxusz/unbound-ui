@@ -17,7 +17,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
-use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
 use crate::scroll::{ScrollState, ScrollViewDesc};
 use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
 use crate::switch::CONTROL_LAYER;
@@ -968,6 +968,10 @@ pub fn emit_tree_row_with_options(
     } else {
         tokens.row
     };
+    // 行内容统一位于 `row_z = desc.z + 1`，与 `emit_tree_background`（`desc.z`）严格分离，
+    // 消除文件树底板与行 Hover/选中胶囊同 `(z, SubElement::Background)` 互盖闪烁。
+    let row_z = desc.z.saturating_add(1);
+
     // TreeViewItemPresenterMargin = 4,2：行背景在列表内左右各内缩 4、上下各 2。
     let background = Rect::new(
         rect.origin.x + 4.0,
@@ -982,7 +986,7 @@ pub fn emit_tree_row_with_options(
         Token::NONE,
         0.0,
         0.0,
-        desc.z,
+        row_z,
     ));
 
     if desc.selection_indicator {
@@ -995,7 +999,17 @@ pub fn emit_tree_row_with_options(
             3.0,
             pill_h,
         );
-        let mut indicator_inst = surface(indicator, 1.5, Token::PRIMARY, desc.z + 1);
+        let mut indicator_inst = instance(
+            indicator,
+            [1.5; 4],
+            Token::PRIMARY,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Border,
+            row_z,
+        );
         if !selected {
             indicator_inst.z_and_opacity =
                 GpuPrimitiveInstance::pack_z_opacity(indicator_inst.depth_u16(), 0.0);
@@ -1018,7 +1032,7 @@ pub fn emit_tree_row_with_options(
                 0.0,
                 PrimType::Line,
                 SubElement::Content,
-                desc.z,
+                row_z,
             ));
         }
     }
@@ -1053,7 +1067,7 @@ pub fn emit_tree_row_with_options(
             b,
             1.5,
             arrow_color,
-            desc.z,
+            row_z,
             &mut primitives,
             &mut payloads,
         );
@@ -1062,7 +1076,7 @@ pub fn emit_tree_row_with_options(
             c,
             1.5,
             arrow_color,
-            desc.z,
+            row_z,
             &mut primitives,
             &mut payloads,
         );
@@ -1088,7 +1102,7 @@ pub fn emit_tree_row_with_options(
         icon_color,
         fill,
         disabled,
-        desc.z + 1,
+        row_z,
         &mut primitives,
         &mut payloads,
     );
@@ -1105,7 +1119,7 @@ pub fn emit_tree_row_with_options(
             trailing_rect,
             trailing_color,
             fill,
-            desc.z + 1,
+            row_z,
             &mut primitives,
             &mut payloads,
         );
@@ -1120,7 +1134,7 @@ pub fn emit_tree_row_with_options(
         } else {
             tokens.text
         },
-        desc.z,
+        row_z,
         &mut primitives,
         &mut payloads,
     );
@@ -1129,7 +1143,7 @@ pub fn emit_tree_row_with_options(
         5.0,
         tokens.focus_ring,
         2.0,
-        desc.z,
+        row_z,
         control.focused && !disabled,
     ));
 
@@ -1192,7 +1206,17 @@ pub fn emit_tree_row_divider(
     let width = (row.rect.size.x - inset * 2.0).max(0.0);
     let primitives = if width > 0.0 {
         let line_rect = Rect::new(row.rect.origin.x + inset, row.rect.origin.y, width, 1.0);
-        vec![surface(line_rect, 0.0, tokens.guide, desc.z)]
+        vec![instance(
+            line_rect,
+            [0.0; 4],
+            tokens.guide,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::RoundedRect,
+            SubElement::Content,
+            desc.z.saturating_add(1),
+        )]
     } else {
         Vec::new()
     };
@@ -1936,5 +1960,48 @@ mod tests {
         assert_eq!(disabled_img.fill_token_or_uv, u32::from(Token::NONE.raw()));
         assert_eq!(disabled_img.border_token_or_tex, 88);
         assert!((disabled_img.opacity() - crate::WINUI_DISABLED_OPACITY).abs() < 0.02);
+    }
+
+    #[test]
+    fn tree_row_capsule_and_icons_layer_strictly_above_tree_background() {
+        let desc = TreeViewDesc::new(Rect::new(0.0, 0.0, 260.0, 200.0)).with_navigation_pane(true);
+        let tokens = TreeViewTokens::navigation_pane();
+        let bg_out = emit_tree_background(&desc, tokens);
+        let bg_z = bg_out.primitives[0].depth_u16();
+
+        let row = TreeViewRow {
+            row: TreeRow::new(1, 0, true),
+            item: 0,
+            rect: Rect::new(0.0, 0.0, 260.0, TREE_ROW_COMPACT),
+        };
+        let row_out = emit_tree_row_with_options(
+            &desc,
+            &row,
+            TreeRowIcon::Vector(ShellIcon::FolderOpen),
+            TreeRowOptions::new().with_trailing_icon(Some(ShellIcon::Pin)),
+            true,
+            ControlState {
+                phase: PointerPhase::Hovered,
+                ..ControlState::default()
+            },
+            &[],
+            tokens,
+        );
+
+        let capsule = row_out.primitives[0];
+        assert!(
+            capsule.depth_u16() > bg_z,
+            "tree row capsule must sit strictly above tree background"
+        );
+        // 除首个胶囊与末尾焦点环外，所有图标与箭头均应处于 SubElement::Content 且 z >= capsule.depth_u16()。
+        let content_slice = &row_out.primitives[1..row_out.primitives.len() - 1];
+        assert!(!content_slice.is_empty());
+        for prim in content_slice {
+            assert!(prim.depth_u16() >= capsule.depth_u16());
+            assert_eq!(
+                (prim.prim_type_and_flags >> 16) & 0x7,
+                u32::from(SubElement::Content as u8)
+            );
+        }
     }
 }

@@ -28,6 +28,12 @@ pub mod bits {
     pub const MAX_Z: u32 = 0x0fff_ffff;
     pub const MAX_BARRIER: u16 = 0xffff;
     pub const MAX_VARIANT: u8 = 0x0f;
+    /// `cull.comp` 16 位 Z 序偏移（位 `[35..20]`）。
+    pub const CULL_Z_SHIFT: u32 = 20;
+    /// `cull.comp` 3 位子元素顺序偏移（位 `[19..17]`）。
+    pub const CULL_SUB_SHIFT: u32 = 17;
+    /// `cull.comp` 17 位原始发射序号掩码（位 `[16..0]`，上限 `131_071`）。
+    pub const CULL_ORDER_MASK: u32 = 0x1_ffff;
 }
 
 /// 打包后的 64 位深度排序键。
@@ -61,6 +67,27 @@ impl SortKey {
     #[must_use]
     pub const fn simple(layer: PassLayer, z: u32, sub: SubElement) -> Self {
         Self::new(layer as u8, 0, 0, z, sub as u8)
+    }
+
+    /// 构造与 `cull.comp` 逐比特一致的 64 位剔除排序键：
+    /// `[layer 8 | barrier 16 | variant 4 | z16 16 | sub 3 | order 17]`。
+    ///
+    /// 将原始图元发射顺序编入低 17 位，确保同 `(z, SubElement)` 重叠图元即便被并发
+    /// `atomicAdd` 无序写入槽位，经基数排序后仍严格恢复 CPU 发射顺序。
+    #[must_use]
+    pub const fn from_cull(prefix: u64, z16: u16, sub: SubElement, emission_order: u32) -> Self {
+        let order = if emission_order > bits::CULL_ORDER_MASK {
+            bits::CULL_ORDER_MASK
+        } else {
+            emission_order
+        };
+        let prefix_mask = bits::PASS_MASK | bits::BARRIER_MASK | bits::VARIANT_MASK;
+        Self(
+            (prefix & prefix_mask)
+                | ((z16 as u64) << bits::CULL_Z_SHIFT)
+                | (((sub as u64) & 0x7) << bits::CULL_SUB_SHIFT)
+                | (order as u64),
+        )
     }
 
     #[inline]
@@ -366,5 +393,40 @@ mod tests {
     fn empty_input_yields_no_runs() {
         assert!(build_indirect_runs(&[]).is_empty());
         assert_eq!(total_instances(&[]), 0);
+    }
+
+    #[test]
+    fn cull_sort_key_preserves_emission_order_across_concurrent_shuffle() {
+        let prefix = (PassLayer::Ui as u64) << bits::PASS_SHIFT;
+        // 模拟同 (z, SubElement::Background) 多个重叠图元在 cull.comp 中被并发 atomicAdd 乱序写入。
+        let shuffled_indices = [7u32, 2, 5, 0, 9, 1, 8, 3, 6, 4];
+        let mut pairs: Vec<(u64, u32)> = shuffled_indices
+            .iter()
+            .map(|&idx| (SortKey::from_cull(prefix, 905, SubElement::Background, idx).raw(), idx))
+            .collect();
+        radix_sort_by(&mut pairs, |p| p.0);
+        let sorted_indices: Vec<u32> = pairs.iter().map(|p| p.1).collect();
+        assert_eq!(
+            sorted_indices,
+            (0..10u32).collect::<Vec<_>>(),
+            "cull sort keys must restore exact CPU emission order regardless of atomicAdd slot order"
+        );
+    }
+
+    #[test]
+    fn cull_sort_key_orders_z_then_subelement_then_emission_order_and_clamps() {
+        let prefix = (PassLayer::Ui as u64) << bits::PASS_SHIFT;
+        let bg_late = SortKey::from_cull(prefix, 100, SubElement::Background, 50_000);
+        let content_early = SortKey::from_cull(prefix, 100, SubElement::Content, 0);
+        let border_early = SortKey::from_cull(prefix, 100, SubElement::Border, 0);
+        let next_z_shadow = SortKey::from_cull(prefix, 101, SubElement::Shadow, 0);
+        assert!(bg_late < content_early);
+        assert!(content_early < border_early);
+        assert!(border_early < next_z_shadow);
+
+        // 超过 17 位上限的发射序号必须钳制而非溢出进 sub/z 位域。
+        let clamped = SortKey::from_cull(prefix, 100, SubElement::Background, u32::MAX);
+        assert!(clamped < content_early);
+        assert_eq!(clamped.run_id(), content_early.run_id());
     }
 }
