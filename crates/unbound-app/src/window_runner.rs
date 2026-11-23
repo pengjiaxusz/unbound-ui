@@ -1593,4 +1593,28 @@ mod tests {
             unbound_platform::RenderThrottleState::Active
         );
     }
+
+    #[test]
+    fn default_throttle_policy_keeps_unfocused_visible_window_active_in_runner() {
+        let config = WindowConfig::default();
+        let mut runner = WindowedRunner::new(DummyApp, &config);
+        let mut state = PlatformState::new(
+            &config,
+            Extent::new(800, 600),
+            PresentWaitPolicy::from_extensions(&[]),
+        );
+        state
+            .pacer
+            .set_throttle_policy(RenderThrottlePolicy::default());
+
+        let now = Instant::now();
+        state.pacer.note_activity(now);
+        state.pacer.set_focused(false);
+        let after_grace = now + std::time::Duration::from_secs(5);
+        assert_eq!(
+            state.pacer.throttle_state(after_grace),
+            unbound_platform::RenderThrottleState::Active
+        );
+        assert!(!runner.should_skip_frame_for_throttle(&state));
+    }
 }

@@ -1102,7 +1102,7 @@ mod tests {
         );
         state.pacer.set_throttle_policy(RenderThrottlePolicy {
             active_fps: 120,
-            unfocused_idle_fps: 10,
+            unfocused_idle_fps: Some(10),
             idle_grace_ms: 500,
             suspend_when_occluded: true,
             suspend_when_minimized: true,

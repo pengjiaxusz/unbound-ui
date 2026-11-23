@@ -252,15 +252,15 @@ impl OcclusionMonitor {
         self.focused = focused;
         if minimized || !visible || window_rect.is_empty() {
             self.occluded = true;
-            return RenderThrottleState::PausedZeroCost;
+            return RenderThrottleState::Suspended;
         }
         self.occluded = is_rect_fully_covered(window_rect, z_above_opaque_rects);
         if self.occluded {
-            RenderThrottleState::PausedZeroCost
-        } else if focused {
-            RenderThrottleState::FullSpeed
+            RenderThrottleState::Suspended
         } else {
-            RenderThrottleState::ThrottledFps(30)
+            // 遵循 ADR-0030 可见性驱动节流：窗口未最小化、未隐藏且未被完全遮挡时，
+            // 即使失焦也维持 Active（是否显式启用失焦降帧由 FramePacer 策略控制）。
+            RenderThrottleState::Active
         }
     }
 
@@ -580,12 +580,22 @@ mod tests {
         assert_eq!(state, RenderThrottleState::PausedZeroCost);
         assert!(monitor.is_occluded());
 
-        // 留出一条 10px 缝隙，则未完全遮挡
+        // 留出一条 10px 缝隙，则未完全遮挡；遵循 ADR-0030，失焦但仍可见保持 Active。
         let partial_right = Rect::new(310.0, 80.0, 220.0, 350.0);
         let state2 =
             monitor.evaluate_occlusion(win, false, true, false, &[left_cover, partial_right]);
-        assert_eq!(state2, RenderThrottleState::ThrottledFps(30));
+        assert_eq!(state2, RenderThrottleState::Active);
         assert!(!monitor.is_occluded());
+
+        // 最小化或隐藏时同样进入 Suspended 停绘。
+        assert_eq!(
+            monitor.evaluate_occlusion(win, true, true, true, &[]),
+            RenderThrottleState::Suspended
+        );
+        assert_eq!(
+            monitor.evaluate_occlusion(win, false, false, true, &[]),
+            RenderThrottleState::Suspended
+        );
     }
 
     #[test]

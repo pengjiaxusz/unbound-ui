@@ -25,7 +25,7 @@ pub const REFRESH_60: Duration = Duration::from_nanos(16_666_667);
 /// 引擎接受的最小非零帧率上限。
 pub const MIN_FPS_LIMIT: u32 = 10;
 
-/// 后台空闲默认降频目标（10 Hz，ADR-0022）。
+/// 显式开启失焦降频时的参考低帧率目标（10 Hz；ADR-0030 默认关闭失焦降频）。
 pub const IDLE_FPS_LIMIT: u32 = 10;
 
 /// 在精确帧截止时间之前提前唤醒事件循环系统休眠的时长。
@@ -141,8 +141,8 @@ impl RenderThrottleState {
 pub struct RenderThrottlePolicy {
     /// 活跃态目标帧率（FPS；`0` 表示无限制）。
     pub active_fps: u32,
-    /// 失焦且超过空闲宽限期后的目标帧率（FPS）。
-    pub unfocused_idle_fps: u32,
+    /// 失焦且超过空闲宽限期后的可选目标帧率（FPS）；`None` 表示失焦但仍可见时不降帧（ADR-0030）。
+    pub unfocused_idle_fps: Option<u32>,
     /// 窗口失焦后进入降频前的空闲宽限时长（毫秒）。
     pub idle_grace_ms: u64,
     /// 窗口被其他不透明窗口完全遮挡时是否暂停渲染。
@@ -155,7 +155,7 @@ impl Default for RenderThrottlePolicy {
     fn default() -> Self {
         Self {
             active_fps: 60,
-            unfocused_idle_fps: 10,
+            unfocused_idle_fps: None,
             idle_grace_ms: 500,
             suspend_when_occluded: true,
             suspend_when_minimized: true,
@@ -348,6 +348,9 @@ impl FramePacer {
         if self.focused {
             return RenderThrottleState::Active;
         }
+        let Some(idle_fps) = self.policy.unfocused_idle_fps else {
+            return RenderThrottleState::Active;
+        };
         let grace = Duration::from_millis(self.policy.idle_grace_ms);
         let in_grace = self
             .last_activity
@@ -355,7 +358,7 @@ impl FramePacer {
         if in_grace {
             RenderThrottleState::Active
         } else {
-            RenderThrottleState::ThrottledFps(self.policy.unfocused_idle_fps.max(1))
+            RenderThrottleState::ThrottledFps(idle_fps.max(1))
         }
     }
 
@@ -687,7 +690,7 @@ mod tests {
         let mut pacer = FramePacer::at_120_hz();
         pacer.set_throttle_policy(RenderThrottlePolicy {
             active_fps: 120,
-            unfocused_idle_fps: 10,
+            unfocused_idle_fps: Some(10),
             idle_grace_ms: 500,
             suspend_when_occluded: true,
             suspend_when_minimized: true,
@@ -764,5 +767,53 @@ mod tests {
         pacer.set_minimized(false);
         assert_eq!(pacer.throttle_state(now), RenderThrottleState::Active);
         assert!(pacer.should_render(now));
+    }
+
+    #[test]
+    fn default_policy_keeps_unfocused_visible_window_active_and_suspends_when_hidden_or_occluded() {
+        let policy = RenderThrottlePolicy::default();
+        assert_eq!(policy.unfocused_idle_fps, None);
+
+        let mut pacer = FramePacer::at_120_hz();
+        let t0 = Instant::now();
+        pacer.note_activity(t0);
+        pacer.on_present(t0);
+
+        // 失焦且远超宽限期后，只要窗口仍可见且未被遮挡/最小化，仍维持 Active 与正常帧间隔。
+        pacer.set_focused(false);
+        let t_later = t0 + Duration::from_secs(10);
+        assert_eq!(pacer.throttle_state(t_later), RenderThrottleState::Active);
+        assert_eq!(pacer.effective_interval(t_later), Some(REFRESH_120));
+
+        // 完全遮挡时立即进入 Suspended 停绘，解除后恢复 Active。
+        pacer.set_occluded(true);
+        assert!(pacer.is_suspended());
+        assert_eq!(
+            pacer.throttle_state(t_later),
+            RenderThrottleState::Suspended
+        );
+        assert!(!pacer.should_render(t_later));
+        assert!(pacer.next_deadline(t_later).is_none());
+        assert!(pacer.next_wake(t_later).is_none());
+
+        pacer.set_occluded(false);
+        assert!(!pacer.is_suspended());
+        assert_eq!(pacer.throttle_state(t_later), RenderThrottleState::Active);
+        assert!(pacer.should_render(t_later));
+
+        // 隐藏与最小化同样进入 Suspended。
+        pacer.set_visible(false);
+        assert!(pacer.is_suspended());
+        assert_eq!(
+            pacer.throttle_state(t_later),
+            RenderThrottleState::Suspended
+        );
+        pacer.set_visible(true);
+        pacer.set_minimized(true);
+        assert!(pacer.is_suspended());
+        assert_eq!(
+            pacer.throttle_state(t_later),
+            RenderThrottleState::Suspended
+        );
     }
 }
