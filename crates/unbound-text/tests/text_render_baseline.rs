@@ -273,7 +273,8 @@ fn baseline_first_frame_cold_start_latency() {
             total_ms, shape_ms, raster_ms
         );
 
-        // 首次渲染光栅化与上传耗时：DW 目标 ≤ 3.0 ms
+        // 首次渲染光栅化与上传耗时：DW 目标 ≤ 3.0 ms（仅在 Release 下执行绝对耗时门禁）
+        #[cfg(not(debug_assertions))]
         assert!(
             raster_ms <= 3.0,
             "DirectWrite rasterization and upload must be <= 3.0 ms, got {:.3} ms",
@@ -309,7 +310,8 @@ fn baseline_first_frame_cold_start_latency() {
             total_ms, shape_ms, raster_ms
         );
 
-        // 首次渲染光栅化与上传耗时：Swash 目标 ≤ 5.0 ms
+        // 首次渲染光栅化与上传耗时：Swash 目标 ≤ 5.0 ms（仅在 Release 下执行绝对耗时门禁）
+        #[cfg(not(debug_assertions))]
         assert!(
             raster_ms <= 5.0,
             "Swash rasterization and upload must be <= 5.0 ms, got {:.3} ms",

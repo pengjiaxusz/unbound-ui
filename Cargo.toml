@@ -129,3 +129,13 @@ lto = "thin"
 codegen-units = 1
 debug = "line-tables-only"
 panic = "unwind"
+
+# 测试构建瘦身：仅保留行号表以维持完整 panic 堆栈回溯，大幅降低测试二进制体积与链接 I/O；
+# 第三方依赖在测试期无需调试信息并保持最高优化等级；严禁触碰 [profile.dev] 与 [profile.release]。
+[profile.test]
+debug = "line-tables-only"
+opt-level = 1
+
+[profile.test.package."*"]
+opt-level = 3
+debug = 0
