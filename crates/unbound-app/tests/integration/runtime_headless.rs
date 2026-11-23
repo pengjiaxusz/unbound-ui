@@ -557,6 +557,7 @@ impl Application for AddressBarAutoTrackApp {
             ],
         )
         .with_nav_state(true, false, true)
+        .with_chrome_style(unbound_widgets::AddressBarChromeStyle::Outlined)
         .with_search("Search");
         view.address_bar(ADDR_BAR_KEY, desc, &state.bar);
     }

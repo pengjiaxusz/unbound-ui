@@ -1591,8 +1591,14 @@ impl Showcase {
                     b.rect.size.y * scale,
                 ],
                 radius: b.blur * scale,
-                corner_radii: [0.0; 4],
+                corner_radii: [
+                    b.corner_radii[0] * scale,
+                    b.corner_radii[1] * scale,
+                    b.corner_radii[2] * scale,
+                    b.corner_radii[3] * scale,
+                ],
                 layer_key_prefix: (PassLayer::Overlay as u64) << 56,
+                split_z: b.z,
             })
             .collect();
         let runtime_scene = self.app.scene();
