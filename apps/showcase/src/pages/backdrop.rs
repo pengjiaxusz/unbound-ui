@@ -21,7 +21,6 @@ use unbound_math::Rect;
 
 use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
 use crate::canvas::{AlignX, AlignY};
-use unbound_input::CursorKind;
 
 /// 材质行的起始部件编号。
 ///
@@ -96,12 +95,11 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
         accent_tint,
     );
 
-    // ---------- 两行按钮 ----------
+    // ---------- 两行选项组（复用 `unbound-widgets` 分段控件） ----------
     let hint_h = 30.0;
     let hint_top = rect.max().y - hint_h - 4.0;
     let row_header_h = 13.0;
     let row_gap = 8.0;
-    let gap = 8.0;
     let rows_top = rect.origin.y + 6.0 + READOUT_H + 8.0;
     // 两行按钮等高：剩下的高度平分给它们，窄视口下也不会互相压住。
     let button_h =
@@ -109,106 +107,158 @@ pub fn backdrop(ctx: &mut DemoCtx<'_, '_>) {
 
     let material_top = rows_top;
     draw_row_header(ctx, material_top, "MATERIAL");
-    let material_labels: Vec<&str> = MaterialKind::ALL.iter().map(|kind| kind.label()).collect();
-    let material_cells = button_cells(
-        ctx,
-        &material_labels,
-        Rect::new(
-            rect.origin.x,
-            material_top + row_header_h + 4.0,
-            rect.size.x,
-            button_h,
-        ),
-        gap,
+    let material_row_rect = Rect::new(
+        rect.origin.x,
+        material_top + row_header_h + 4.0,
+        rect.size.x,
+        button_h,
     );
-    for (kind, (cell, label_size)) in MaterialKind::ALL.iter().zip(material_cells) {
-        let part = MATERIAL_PART_BASE + kind.index() as u16;
-        let selected = *kind == selection.material;
-        // 组合非法：选中的材质没有自绘变体，却显式要求自绘来源。它仍然可选，
-        // 只是需要与「机器承载不了」的禁用态在视觉上区分开。
+    let material_labels: Vec<&str> = MaterialKind::ALL.iter().map(|kind| kind.label()).collect();
+    let (material_widths, material_label_sizes) =
+        weighted_slot_widths(ctx, &material_labels, material_row_rect);
+    let material_selected_idx = MaterialKind::ALL
+        .iter()
+        .position(|kind| *kind == selection.material)
+        .unwrap_or(0);
+    let mut material_a11y = Vec::with_capacity(MaterialKind::ALL.len());
+    let mut material_meta = Vec::with_capacity(MaterialKind::ALL.len());
+    for kind in MaterialKind::ALL {
+        let selected = kind == selection.material;
         let illegal = selected && illegal_combination;
-        // 逐档门槛：按当前来源与平台能力裁决，机器承载不了就禁用并附上原因。
-        let disabled = !ctx.state.backdrop_material_selectable(*kind);
+        let disabled = !ctx.state.backdrop_material_selectable(kind);
         let reason = if disabled {
-            unbound_backdrop::unavailable_reason(*kind, &ctx.state.backdrop_capabilities())
+            unbound_backdrop::unavailable_reason(kind, &ctx.state.backdrop_capabilities())
         } else {
             None
         };
-        draw_choice_button(
+        let mut accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
+        if illegal {
+            let fallback = FallbackReason::NoSelfDrawnVariant { material: kind };
+            accessible_name.push_str(&format!(" — Invalid combination: {}", fallback.label()));
+        }
+        material_a11y.push(accessible_name);
+        material_meta.push((kind, selected, disabled, illegal, reason));
+    }
+    let mut cursor_x = material_row_rect.origin.x;
+    let material_slots: Vec<crate::widgets::SegmentedSlot<'_>> = material_meta
+        .iter()
+        .enumerate()
+        .map(|(idx, (kind, _selected, disabled, _illegal, _reason))| {
+            let w = material_widths[idx];
+            let seg_x = cursor_x + unbound_widgets::segmented::SEGMENT_INSET;
+            let seg_w = (w - unbound_widgets::segmented::SEGMENT_INSET * 2.0).max(8.0);
+            cursor_x += w;
+            let part = MATERIAL_PART_BASE + kind.index() as u16;
+            let mut slot = crate::widgets::SegmentedSlot::new(ctx.part(part), kind.label());
+            slot.disabled = *disabled;
+            slot.a11y_label = Some(material_a11y[idx].as_str());
+            slot.a11y_role = Some(Role::Button);
+            slot.font_size = Some(material_label_sizes[idx]);
+            slot.label_box = Some((
+                Rect::new(
+                    seg_x + 8.0,
+                    material_row_rect.origin.y + 6.0,
+                    (seg_w - 16.0).max(16.0),
+                    16.0,
+                ),
+                AlignX::Start,
+            ));
+            slot
+        })
+        .collect();
+    let material_rects = crate::widgets::segmented_slots(
+        ctx.canvas,
+        material_row_rect,
+        &material_slots,
+        material_selected_idx,
+        LABEL_SIZE,
+        Some(material_widths),
+    );
+    for (seg_rect, (kind, selected, disabled, illegal, reason)) in
+        material_rects.into_iter().zip(material_meta.iter())
+    {
+        draw_segment_annotations(
             ctx,
-            part,
-            cell,
-            label_size,
-            ChoiceButton {
-                label: kind.label(),
+            seg_rect,
+            SegmentAnnotations {
                 description: kind.description(),
-                selected,
-                disabled,
-                illegal,
+                selected: *selected,
+                disabled: *disabled,
+                illegal: *illegal,
                 experimental: kind.is_experimental(),
                 reason: reason.as_ref(),
             },
-        );
-        let mut accessible_name = format!("Material: {} — {}", kind.label(), kind.description());
-        if illegal {
-            let reason = FallbackReason::NoSelfDrawnVariant { material: *kind };
-            accessible_name.push_str(&format!(" — Invalid combination: {}", reason.label()));
-        }
-        ctx.canvas.control(
-            ctx.part(part),
-            cell,
-            Role::Button,
-            &accessible_name,
-            CursorKind::Pointer,
-            disabled,
-            selected,
         );
     }
 
     let source_top = material_top + row_header_h + 4.0 + button_h + row_gap;
     draw_row_header(ctx, source_top, "SOURCE");
+    let source_row_rect = Rect::new(
+        rect.origin.x,
+        source_top + row_header_h + 4.0,
+        rect.size.x,
+        button_h,
+    );
     let source_labels: Vec<&str> = BackdropSource::ALL
         .iter()
         .map(|source| source.label())
         .collect();
-    let source_cells = button_cells(
-        ctx,
-        &source_labels,
-        Rect::new(
-            rect.origin.x,
-            source_top + row_header_h + 4.0,
-            rect.size.x,
-            button_h,
-        ),
-        gap,
+    let (source_widths, source_label_sizes) =
+        weighted_slot_widths(ctx, &source_labels, source_row_rect);
+    let source_selected_idx = BackdropSource::ALL
+        .iter()
+        .position(|source| *source == selection.source)
+        .unwrap_or(0);
+    let source_a11y: Vec<String> = BackdropSource::ALL
+        .iter()
+        .map(|source| format!("Source: {} — {}", source.label(), source.description()))
+        .collect();
+    let mut source_cursor_x = source_row_rect.origin.x;
+    let source_slots: Vec<crate::widgets::SegmentedSlot<'_>> = BackdropSource::ALL
+        .iter()
+        .enumerate()
+        .map(|(idx, source)| {
+            let w = source_widths[idx];
+            let seg_x = source_cursor_x + unbound_widgets::segmented::SEGMENT_INSET;
+            let seg_w = (w - unbound_widgets::segmented::SEGMENT_INSET * 2.0).max(8.0);
+            source_cursor_x += w;
+            let part = SOURCE_PART_BASE + source.index() as u16;
+            let mut slot = crate::widgets::SegmentedSlot::new(ctx.part(part), source.label());
+            slot.a11y_label = Some(source_a11y[idx].as_str());
+            slot.a11y_role = Some(Role::Button);
+            slot.font_size = Some(source_label_sizes[idx]);
+            slot.label_box = Some((
+                Rect::new(
+                    seg_x + 8.0,
+                    source_row_rect.origin.y + 6.0,
+                    (seg_w - 16.0).max(16.0),
+                    16.0,
+                ),
+                AlignX::Start,
+            ));
+            slot
+        })
+        .collect();
+    let source_rects = crate::widgets::segmented_slots(
+        ctx.canvas,
+        source_row_rect,
+        &source_slots,
+        source_selected_idx,
+        LABEL_SIZE,
+        Some(source_widths),
     );
-    for (source, (cell, label_size)) in BackdropSource::ALL.iter().zip(source_cells) {
-        let part = SOURCE_PART_BASE + source.index() as u16;
-        let selected = *source == selection.source;
-        draw_choice_button(
+    for (seg_rect, source) in source_rects.into_iter().zip(BackdropSource::ALL.iter()) {
+        draw_segment_annotations(
             ctx,
-            part,
-            cell,
-            label_size,
-            ChoiceButton {
-                label: source.label(),
+            seg_rect,
+            SegmentAnnotations {
                 description: source.description(),
-                selected,
+                selected: *source == selection.source,
                 disabled: false,
                 illegal: false,
                 experimental: false,
                 reason: None,
             },
-        );
-        let accessible_name = format!("Source: {} — {}", source.label(), source.description());
-        ctx.canvas.control(
-            ctx.part(part),
-            cell,
-            Role::Button,
-            &accessible_name,
-            CursorKind::Pointer,
-            false,
-            selected,
         );
     }
 
@@ -429,73 +479,27 @@ fn draw_row_header(ctx: &mut DemoCtx<'_, '_>, y: f32, title: &str) {
     );
 }
 
-/// 一个选择按钮的展示状态。
-struct ChoiceButton<'a> {
-    label: &'a str,
+/// 分段槽位上的附加展示信息（说明文案、实验标记、非法组合告警与不可用原因）。
+struct SegmentAnnotations<'a> {
     description: &'a str,
     selected: bool,
     disabled: bool,
-    /// 选中的组合非法（该材质没有自绘变体）：允许选中，但需要可见标记。
+    /// 选中的组合非法（该材质没有自绘变体）：允许选中，但需要可见告警标记。
     illegal: bool,
     experimental: bool,
     reason: Option<&'a UnavailableReason>,
 }
 
-/// 画一个选择按钮：标题、说明与选中标记。
-///
-/// `disabled` 传给画布视觉状态——`visual` 的第二个形参是 **disabled**，不是
-/// selected（旧实现把 selected 传了进去，导致选中的按钮被画成禁用态，这是
-/// 工单 #32 的遗留缺陷）。禁用时用告警色显示不可用原因，选中按钮则画选中底色。
-///
-/// 非法组合走另一条视觉通道：按钮仍可点击，但顶边加一条告警色细条、边框换成
-/// 告警色，右下角标出 `INVALID COMBO`。这样「我选的组合不合法」与「这台机器
-/// 跑不了」在界面上是两种不同的样子，而不是同一段回退文案。
-fn draw_choice_button(
-    ctx: &mut DemoCtx<'_, '_>,
-    part: u16,
-    cell: Rect,
-    label_size: f32,
-    choice: ChoiceButton<'_>,
-) {
+/// 在已由 `unbound-widgets` 分段控件绘制好的槽位上叠加说明文案、实验标记与非法组合告警。
+fn draw_segment_annotations(ctx: &mut DemoCtx<'_, '_>, cell: Rect, info: SegmentAnnotations<'_>) {
     let palette = *ctx.canvas.palette;
-    let hover = ctx.canvas.visual(ctx.part(part), choice.disabled);
-    let background = if choice.disabled {
-        palette.card_bg
-    } else if choice.selected {
-        palette.primary_soft
-    } else if hover.is_hovered() {
-        palette.control_hover
-    } else {
-        palette.card_bg
-    };
-    let border = if choice.disabled {
-        palette.card_border
-    } else if choice.illegal {
-        palette.warning
-    } else if choice.selected {
-        palette.primary
-    } else {
-        palette.card_border
-    };
-    ctx.canvas.rect(
-        cell,
-        8.0,
-        background,
-        border,
-        if choice.selected && !choice.disabled {
-            1.5
-        } else {
-            1.0
-        },
-        0.0,
-    );
-    // 非法组合的顶边告警色细条：窄视口下即使放不下角标文字，也仍然可见。
-    if choice.illegal {
+    // 非法组合：在槽位顶部叠加告警色细条与边框，避免用户将其与禁用态混淆。
+    if info.illegal {
         ctx.canvas.rect(
             Rect::new(
-                cell.origin.x + 10.0,
+                cell.origin.x + 8.0,
                 cell.origin.y + 1.5,
-                (cell.size.x - 20.0).max(8.0),
+                (cell.size.x - 16.0).max(8.0),
                 3.0,
             ),
             1.5,
@@ -505,78 +509,69 @@ fn draw_choice_button(
             0.0,
         );
     }
-    let inner = (cell.size.x - CELL_PADDING).max(20.0);
-    ctx.canvas.text(
-        choice.label,
-        Rect::new(cell.origin.x + 10.0, cell.origin.y + 8.0, inner, 16.0),
-        label_size,
-        if choice.disabled {
-            palette.text_muted
-        } else if choice.selected {
-            palette.primary
-        } else {
-            palette.text
-        },
-        AlignX::Start,
-        AlignY::Center,
-    );
+    let inner = (cell.size.x - 16.0).max(20.0);
     // 实验档在右上角加一枚小标记，让它在材质行里与常规档显式区分。
-    if choice.experimental && cell.size.x >= 150.0 {
+    if info.experimental && cell.size.x >= 150.0 {
         let badge = "EXPERIMENTAL";
         let badge_glyph_width = ctx.canvas.labels.metrics(badge, 8.0).width;
         ctx.canvas.text(
             badge,
             Rect::new(
                 cell.max().x - 8.0 - badge_glyph_width,
-                cell.origin.y + 9.0,
+                cell.origin.y + 7.0,
                 badge_glyph_width,
                 14.0,
             ),
             8.0,
-            palette.warning,
+            if info.selected && !info.disabled {
+                palette.on_primary
+            } else {
+                palette.warning
+            },
             AlignX::Start,
             AlignY::Center,
         );
     }
-    // 选中标记与说明文字各自预留高度，避免「SELECTED」压住说明（#32 遗留缺陷）。
-    let title_bottom = cell.origin.y + 26.0;
-    let selected_strip = if choice.selected { 16.0 } else { 0.0 };
-    let detail = choice.reason.map_or_else(
-        || choice.description.to_string(),
+    let title_bottom = cell.origin.y + 24.0;
+    let selected_strip = if info.selected { 14.0 } else { 0.0 };
+    let detail = info.reason.map_or_else(
+        || info.description.to_string(),
         |reason| reason.description(),
     );
-    let detail_height = (cell.max().y - title_bottom - 6.0 - selected_strip).max(0.0);
+    let detail_height = (cell.max().y - title_bottom - 4.0 - selected_strip).max(0.0);
     if cell.size.x >= 104.0 && detail_height >= 12.0 {
         ctx.canvas.text_wrapped(
             &detail,
-            Rect::new(cell.origin.x + 10.0, title_bottom, inner, detail_height),
+            Rect::new(cell.origin.x + 8.0, title_bottom, inner, detail_height),
             9.0,
-            if choice.reason.is_some() {
+            if info.reason.is_some() {
                 palette.warning
+            } else if info.selected && !info.disabled {
+                palette.on_primary
             } else {
                 palette.text_muted
             },
         );
     }
-    if choice.selected {
+    if info.selected && !info.disabled {
         ctx.canvas.text(
             "SELECTED",
-            Rect::new(cell.origin.x + 10.0, cell.max().y - 20.0, inner, 12.0),
+            Rect::new(cell.origin.x + 8.0, cell.max().y - 16.0, inner, 12.0),
             8.5,
-            palette.primary,
+            palette.on_primary,
             AlignX::Start,
             AlignY::Center,
         );
     }
     // 非法组合的角标：与「SELECTED」同一行、贴右边，宽度够时始终可见。
-    if choice.illegal && cell.size.x >= 160.0 {
+    if info.illegal && cell.size.x >= 160.0 {
         let badge = "INVALID COMBO";
         let badge_width = ctx.canvas.labels.metrics(badge, 8.0).width;
         ctx.canvas.text(
             badge,
             Rect::new(
-                cell.max().x - 10.0 - badge_width,
-                cell.max().y - 20.0,
+                cell.max().x - 8.0 - badge_width,
+                cell.max().y - 16.0,
                 badge_width,
                 12.0,
             ),
@@ -588,30 +583,26 @@ fn draw_choice_button(
     }
 }
 
-/// 按标签宽度分配一行按钮，并给出每个按钮的矩形与标签字号。
-///
-/// 材质行有七档、标签长度相差很大：等分宽度会让长标签挤出按钮，因此按
-/// 「标签宽度 + 内边距」加权分配；实在放不下时按比例缩字号，宁可字小也不越界。
-fn button_cells(
+/// 按标签宽度加权计算分段控件每列宽度及自适应字号，防止长标签在窄视口越界。
+fn weighted_slot_widths(
     ctx: &mut DemoCtx<'_, '_>,
     labels: &[&str],
     origin: Rect,
-    gap: f32,
-) -> Vec<(Rect, f32)> {
+) -> (Vec<f32>, Vec<f32>) {
     let measured: Vec<f32> = labels
         .iter()
         .map(|label| ctx.canvas.labels.metrics(label, LABEL_SIZE).width)
         .collect();
     let weights: Vec<f32> = measured.iter().map(|width| width + CELL_PADDING).collect();
     let total: f32 = weights.iter().sum();
-    let usable = (origin.size.x - gap * (labels.len() as f32 - 1.0)).max(0.0);
-    let mut cells = Vec::with_capacity(labels.len());
-    let mut x = origin.origin.x;
+    let usable = origin.size.x.max(0.0);
+    let mut widths = Vec::with_capacity(labels.len());
+    let mut sizes = Vec::with_capacity(labels.len());
     for (index, width_weight) in weights.iter().enumerate() {
         let width = if total > 0.0 {
             usable * width_weight / total
         } else {
-            usable / labels.len() as f32
+            usable / labels.len().max(1) as f32
         };
         let inner = (width - CELL_PADDING).max(8.0);
         let size = if measured[index] > 0.0 {
@@ -619,10 +610,10 @@ fn button_cells(
         } else {
             LABEL_SIZE
         };
-        cells.push((Rect::new(x, origin.origin.y, width, origin.size.y), size));
-        x += width + gap;
+        widths.push(width);
+        sizes.push(size);
     }
-    cells
+    (widths, sizes)
 }
 
 /// 底部的提示行：说明当前实际生效的是哪条路径、为什么。

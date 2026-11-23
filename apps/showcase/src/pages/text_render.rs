@@ -1199,7 +1199,6 @@ fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPage
 
     let presets_x = rect.origin.x + padding + label_w;
     let presets_w = (rect.size.x - padding * 2.0 - label_w).max(20.0);
-    let gap = 4.0;
     let items = [
         ("WinUI", PART_PRESET_WINUI, TextRenderPreset::WinuiNative),
         (
@@ -1210,44 +1209,28 @@ fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPage
         ("Pixel", PART_PRESET_PIXEL, TextRenderPreset::Pixel),
         ("Custom", PART_PRESET_CUSTOM, TextRenderPreset::Custom),
     ];
-    let btn_w = (presets_w - gap * (items.len() as f32 - 1.0)) / items.len() as f32;
-
-    for (idx, (label, part, preset)) in items.iter().enumerate() {
-        let btn_rect = Rect::new(
-            presets_x + idx as f32 * (btn_w + gap),
-            rect.origin.y + 3.0,
-            btn_w,
-            rect.size.y - 6.0,
-        );
-
-        let selected = state.preset == *preset;
-        let a11y_label = format!("Preset: {} (Selected: {})", label, selected);
-
-        ctx.control_state(
-            *part,
-            btn_rect,
-            Role::RadioButton,
-            &a11y_label,
-            false,
-            selected,
-        );
-
-        let (bg, border, text_color) = if selected {
-            (palette.primary, palette.primary, palette.card_bg)
-        } else {
-            (palette.card_bg, palette.card_border, palette.text)
-        };
-
-        ctx.canvas.rect(btn_rect, 3.0, bg, border, 0.5, 0.0);
-        ctx.canvas.text(
-            label,
-            btn_rect,
-            10.0,
-            text_color,
-            AlignX::Center,
-            AlignY::Center,
-        );
-    }
+    let selected_idx = items
+        .iter()
+        .position(|(_, _, preset)| state.preset == *preset)
+        .unwrap_or(0);
+    let a11y_labels: Vec<String> = items
+        .iter()
+        .map(|(label, _, preset)| {
+            format!("Preset: {} (Selected: {})", label, state.preset == *preset)
+        })
+        .collect();
+    let slots: Vec<crate::widgets::SegmentedSlot<'_>> = items
+        .iter()
+        .zip(a11y_labels.iter())
+        .map(|((label, part, _), a11y)| {
+            let mut slot = crate::widgets::SegmentedSlot::new(ctx.part(*part), label);
+            slot.a11y_label = Some(a11y.as_str());
+            slot.a11y_role = Some(Role::RadioButton);
+            slot
+        })
+        .collect();
+    let seg_rect = Rect::new(presets_x, rect.origin.y + 3.0, presets_w, rect.size.y - 6.0);
+    crate::widgets::segmented_slots(ctx.canvas, seg_rect, &slots, selected_idx, 10.0, None);
 }
 
 /// 绘制字体组四项调节控件（家族、字重、字号、斜体）。
@@ -1534,86 +1517,41 @@ fn draw_pixel_group_content(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextR
     }
 }
 
-/// 绘制单个选项按钮并注册无障碍控件。
-fn draw_option_button(
-    ctx: &mut DemoCtx<'_, '_>,
-    part: u16,
-    rect: Rect,
-    label: &str,
-    selected: bool,
-    disabled: bool,
-    reason: Option<&str>,
-) {
-    let palette = *ctx.canvas.palette;
-    let (bg, border, text_color) = if disabled {
-        (palette.card_bg, palette.card_border, palette.text_muted)
-    } else if selected {
-        (palette.primary, palette.primary, palette.card_bg)
-    } else {
-        (palette.surface, palette.card_border, palette.text)
-    };
-
-    ctx.canvas.rect(rect, 3.0, bg, border, 1.0, 0.0);
-    ctx.canvas.text(
-        label,
-        Rect::new(
-            rect.origin.x + 2.0,
-            rect.origin.y,
-            rect.size.x - 4.0,
-            rect.size.y,
-        ),
-        10.5,
-        text_color,
-        AlignX::Center,
-        AlignY::Center,
-    );
-
-    let accessible_label = if let Some(r) = reason {
-        format!("{label} (Disabled: {r})")
-    } else {
-        label.to_string()
-    };
-    ctx.control(part, rect, Role::Button, &accessible_label, selected);
-}
-
-/// 绘制“距离场”组控件。
+/// 绘制“距离场”组控件（复用 `unbound-widgets` 分段控件）。
 fn draw_distance_field_controls(
     ctx: &mut DemoCtx<'_, '_>,
     rect: Rect,
     state: &TextRenderPageState,
 ) {
     let palette = *ctx.canvas.palette;
-    let btn_gap = 6.0;
-    let btn_w = ((rect.size.x - 16.0 - btn_gap * 2.0) / 3.0).max(40.0);
     let btn_h = 24.0;
     let btn_y = rect.origin.y + 6.0;
 
     let is_sdf = state.settings.use_sdf || state.settings.distance_field == DistanceFieldMode::Sdf;
-    let is_off = !is_sdf && state.settings.distance_field == DistanceFieldMode::Off;
+    let selected_idx = if is_sdf { 1 } else { 0 };
 
-    // Off 按钮
-    let off_rect = Rect::new(rect.origin.x + 8.0, btn_y, btn_w, btn_h);
-    draw_option_button(ctx, PART_DF_OFF, off_rect, "Off", is_off, false, None);
+    let mut off_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_DF_OFF), "Off");
+    off_slot.a11y_role = Some(Role::Button);
+    let mut sdf_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_DF_SDF), "SDF");
+    sdf_slot.a11y_role = Some(Role::Button);
+    let mut mtsdf_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_DF_MTSDF), "MTSDF");
+    mtsdf_slot.disabled = true;
+    mtsdf_slot.a11y_label = Some("MTSDF (Disabled: Pipeline not wired up)");
+    mtsdf_slot.a11y_role = Some(Role::Button);
 
-    // SDF 按钮
-    let sdf_rect = Rect::new(rect.origin.x + 8.0 + btn_w + btn_gap, btn_y, btn_w, btn_h);
-    draw_option_button(ctx, PART_DF_SDF, sdf_rect, "SDF", is_sdf, false, None);
-
-    // MTSDF 按钮（管线未接线，灰化）
-    let mtsdf_rect = Rect::new(
-        rect.origin.x + 8.0 + (btn_w + btn_gap) * 2.0,
+    let seg_rect = Rect::new(
+        rect.origin.x + 8.0,
         btn_y,
-        btn_w,
+        (rect.size.x - 16.0).max(40.0),
         btn_h,
     );
-    draw_option_button(
-        ctx,
-        PART_DF_MTSDF,
-        mtsdf_rect,
-        "MTSDF",
-        false,
-        true,
-        Some("Pipeline not wired up"),
+    crate::widgets::segmented_slots(
+        ctx.canvas,
+        seg_rect,
+        &[off_slot, sdf_slot, mtsdf_slot],
+        selected_idx,
+        10.5,
+        None,
     );
 
     // 互斥说明或提示文案
@@ -1641,12 +1579,12 @@ fn draw_distance_field_controls(
     );
 }
 
-/// 绘制“合成”组控件。
+/// 绘制“合成”组控件（复用 `unbound-widgets` 分段控件）。
 fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
     let palette = *ctx.canvas.palette;
     let row_h = 24.0;
     let label_w = 46.0;
-    let btn_gap = 6.0;
+    let group_w = (rect.size.x - 16.0 - label_w).max(40.0);
 
     // 第一行：混合空间 (Blend Space)
     let row1_y = rect.origin.y + 6.0;
@@ -1658,26 +1596,17 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
         AlignX::Start,
         AlignY::Center,
     );
-    let space_btn_w = ((rect.size.x - 16.0 - label_w - btn_gap) / 2.0).max(40.0);
-
-    let srgb_rect = Rect::new(rect.origin.x + 8.0 + label_w, row1_y, space_btn_w, row_h);
-    let is_srgb = state.settings.blend_space == BlendSpace::Srgb;
-    draw_option_button(ctx, PART_COMP_SRGB, srgb_rect, "sRGB", is_srgb, false, None);
-
-    let linear_rect = Rect::new(
-        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
-        row1_y,
-        space_btn_w,
-        row_h,
-    );
-    let is_linear = state.settings.blend_space == BlendSpace::Linear;
-    draw_option_button(
-        ctx,
-        PART_COMP_LINEAR,
-        linear_rect,
-        "Linear",
-        is_linear,
-        false,
+    let mut srgb_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_SRGB), "sRGB");
+    srgb_slot.a11y_role = Some(Role::Button);
+    let mut linear_slot = crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LINEAR), "Linear");
+    linear_slot.a11y_role = Some(Role::Button);
+    let space_selected = usize::from(state.settings.blend_space == BlendSpace::Linear);
+    crate::widgets::segmented_slots(
+        ctx.canvas,
+        Rect::new(rect.origin.x + 8.0 + label_w, row1_y, group_w, row_h),
+        &[srgb_slot, linear_slot],
+        space_selected,
+        10.5,
         None,
     );
 
@@ -1691,33 +1620,19 @@ fn draw_composition_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &Text
         AlignX::Start,
         AlignY::Center,
     );
-
-    let direct_rect = Rect::new(rect.origin.x + 8.0 + label_w, row2_y, space_btn_w, row_h);
-    let is_direct = state.settings.layer_mode == LayerMode::Direct;
-    draw_option_button(
-        ctx,
-        PART_COMP_LAYER_DIRECT,
-        direct_rect,
-        "Direct",
-        is_direct,
-        false,
-        None,
-    );
-
-    let isolated_rect = Rect::new(
-        rect.origin.x + 8.0 + label_w + space_btn_w + btn_gap,
-        row2_y,
-        space_btn_w,
-        row_h,
-    );
-    let is_isolated = state.settings.layer_mode == LayerMode::Isolated;
-    draw_option_button(
-        ctx,
-        PART_COMP_LAYER_ISOLATED,
-        isolated_rect,
-        "Isolated",
-        is_isolated,
-        false,
+    let mut direct_slot =
+        crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LAYER_DIRECT), "Direct");
+    direct_slot.a11y_role = Some(Role::Button);
+    let mut isolated_slot =
+        crate::widgets::SegmentedSlot::new(ctx.part(PART_COMP_LAYER_ISOLATED), "Isolated");
+    isolated_slot.a11y_role = Some(Role::Button);
+    let layer_selected = usize::from(state.settings.layer_mode == LayerMode::Isolated);
+    crate::widgets::segmented_slots(
+        ctx.canvas,
+        Rect::new(rect.origin.x + 8.0 + label_w, row2_y, group_w, row_h),
+        &[direct_slot, isolated_slot],
+        layer_selected,
+        10.5,
         None,
     );
 }
@@ -1890,21 +1805,16 @@ fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRend
 
         let options_x = rect.origin.x + padding + title_w;
         let options_w = (rect.size.x - padding * 2.0 - title_w).max(20.0);
-        let btn_gap = 4.0;
-        let btn_w = (options_w - btn_gap * (options.len() as f32 - 1.0)) / options.len() as f32;
-
-        for (opt_idx, opt) in options.iter().enumerate() {
-            let btn_x = options_x + opt_idx as f32 * (btn_w + btn_gap);
-            let btn_rect = Rect::new(btn_x, current_y, btn_w, row_h);
-
-            // 表驱动灰化决议
+        let selected_idx = options.iter().position(|opt| opt.selected).unwrap_or(0);
+        let mut resolved = Vec::with_capacity(options.len());
+        let mut a11y_labels = Vec::with_capacity(options.len());
+        for opt in options {
             let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
                 resolve_feature(key, &caps, &state.settings)
             });
             let hint = opt
                 .feature_key
                 .and_then(|key| feature_hint(key, &caps, &state.settings));
-
             let a11y_label = if let Some(reason) = res.reason {
                 format!("{} — Disabled: {}", opt.label, reason)
             } else if let Some(hint) = hint {
@@ -1912,64 +1822,29 @@ fn draw_typography_group(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRend
             } else {
                 format!("{}: {}", row_title, opt.label)
             };
-
-            ctx.control_state(
-                opt.part,
-                btn_rect,
-                Role::Button,
-                &a11y_label,
-                res.disabled,
-                opt.selected,
-            );
-
-            // 视觉呈现
-            if res.disabled {
-                ctx.canvas.rect(
-                    btn_rect,
-                    3.0,
-                    palette.surface,
-                    palette.card_border,
-                    0.5,
-                    0.0,
-                );
-                ctx.canvas.text(
-                    opt.label,
-                    btn_rect,
-                    10.0,
-                    palette.text_muted,
-                    AlignX::Center,
-                    AlignY::Center,
-                );
-            } else if opt.selected {
-                ctx.canvas
-                    .rect(btn_rect, 3.0, palette.primary, palette.primary, 1.0, 0.0);
-                ctx.canvas.text(
-                    opt.label,
-                    btn_rect,
-                    10.0,
-                    palette.card_bg,
-                    AlignX::Center,
-                    AlignY::Center,
-                );
-            } else {
-                ctx.canvas.rect(
-                    btn_rect,
-                    3.0,
-                    palette.card_bg,
-                    palette.card_border,
-                    0.5,
-                    0.0,
-                );
-                ctx.canvas.text(
-                    opt.label,
-                    btn_rect,
-                    10.0,
-                    palette.text,
-                    AlignX::Center,
-                    AlignY::Center,
-                );
-            }
+            resolved.push(res);
+            a11y_labels.push(a11y_label);
         }
+        let slots: Vec<crate::widgets::SegmentedSlot<'_>> = options
+            .iter()
+            .zip(resolved.iter())
+            .zip(a11y_labels.iter())
+            .map(|((opt, res), a11y)| {
+                let mut slot = crate::widgets::SegmentedSlot::new(ctx.part(opt.part), opt.label);
+                slot.disabled = res.disabled;
+                slot.a11y_label = Some(a11y.as_str());
+                slot.a11y_role = Some(Role::Button);
+                slot
+            })
+            .collect();
+        crate::widgets::segmented_slots(
+            ctx.canvas,
+            Rect::new(options_x, current_y, options_w, row_h),
+            &slots,
+            selected_idx,
+            10.0,
+            None,
+        );
 
         current_y += row_h + row_gap;
     }
@@ -2337,21 +2212,16 @@ fn draw_emoji_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRender
 
         let options_x = rect.origin.x + padding + title_w;
         let options_w = (rect.size.x - padding * 2.0 - title_w).max(20.0);
-        let btn_gap = 4.0;
-        let btn_w = (options_w - btn_gap * (options.len() as f32 - 1.0)) / options.len() as f32;
-
-        for (opt_idx, opt) in options.iter().enumerate() {
-            let btn_x = options_x + opt_idx as f32 * (btn_w + btn_gap);
-            let btn_rect = Rect::new(btn_x, current_y, btn_w, row_h);
-
-            // 表驱动灰化决议
+        let selected_idx = options.iter().position(|opt| opt.selected).unwrap_or(0);
+        let mut resolved = Vec::with_capacity(options.len());
+        let mut a11y_labels = Vec::with_capacity(options.len());
+        for opt in options {
             let res = opt.feature_key.map_or(FeatureResolution::AVAILABLE, |key| {
                 resolve_feature(key, &caps, &state.settings)
             });
             let hint = opt
                 .feature_key
                 .and_then(|key| feature_hint(key, &caps, &state.settings));
-
             let a11y_label = if let Some(reason) = res.reason {
                 format!("{} — Disabled: {}", opt.label, reason)
             } else if let Some(hint) = hint {
@@ -2359,35 +2229,29 @@ fn draw_emoji_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRender
             } else {
                 format!("{}: {}", row_title, opt.label)
             };
-
-            ctx.control_state(
-                opt.part,
-                btn_rect,
-                Role::Button,
-                &a11y_label,
-                res.disabled,
-                opt.selected,
-            );
-
-            // 绘制按钮外观
-            let (bg, border, text_color) = if res.disabled {
-                (palette.surface, palette.card_border, palette.text_muted)
-            } else if opt.selected {
-                (palette.primary, palette.primary, palette.card_bg)
-            } else {
-                (palette.card_bg, palette.card_border, palette.text)
-            };
-
-            ctx.canvas.rect(btn_rect, 3.0, bg, border, 0.5, 0.0);
-            ctx.canvas.text(
-                opt.label,
-                btn_rect,
-                10.0,
-                text_color,
-                AlignX::Center,
-                AlignY::Center,
-            );
+            resolved.push(res);
+            a11y_labels.push(a11y_label);
         }
+        let slots: Vec<crate::widgets::SegmentedSlot<'_>> = options
+            .iter()
+            .zip(resolved.iter())
+            .zip(a11y_labels.iter())
+            .map(|((opt, res), a11y)| {
+                let mut slot = crate::widgets::SegmentedSlot::new(ctx.part(opt.part), opt.label);
+                slot.disabled = res.disabled;
+                slot.a11y_label = Some(a11y.as_str());
+                slot.a11y_role = Some(Role::Button);
+                slot
+            })
+            .collect();
+        crate::widgets::segmented_slots(
+            ctx.canvas,
+            Rect::new(options_x, current_y, options_w, row_h),
+            &slots,
+            selected_idx,
+            10.0,
+            None,
+        );
 
         current_y += row_h + row_gap;
     }

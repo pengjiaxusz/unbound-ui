@@ -6,6 +6,7 @@
 
 use accesskit::Role;
 use unbound_input::CursorKind;
+use unbound_input::HitRegion;
 use unbound_math::Rect;
 use unbound_theme::Token;
 use unbound_widgets::button::{
@@ -323,6 +324,103 @@ pub fn segmented(
         canvas.control_output(ids[index], &output);
         canvas.record_span(ids[index], seg_start);
     }
+}
+
+/// 单个分段槽位的扩展配置（支持逐槽禁用、自定义字号与无障碍覆盖）。
+pub struct SegmentedSlot<'a> {
+    /// 槽位节点键。
+    pub node: u64,
+    /// 槽位显示标签。
+    pub label: &'a str,
+    /// 该槽位是否禁用交互。
+    pub disabled: bool,
+    /// 可选自定义无障碍标签（`None` 时沿用 `label`）。
+    pub a11y_label: Option<&'a str>,
+    /// 可选自定义无障碍角色（`None` 时沿用分段控件默认 `Role::Tab`）。
+    pub a11y_role: Option<Role>,
+    /// 可选单槽字号覆盖（`None` 时沿用整组默认字号）。
+    pub font_size: Option<f32>,
+    /// 可选标签排布矩形与水平对齐方式（`None` 时居中排布于整个槽位）。
+    pub label_box: Option<(Rect, AlignX)>,
+}
+
+impl<'a> SegmentedSlot<'a> {
+    /// 构造标准启用态分段槽位。
+    #[must_use]
+    pub const fn new(node: u64, label: &'a str) -> Self {
+        Self {
+            node,
+            label,
+            disabled: false,
+            a11y_label: None,
+            a11y_role: None,
+            font_size: None,
+            label_box: None,
+        }
+    }
+}
+
+/// 渲染支持逐槽禁用、自定义宽列与无障碍覆盖的 `unbound-widgets` 分段控件。
+///
+/// 统一经 [`emit_segmented_frame`] 与 [`emit_segmented_segment`] 消费
+/// [`SegmentedTokens::standard`]（选中背景 `Token::PRIMARY`、选中文字 `Token::ON_PRIMARY`），
+/// 并返回每个槽位实际布局矩形供调用方叠加附加徽标或说明文本。
+pub fn segmented_slots(
+    canvas: &mut Canvas<'_>,
+    rect: Rect,
+    slots: &[SegmentedSlot<'_>],
+    selected: usize,
+    font_size: f32,
+    item_widths: Option<Vec<f32>>,
+) -> Vec<Rect> {
+    let labels: Vec<&str> = slots.iter().map(|slot| slot.label).collect();
+    let mut desc = SegmentedDesc::new(rect, &labels).with_selected(selected);
+    if let Some(widths) = item_widths {
+        desc = desc.with_item_widths(widths);
+    }
+    for (index, slot) in slots.iter().enumerate() {
+        if slot.disabled {
+            desc = desc.with_disabled(index, true);
+        }
+    }
+    let tokens = SegmentedTokens::standard();
+    let frame = emit_segmented_frame(&desc, tokens);
+    canvas.widget_output(WidgetCatalogId::SelectorBar, 0, &frame);
+    let mut segment_rects = Vec::with_capacity(slots.len());
+    for (index, slot) in slots.iter().enumerate() {
+        let seg_start = canvas.span_start();
+        let seg_rect = desc.segment_rect(index);
+        segment_rects.push(seg_rect);
+        let state = canvas.control_state(slot.node, slot.disabled, index == selected);
+        let (text_rect, align_x) = slot.label_box.unwrap_or((seg_rect, AlignX::Center));
+        let (quads, _) = canvas.layout_text(
+            slot.label,
+            text_rect,
+            slot.font_size.unwrap_or(font_size),
+            align_x,
+            AlignY::Center,
+        );
+        let mut output = emit_segmented_segment(slot.node, &desc, index, state, &quads, tokens);
+        if slot.disabled && output.hit.is_none() {
+            // 为禁用槽位保留被动命中包围盒（指针不呈手型且语义标记 disabled），
+            // 便于无头回归测试定位并验证点击禁用项不产生状态变化。
+            output.hit = Some(
+                HitRegion::new(slot.node, 1, u32::from(desc.z), seg_rect)
+                    .with_cursor(CursorKind::Default),
+            );
+        }
+        if let Some(a11y) = output.a11y.as_mut() {
+            if let Some(custom_label) = slot.a11y_label {
+                a11y.label = custom_label.to_owned();
+            }
+            if let Some(role) = slot.a11y_role {
+                a11y.role = role;
+            }
+        }
+        canvas.control_output(slot.node, &output);
+        canvas.record_span(slot.node, seg_start);
+    }
+    segment_rects
 }
 
 /// 紧凑型下拉选择触发器（用于标题栏语言选择与窗口缩放大小下拉框）。

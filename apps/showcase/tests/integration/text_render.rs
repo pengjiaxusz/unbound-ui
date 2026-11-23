@@ -10,8 +10,9 @@ use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, TextRenderPageState,
     TextRenderPreset, FEATURE_RULES, FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART,
     FONT_SIZE_OPTIONS, FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE,
-    GROUP_PART_BASE, PART_BACKEND_COSMIC, PART_BIDI_OFF, PART_BIDI_ON, PART_EMOJI_BACKEND_COSMIC,
-    PART_EMOJI_BACKEND_DW, PART_EMOJI_BACKEND_FOLLOW, PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO,
+    GROUP_PART_BASE, PART_BACKEND_COSMIC, PART_BIDI_OFF, PART_BIDI_ON, PART_COMP_LAYER_DIRECT,
+    PART_COMP_SRGB, PART_DF_OFF, PART_EMOJI_BACKEND_COSMIC, PART_EMOJI_BACKEND_DW,
+    PART_EMOJI_BACKEND_FOLLOW, PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO,
     PART_EMOJI_SOURCE_BUILTIN, PART_EMOJI_SOURCE_GRID, PART_EMOJI_SOURCE_SYSTEM,
     PART_LETTER_SPACING_0, PART_LETTER_SPACING_1, PART_LETTER_SPACING_2, PART_LIGATURES_OFF,
     PART_LIGATURES_ON, PART_LINEBREAK_ANYWHERE, PART_LINEBREAK_NONE, PART_LINEBREAK_WORD,
@@ -1297,4 +1298,158 @@ fn text_render_global_strategy_affects_other_pages_and_isolates_preview() {
     assert_eq!(app.state.text_render.settings.size, 24.0);
     assert_eq!(app.state.text_render.settings.weight, 700);
     assert!(app.state.text_render.settings.italic);
+}
+
+/// 计算 sRGB 颜色在 WCAG 2.1 下的相对亮度（输入分量范围 0.0..=1.0）。
+fn relative_luminance(color: unbound_math::Color) -> f32 {
+    fn linearize(channel: f32) -> f32 {
+        let c = channel.clamp(0.0, 1.0);
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * linearize(color.r) + 0.7152 * linearize(color.g) + 0.0722 * linearize(color.b)
+}
+
+/// 将带透明度的前景色按源覆盖合成到背景色上。
+fn composite_over(fg: unbound_math::Color, bg: unbound_math::Color) -> unbound_math::Color {
+    let a = fg.a.clamp(0.0, 1.0);
+    unbound_math::Color::new(
+        fg.r * a + bg.r * (1.0 - a),
+        fg.g * a + bg.g * (1.0 - a),
+        fg.b * a + bg.b * (1.0 - a),
+        1.0,
+    )
+}
+
+/// 计算前景色与背景色之间的 WCAG 对比度比值。
+fn wcag_contrast_ratio(fg: unbound_math::Color, bg: unbound_math::Color) -> f32 {
+    let l1 = relative_luminance(fg);
+    let l2 = relative_luminance(bg);
+    let (lighter, darker) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// 回归测试（#167）：深色与浅色双主题下，Text Render 四处分段选项组的选中态文字
+/// 必须通过 `Token::ON_PRIMARY` 渲染且与 `Token::PRIMARY` 选中背景保持 >= 4.5 对比度。
+#[test]
+fn text_render_selected_option_contrast_in_dark_and_light_themes() {
+    use unbound_gpu::data::PrimType;
+    use unbound_theme::{ThemeKind, ThemeSet, Token};
+
+    let selected_parts: [(&str, u16); 13] = [
+        ("preset:WinUI", PART_PRESET_WINUI),
+        ("distance_field:Off", PART_DF_OFF),
+        ("composition:sRGB", PART_COMP_SRGB),
+        ("composition:Direct", PART_COMP_LAYER_DIRECT),
+        ("typography:Shaper/Cosmic", PART_SHAPER_COSMIC),
+        ("typography:LineBreak/Word", PART_LINEBREAK_WORD),
+        ("typography:BiDi/On", PART_BIDI_ON),
+        ("typography:Ligatures/On", PART_LIGATURES_ON),
+        ("typography:Spacing/0px", PART_LETTER_SPACING_0),
+        ("typography:LineHeight/Auto", PART_LINE_HEIGHT_AUTO),
+        ("emoji:Presentation/Color", PART_EMOJI_PRES_COLOR),
+        ("emoji:Rasterizer/Follow", PART_EMOJI_BACKEND_FOLLOW),
+        ("emoji:Source/System", PART_EMOJI_SOURCE_SYSTEM),
+    ];
+
+    let theme_set = ThemeSet::standard();
+    let page_index = PageId::TextRender.index() as u8;
+    // 使用足够高的视口确保六组展开后全部选项组均位于可视区域内并完成图元发射。
+    let tall_viewport = (1440.0, 1800.0);
+
+    for (theme_mode, theme_kind) in [
+        (ThemeMode::Dark, ThemeKind::Dark),
+        (ThemeMode::Light, ThemeKind::Light),
+    ] {
+        let mut app = App::new();
+        app.state.theme = theme_mode;
+        app.state.text_render = TextRenderPageState::fresh_default();
+        app.navigate(PageId::TextRender);
+        app.rebuild(tall_viewport);
+
+        let palette = theme_set.palette(theme_kind);
+        let surface = palette.color(Token::SURFACE);
+
+        for (name, part) in selected_parts {
+            let node = target::id(Target::Demo(page_index, 0, part));
+            let bounds = app
+                .regions
+                .iter()
+                .find(|region| region.node == node)
+                .map(|region| region.bounds)
+                .unwrap_or_else(|| {
+                    panic!("{theme_mode:?} missing hit region for selected option {name}")
+                });
+
+            // 1. 选中槽位背景必须为 `Token::PRIMARY`。
+            let bg_prim = app
+                .scene
+                .primitives
+                .iter()
+                .find(|prim| {
+                    prim.prim_type() == PrimType::RoundedRect
+                        && (prim.local_pos[0] - bounds.origin.x).abs() <= 1.5
+                        && (prim.local_pos[1] - bounds.origin.y).abs() <= 1.5
+                        && (prim.size[0] - bounds.size.x).abs() <= 1.5
+                        && (prim.size[1] - bounds.size.y).abs() <= 1.5
+                        && prim.fill_token_or_uv == u32::from(Token::PRIMARY.raw())
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{theme_mode:?} selected option {name} must render Token::PRIMARY pill background at {bounds:?}"
+                    )
+                });
+
+            // 2. 选中槽位内部所有字形图元必须使用 `Token::ON_PRIMARY`（严禁回退为 `Token::CARD_BG`）。
+            let glyph_tokens: Vec<u16> = app
+                .scene
+                .primitives
+                .iter()
+                .filter(|prim| {
+                    if prim.prim_type() != PrimType::Glyph {
+                        return false;
+                    }
+                    let cx = prim.local_pos[0] + prim.size[0] * 0.5;
+                    let cy = prim.local_pos[1] + prim.size[1] * 0.5;
+                    cx >= bounds.origin.x
+                        && cx <= bounds.max().x
+                        && cy >= bounds.origin.y
+                        && cy <= bounds.max().y
+                })
+                .map(|prim| prim.fill_token_or_uv as u16)
+                .collect();
+
+            assert!(
+                !glyph_tokens.is_empty(),
+                "{theme_mode:?} selected option {name} must emit text glyphs inside {bounds:?}"
+            );
+            for token_raw in &glyph_tokens {
+                assert_ne!(
+                    *token_raw,
+                    Token::CARD_BG.raw(),
+                    "{theme_mode:?} selected option {name} regressed to Token::CARD_BG foreground"
+                );
+                assert_eq!(
+                    *token_raw,
+                    Token::ON_PRIMARY.raw(),
+                    "{theme_mode:?} selected option {name} must render selected label with Token::ON_PRIMARY"
+                );
+            }
+
+            // 3. 校验真实主题解析后的前景色/背景色 WCAG 对比度达标（>= 4.5:1）。
+            let bg_color = composite_over(
+                palette.color(Token::new(bg_prim.fill_token_or_uv as u16)),
+                surface,
+            );
+            let fg_color = composite_over(palette.color(Token::new(glyph_tokens[0])), bg_color);
+            let contrast = wcag_contrast_ratio(fg_color, bg_color);
+            assert!(
+                contrast >= 4.5,
+                "{theme_mode:?} selected option {name} contrast ratio {contrast:.2} is below WCAG AA 4.5 (fg={fg_color:?}, bg={bg_color:?})"
+            );
+        }
+    }
 }
