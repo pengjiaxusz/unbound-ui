@@ -497,24 +497,79 @@ pub const YU_GOTHIC_UI: &str = "Yu Gothic UI";
 /// Windows 韩文界面字体。
 pub const MALGUN_GOTHIC: &str = "Malgun Gothic";
 
-/// 按界面语言标签选出应当使用的东亚字体族。
+/// Linux 优先 UI 无衬线字体候选链。
+pub const LINUX_SANS_FALLBACKS: &[&str] = &["Noto Sans", "DejaVu Sans", "Liberation Sans"];
+/// Linux 优先等宽字体候选链。
+pub const LINUX_MONO_FALLBACKS: &[&str] =
+    &["Noto Sans Mono", "DejaVu Sans Mono", "Liberation Mono"];
+/// Linux 简体中文界面 CJK 字体族。
+pub const NOTO_SANS_CJK_SC: &str = "Noto Sans CJK SC";
+/// Linux 繁体中文界面 CJK 字体族。
+pub const NOTO_SANS_CJK_TC: &str = "Noto Sans CJK TC";
+/// Linux 日文界面 CJK 字体族。
+pub const NOTO_SANS_CJK_JP: &str = "Noto Sans CJK JP";
+/// Linux 韩文界面 CJK 字体族。
+pub const NOTO_SANS_CJK_KR: &str = "Noto Sans CJK KR";
+/// Linux 彩色 Emoji 字体族。
+pub const NOTO_COLOR_EMOJI: &str = "Noto Color Emoji";
+
+/// 从 Linux UI 无衬线候选链中选出首个系统已安装的字体族。
+#[must_use]
+pub fn select_linux_sans_family(is_available: impl Fn(&str) -> bool) -> &'static str {
+    LINUX_SANS_FALLBACKS
+        .iter()
+        .copied()
+        .find(|family| is_available(family))
+        .unwrap_or(LINUX_SANS_FALLBACKS[0])
+}
+
+/// 从 Linux 等宽候选链中选出首个系统已安装的字体族。
+#[must_use]
+pub fn select_linux_mono_family(is_available: impl Fn(&str) -> bool) -> &'static str {
+    LINUX_MONO_FALLBACKS
+        .iter()
+        .copied()
+        .find(|family| is_available(family))
+        .unwrap_or(LINUX_MONO_FALLBACKS[0])
+}
+
+/// 按界面语言标签选出应当使用的东亚字体族（Windows 走微软系，Linux 走 Noto CJK）。
 ///
 /// `None` 表示该语言不使用东亚文字（回退到按文本内容自动判定）。
 #[must_use]
 pub fn cjk_family_for_locale(tag: &str) -> Option<&'static str> {
     let t = tag.trim().to_ascii_lowercase();
-    if t.starts_with("zh") {
-        if t.contains("tw") || t.contains("hk") || t.contains("mo") || t.contains("hant") {
-            Some(MS_JHENGHEI_UI)
+    #[cfg(windows)]
+    {
+        if t.starts_with("zh") {
+            if t.contains("tw") || t.contains("hk") || t.contains("mo") || t.contains("hant") {
+                Some(MS_JHENGHEI_UI)
+            } else {
+                Some(MS_YAHEI_UI)
+            }
+        } else if t.starts_with("ja") {
+            Some(YU_GOTHIC_UI)
+        } else if t.starts_with("ko") {
+            Some(MALGUN_GOTHIC)
         } else {
-            Some(MS_YAHEI_UI)
+            None
         }
-    } else if t.starts_with("ja") {
-        Some(YU_GOTHIC_UI)
-    } else if t.starts_with("ko") {
-        Some(MALGUN_GOTHIC)
-    } else {
-        None
+    }
+    #[cfg(not(windows))]
+    {
+        if t.starts_with("zh") {
+            if t.contains("tw") || t.contains("hk") || t.contains("mo") || t.contains("hant") {
+                Some(NOTO_SANS_CJK_TC)
+            } else {
+                Some(NOTO_SANS_CJK_SC)
+            }
+        } else if t.starts_with("ja") {
+            Some(NOTO_SANS_CJK_JP)
+        } else if t.starts_with("ko") {
+            Some(NOTO_SANS_CJK_KR)
+        } else {
+            None
+        }
     }
 }
 
@@ -558,14 +613,44 @@ fn east_asian_family(text: &str, is_available: impl Fn(&str) -> bool) -> Option<
             _ => {}
         }
     }
-    let candidates: [&'static str; 3] = if has_kana {
-        [YU_GOTHIC_UI, MS_YAHEI_UI, MALGUN_GOTHIC]
+    #[cfg(windows)]
+    let candidates: &[&'static str] = if has_kana {
+        &[YU_GOTHIC_UI, MS_YAHEI_UI, MALGUN_GOTHIC]
     } else if has_hangul {
-        [MALGUN_GOTHIC, MS_YAHEI_UI, YU_GOTHIC_UI]
+        &[MALGUN_GOTHIC, MS_YAHEI_UI, YU_GOTHIC_UI]
     } else {
-        [MS_YAHEI_UI, YU_GOTHIC_UI, MALGUN_GOTHIC]
+        &[MS_YAHEI_UI, YU_GOTHIC_UI, MALGUN_GOTHIC]
     };
-    candidates.into_iter().find(|family| is_available(family))
+    #[cfg(not(windows))]
+    let candidates: &[&'static str] = if has_kana {
+        &[
+            NOTO_SANS_CJK_JP,
+            NOTO_SANS_CJK_SC,
+            NOTO_SANS_CJK_TC,
+            NOTO_SANS_CJK_KR,
+            "WenQuanYi Zen Hei",
+        ]
+    } else if has_hangul {
+        &[
+            NOTO_SANS_CJK_KR,
+            NOTO_SANS_CJK_SC,
+            NOTO_SANS_CJK_TC,
+            NOTO_SANS_CJK_JP,
+            "WenQuanYi Zen Hei",
+        ]
+    } else {
+        &[
+            NOTO_SANS_CJK_SC,
+            NOTO_SANS_CJK_TC,
+            NOTO_SANS_CJK_JP,
+            NOTO_SANS_CJK_KR,
+            "WenQuanYi Zen Hei",
+        ]
+    };
+    candidates
+        .iter()
+        .copied()
+        .find(|family| is_available(family))
 }
 
 impl core::fmt::Debug for TextEngine {
@@ -591,7 +676,6 @@ impl TextEngine {
 
     /// 基于已有 `FontSystem` 构建（测试中可使用最小字体集）。
     #[must_use]
-    #[cfg_attr(not(windows), allow(unused_mut))]
     pub fn with_font_system(mut font_system: FontSystem) -> Self {
         #[cfg(windows)]
         {
@@ -618,6 +702,20 @@ impl TextEngine {
                 "Segoe UI"
             });
             db.set_monospace_family("Cascadia Mono");
+        }
+        #[cfg(not(windows))]
+        {
+            let db = font_system.db_mut();
+            let sans = select_linux_sans_family(|candidate| {
+                db.faces()
+                    .any(|face| face.families.iter().any(|(family, _)| family == candidate))
+            });
+            let mono = select_linux_mono_family(|candidate| {
+                db.faces()
+                    .any(|face| face.families.iter().any(|(family, _)| family == candidate))
+            });
+            db.set_sans_serif_family(sans);
+            db.set_monospace_family(mono);
         }
         Self {
             font_system,

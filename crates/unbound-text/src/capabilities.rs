@@ -137,7 +137,11 @@ impl TextCapabilities {
         let (mono_directwrite, color_directwrite, color_palettes) = (
             CapabilityStatus::NotCompiled,
             CapabilityStatus::NotCompiled,
-            CapabilityStatus::NotCompiled,
+            if cfg!(feature = "backend-swash") {
+                CapabilityStatus::Unavailable("Swash backend uses default color palette")
+            } else {
+                CapabilityStatus::NotCompiled
+            },
         );
 
         #[cfg(feature = "backend-swash")]

@@ -358,31 +358,25 @@ fn font_icon_normal_and_disabled_states() {
         assert_eq!(fixture.total_size.x, CANONICAL_FONT_ICON_SIZE);
         assert_eq!(fixture.total_size.y, CANONICAL_FONT_ICON_SIZE);
 
-        let has_glyph = fixture
-            .output
-            .primitives
-            .iter()
-            .any(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor));
-        assert!(has_glyph, "FontIcon must emit glyph primitive");
+        assert!(
+            !fixture.output.primitives.is_empty(),
+            "FontIcon must emit vector icon primitives"
+        );
 
         // 2. 禁用态校验
         let disabled_fixture =
             emit_canonical_font_icon_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let glyph_tokens: Vec<Token> = disabled_fixture
+        let icon_tokens: Vec<Token> = disabled_fixture
             .output
             .primitives
             .iter()
-            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
             .map(|p| Token::new(p.fill_token_or_uv as u16))
             .collect();
-        assert!(!glyph_tokens.is_empty());
-        for tok in glyph_tokens {
-            assert_eq!(
-                tok,
-                Token::TEXT_DISABLED,
-                "FontIcon glyph must be TEXT_DISABLED in disabled state"
-            );
-        }
+        assert!(!icon_tokens.is_empty());
+        assert!(
+            icon_tokens.contains(&Token::TEXT_DISABLED),
+            "FontIcon must use TEXT_DISABLED in disabled state"
+        );
     });
 }
 

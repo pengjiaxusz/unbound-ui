@@ -671,16 +671,16 @@ fn refresh_fixture_normal_outputs_indicator_and_card() {
             STANDARD_REFRESH_INDICATOR_SIZE
         );
 
-        // 2. 使用 Segoe Fluent Icons 刷新字形，不绘制占位弧线
+        // 2. 使用内置矢量 ShellIcon::Redo 绘制刷新图标，不依赖 Windows PUA 字体
         let arc_count = fixture
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
             .count();
-        assert_eq!(
-            arc_count, 0,
-            "RefreshContainer uses icon glyph instead of curves"
+        assert!(
+            arc_count > 0,
+            "RefreshContainer must emit vector ShellIcon primitives"
         );
 
         // 3. 内容卡片文本
