@@ -502,7 +502,44 @@ pub fn overlays(ctx: &mut DemoCtx<'_, '_>, tooltips: bool) {
     }
 }
 
+/// 将 [`Placement`] 方位翻译为当前语言环境文案（替代裸 `{chosen:?}`）。
+fn localized_placement(state: &crate::state::GalleryState, placement: Placement) -> &str {
+    let key = match placement {
+        Placement::Top => "tooltip.placement.top",
+        Placement::TopStart => "tooltip.placement.top_start",
+        Placement::TopEnd => "tooltip.placement.top_end",
+        Placement::Bottom => "tooltip.placement.bottom",
+        Placement::BottomStart => "tooltip.placement.bottom_start",
+        Placement::BottomEnd => "tooltip.placement.bottom_end",
+        Placement::Left => "tooltip.placement.left",
+        Placement::LeftStart => "tooltip.placement.left_start",
+        Placement::LeftEnd => "tooltip.placement.left_end",
+        Placement::Right => "tooltip.placement.right",
+        Placement::RightStart => "tooltip.placement.right_start",
+        Placement::RightEnd => "tooltip.placement.right_end",
+    };
+    state.t(key)
+}
+
+/// Tooltip 演示页气泡模式：纯文本 Win11 样式或富内容组合样式。
+#[derive(Copy, Clone)]
+enum TooltipDemoKind {
+    Plain {
+        text_key: &'static str,
+    },
+    Rich {
+        title_key: &'static str,
+        desc_key: &'static str,
+    },
+}
+
 fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
+    use unbound_theme::Token;
+    use unbound_widgets::kbd::{emit_kbd_chord, KbdChordDesc, KbdSize};
+    use unbound_widgets::primitive::{glyphs as emit_glyphs, surface};
+    use unbound_widgets::tooltip::{TOOLTIP_FONT_SIZE, TOOLTIP_MAX_WIDTH, TOOLTIP_PADDING};
+    use unbound_widgets::{ControlState, WidgetOutput};
+
     let rect = ctx.rect;
     let palette = *ctx.canvas.palette;
     let preferred = match ctx.knob(0) as usize {
@@ -515,12 +552,15 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
 
     let btn_w = 104.0_f32.min((rect.size.x - 24.0) * 0.3);
     let btn_h = 34.0;
-    let triggers = [
+    let triggers: [(Rect, TooltipDemoKind, Icon, &[&str]); 5] = [
         (
             Rect::new(rect.origin.x + 6.0, rect.origin.y + 6.0, btn_w, btn_h),
-            "Top-Left Corner · Auto-Flips Inside",
+            TooltipDemoKind::Rich {
+                title_key: "tooltip.demo.tl.title",
+                desc_key: "tooltip.demo.tl.desc",
+            },
             Icon::Search,
-            "Ctrl+K",
+            &["Ctrl", "K"],
         ),
         (
             Rect::new(
@@ -529,9 +569,11 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
                 btn_w,
                 btn_h,
             ),
-            "Top-Right Edge · Clamped In-Window",
+            TooltipDemoKind::Plain {
+                text_key: "tooltip.demo.tr.plain",
+            },
             Icon::Moon,
-            "T",
+            &["T"],
         ),
         (
             Rect::new(
@@ -540,9 +582,12 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
                 btn_w,
                 btn_h,
             ),
-            "Center Anchor · Follows Preferred Side",
+            TooltipDemoKind::Rich {
+                title_key: "tooltip.demo.center.title",
+                desc_key: "tooltip.demo.center.desc",
+            },
             Icon::Layers,
-            "Space",
+            &["Space"],
         ),
         (
             Rect::new(
@@ -551,9 +596,11 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
                 btn_w,
                 btn_h,
             ),
-            "Bottom-Left Edge · Flips Upward",
+            TooltipDemoKind::Plain {
+                text_key: "tooltip.demo.bl.plain",
+            },
             Icon::Chart,
-            "F12",
+            &["F12"],
         ),
         (
             Rect::new(
@@ -562,15 +609,18 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
                 btn_w,
                 btn_h,
             ),
-            "Bottom-Right Corner · Never Overflows",
+            TooltipDemoKind::Rich {
+                title_key: "tooltip.demo.br.title",
+                desc_key: "tooltip.demo.br.desc",
+            },
             Icon::Snap,
-            "Ctrl+N",
+            &["Ctrl", "N"],
         ),
     ];
 
-    let mut active_tooltip: Option<(Rect, &'static str, Placement)> = None;
+    let mut active: Option<(u64, Rect, TooltipDemoKind, &[&str])> = None;
 
-    for (index, (button, label, icon, shortcut)) in triggers.iter().enumerate() {
+    for (index, (button, kind, icon, shortcut_keys)) in triggers.iter().enumerate() {
         let node = ctx.part(30 + index as u16);
         let visual = widgets::button(
             ctx.canvas,
@@ -582,8 +632,26 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
         );
         widgets::icon(ctx.canvas, *icon, *button, palette.text, palette.card_bg);
         if show_hints {
+            let mode_tag = match kind {
+                TooltipDemoKind::Plain { .. } => ctx.state.t("tooltip.demo.kind.plain"),
+                TooltipDemoKind::Rich { .. } => ctx.state.t("tooltip.demo.kind.rich"),
+            };
             ctx.canvas.text(
-                shortcut,
+                mode_tag,
+                Rect::new(
+                    button.origin.x + 6.0,
+                    button.origin.y + 2.0,
+                    button.size.x - 12.0,
+                    12.0,
+                ),
+                8.5,
+                palette.text_muted,
+                AlignX::Start,
+                AlignY::Top,
+            );
+            let shortcut_label = shortcut_keys.join("+");
+            ctx.canvas.text(
+                &shortcut_label,
                 Rect::new(
                     button.origin.x + 6.0,
                     button.origin.y + 2.0,
@@ -597,36 +665,165 @@ fn tooltip_page(ctx: &mut DemoCtx<'_, '_>) {
             );
         }
         if visual.is_hovered() {
-            let desc = TooltipDesc::new(*button, rect, Vec2::new(224.0, 32.0))
-                .with_label(*label)
-                .with_placement(preferred)
-                .with_gap(6.0)
-                .with_viewport_margin(6.0);
-            let placed = desc.placed();
-            active_tooltip = Some((placed.rect, *label, placed.chosen_placement));
+            active = Some((node, *button, *kind, *shortcut_keys));
         }
     }
 
-    if let Some((tip, label, chosen)) = active_tooltip {
-        ctx.canvas
-            .rect(tip, 7.0, palette.overlay_bg, palette.primary, 1.0, 12.0);
-        ctx.canvas.text(
-            &format!("{label} ({chosen:?})"),
-            Rect::new(
-                tip.origin.x + 8.0,
-                tip.origin.y,
-                (tip.size.x - 16.0).max(0.0),
-                tip.size.y,
-            ),
-            9.5,
-            palette.text,
-            AlignX::Center,
-            AlignY::Center,
-        );
+    if let Some((anchor_node, anchor, kind, shortcut_keys)) = active {
+        let tip_node = ctx.part(40);
+        match kind {
+            TooltipDemoKind::Plain { text_key } => {
+                let base = ctx.state.t(text_key);
+                let probe = TooltipDesc::labeled(anchor, rect, base)
+                    .with_placement(preferred)
+                    .with_gap(6.0)
+                    .with_viewport_margin(6.0);
+                let placement_label = localized_placement(ctx.state, probe.chosen_placement());
+                let full_text = format!("{base} ({placement_label})");
+                ctx.canvas.emit_tooltip_plain(
+                    tip_node,
+                    anchor_node,
+                    anchor,
+                    rect,
+                    &full_text,
+                    preferred,
+                );
+            }
+            TooltipDemoKind::Rich {
+                title_key,
+                desc_key,
+            } => {
+                let title = ctx.state.t(title_key);
+                let desc_text = ctx.state.t(desc_key);
+                let icon_size = 18.0;
+                let icon_gap = 8.0;
+                let kbd_gap = 8.0;
+                let probe_chord =
+                    KbdChordDesc::from_keys(Vec2::ZERO, shortcut_keys).with_size(KbdSize::Sm);
+                let kbd_bounds = probe_chord.bounds();
+                let title_w = ctx.canvas.labels.measure(title, TOOLTIP_FONT_SIZE).x;
+                let row1_w = icon_size + icon_gap + title_w + kbd_gap + kbd_bounds.width();
+                let row1_h = kbd_bounds.height().max(16.0);
+                let row2_h = 15.0;
+                let content_h = row1_h + 4.0 + row2_h;
+                let probe =
+                    TooltipDesc::rich(anchor, rect, Vec2::new(row1_w.max(180.0), content_h))
+                        .with_placement(preferred)
+                        .with_gap(6.0)
+                        .with_viewport_margin(6.0);
+                let placement_label = localized_placement(ctx.state, probe.chosen_placement());
+                let body_line = format!("{desc_text} · {placement_label}");
+                let body_w = ctx.canvas.labels.measure(&body_line, 11.0).x;
+                let max_content_w = (TOOLTIP_MAX_WIDTH - TOOLTIP_PADDING.horizontal()).max(1.0);
+                let content_w = row1_w
+                    .max(icon_size + icon_gap + body_w)
+                    .clamp(160.0, max_content_w);
+                let a11y_label =
+                    format!("{title} — {body_line} ({})", probe_chord.formatted_text());
+                let desc = TooltipDesc::rich(anchor, rect, Vec2::new(content_w, content_h))
+                    .with_label(a11y_label)
+                    .with_placement(preferred)
+                    .with_gap(6.0)
+                    .with_viewport_margin(6.0);
+
+                ctx.canvas.emit_tooltip_rich(
+                    tip_node,
+                    anchor_node,
+                    &desc,
+                    |canvas, content_rect, content_z| {
+                        let mut child = WidgetOutput::default();
+                        // 左侧图标徽章（纯展示圆角底板 + 中心强调点）。
+                        let badge_r = Rect::new(
+                            content_rect.origin.x,
+                            content_rect.origin.y + (row1_h - icon_size) * 0.5,
+                            icon_size,
+                            icon_size,
+                        );
+                        child
+                            .primitives
+                            .push(surface(badge_r, 4.0, Token::ACCENT_SOFT, content_z));
+                        let inner_dot =
+                            Rect::new(badge_r.origin.x + 5.0, badge_r.origin.y + 5.0, 8.0, 8.0);
+                        child.primitives.push(surface(
+                            inner_dot,
+                            4.0,
+                            Token::ACCENT,
+                            content_z.saturating_add(1),
+                        ));
+
+                        // 第一行：标题与右侧 Kbd 快捷键徽章。
+                        let text_x = content_rect.origin.x + icon_size + icon_gap;
+                        let title_w_avail =
+                            (content_rect.max().x - text_x - kbd_bounds.width() - kbd_gap).max(0.0);
+                        let title_r =
+                            Rect::new(text_x, content_rect.origin.y, title_w_avail, row1_h);
+                        let (title_quads, _) = canvas.layout_text(
+                            title,
+                            title_r,
+                            TOOLTIP_FONT_SIZE,
+                            AlignX::Start,
+                            AlignY::Center,
+                        );
+                        emit_glyphs(
+                            &title_quads,
+                            Token::TEXT_PRIMARY,
+                            content_z,
+                            &mut child.primitives,
+                            &mut child.payloads,
+                        );
+
+                        let kbd_x = (content_rect.max().x - kbd_bounds.width()).max(text_x);
+                        let kbd_y = content_rect.origin.y + (row1_h - kbd_bounds.height()) * 0.5;
+                        let mut chord =
+                            KbdChordDesc::from_keys(Vec2::new(kbd_x, kbd_y), shortcut_keys)
+                                .with_size(KbdSize::Sm);
+                        chord.z = content_z;
+                        let mut kbd_quads = Vec::new();
+                        for (key, cap_rect) in chord.keys.iter().zip(chord.keycap_rects()) {
+                            let (q, _) = canvas.layout_text(
+                                key,
+                                cap_rect,
+                                10.0,
+                                AlignX::Center,
+                                AlignY::Center,
+                            );
+                            kbd_quads.extend(q);
+                        }
+                        let kbd_out =
+                            emit_kbd_chord(0, &chord, ControlState::default(), &kbd_quads);
+                        child.append_child_primitives(kbd_out);
+
+                        // 第二行：正文说明与本地化放置方位标签。
+                        let body_r = Rect::new(
+                            text_x,
+                            content_rect.origin.y + row1_h + 4.0,
+                            (content_rect.max().x - text_x).max(0.0),
+                            row2_h,
+                        );
+                        let (body_quads, _) = canvas.layout_text(
+                            &body_line,
+                            body_r,
+                            11.0,
+                            AlignX::Start,
+                            AlignY::Center,
+                        );
+                        emit_glyphs(
+                            &body_quads,
+                            Token::TEXT_SECONDARY,
+                            content_z,
+                            &mut child.primitives,
+                            &mut child.payloads,
+                        );
+
+                        child
+                    },
+                );
+            }
+        }
     }
 
     ctx.canvas.text(
-        "Hover any edge/corner button · TooltipDesc auto-flips and clamps within window bounds",
+        ctx.state.t("tooltip.demo.hint"),
         Rect::new(rect.origin.x, rect.max().y - 20.0, rect.size.x, 16.0),
         9.5,
         palette.text_muted,

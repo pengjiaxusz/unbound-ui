@@ -3260,3 +3260,242 @@ fn collapsible_code_bar_emits_expander_and_code_block_on_toggle() {
         .expect("collapsed code bar must remain in semantics tree");
     assert_eq!(collapsed_again.expanded, Some(false));
 }
+
+/// 辅助：悬停指定节点、确认首帧未弹出（保局部修补预算），推进延迟后再读取 Tooltip 语义标签。
+fn hover_and_expect_tooltip(app: &mut App, viewport: (f32, f32), node: u64) -> String {
+    // 先移离上一个触发器以重置延迟计时，再悬停目标节点验证首帧不弹窗与延迟后弹出。
+    app.pointer_move(Vec2::new(2.0, 2.0));
+    app.rebuild(viewport);
+    let pos = rect_of(app, node).center();
+    app.pointer_move(pos);
+    app.rebuild(viewport);
+    assert!(
+        !app.semantics
+            .iter()
+            .any(|(_, item)| item.role == accesskit::Role::Tooltip),
+        "tooltip must wait for delay on initial hover frame for node {node:#x}"
+    );
+    let _ = app.tick(0.5);
+    app.rebuild(viewport);
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::ToolTip),
+        "delayed hover on node {node:#x} must emit WidgetCatalogId::ToolTip"
+    );
+    app.semantics
+        .iter()
+        .find(|(_, item)| item.role == accesskit::Role::Tooltip)
+        .map(|(_, item)| item.label.clone())
+        .unwrap_or_else(|| panic!("expected Tooltip semantic node for {node:#x}"))
+}
+
+/// 壳层新增全部 Tooltip 入口（顶栏语言/缩放/宽屏主题/搜索、窗口三联、折叠导航与代码展开钮）支持延迟触发、富内容与双语切换。
+#[test]
+fn shell_tooltip_full_coverage_supports_delay_rich_kbd_and_bilingual_switch() {
+    let mut app = app();
+
+    // 1. 顶栏语言与缩放菜单（英文）。
+    let lang_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::LangMenu));
+    assert_eq!(lang_en, app.state.t("tooltip.lang_menu"));
+
+    let zoom_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::ZoomMenu));
+    assert_eq!(zoom_en, app.state.t("tooltip.zoom_menu"));
+
+    // 2. 宽屏态主题分段按钮与全局搜索框（带 Ctrl+K 快捷键 Kbd 富提示）。
+    let light_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::Theme(0)));
+    assert_eq!(light_en, app.state.t("tooltip.theme.to_light"));
+    let dark_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::Theme(1)));
+    assert_eq!(dark_en, app.state.t("tooltip.theme.to_dark"));
+
+    let search_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::Search));
+    assert!(
+        search_en.contains(app.state.t("tooltip.search.label")) && search_en.contains("Ctrl+K"),
+        "wide search tooltip must show command palette text and Ctrl+K shortcut, got {search_en:?}"
+    );
+
+    // 3. 窗口三联控制按钮：最小化、最大化/还原动态切换、关闭（带 Alt+F4 富提示）。
+    let min_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::WindowMinimize));
+    assert_eq!(min_en, app.state.t("tooltip.window.minimize"));
+
+    app.window_maximized = false;
+    app.rebuild(VIEWPORT);
+    let max_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::WindowMaximize));
+    assert_eq!(max_en, app.state.t("tooltip.window.maximize"));
+
+    app.window_maximized = true;
+    app.rebuild(VIEWPORT);
+    let restore_en =
+        hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::WindowMaximize));
+    assert_eq!(restore_en, app.state.t("tooltip.window.restore"));
+
+    let close_en = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::WindowClose));
+    assert!(
+        close_en.contains(app.state.t("tooltip.window.close")) && close_en.contains("Alt+F4"),
+        "close tooltip must show close text and Alt+F4 shortcut, got {close_en:?}"
+    );
+
+    // 4. 示例卡片代码展开钮：随展开/收起状态动态切换文案。
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+    let code_node = target::id(Target::Code(PageId::Buttons.index() as u8, 0));
+    let code_expand = hover_and_expect_tooltip(&mut app, VIEWPORT, code_node);
+    assert_eq!(code_expand, app.state.t("tooltip.code.expand"));
+    click_node(&mut app, code_node);
+    app.pointer_move(Vec2::new(2.0, 2.0));
+    app.rebuild(VIEWPORT);
+    let code_collapse = hover_and_expect_tooltip(&mut app, VIEWPORT, code_node);
+    assert_eq!(code_collapse, app.state.t("tooltip.code.collapse"));
+
+    // 5. 紧凑导航轨折叠项：悬停导航图标弹出完整页面名称提示。
+    let compact_viewport = (900.0, 760.0);
+    app.nav_view.is_pane_open = false;
+    app.rebuild(compact_viewport);
+    let nav_btn = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let nav_tip = hover_and_expect_tooltip(&mut app, compact_viewport, nav_btn);
+    assert_eq!(
+        nav_tip,
+        PageId::Buttons.localized_info(app.state.locale).short
+    );
+
+    // 6. 切换至简体中文后，壳层 Tooltip 同步切换为中文文案。
+    app.state.set_locale(unbound_app::Locale::ZhCn);
+    app.rebuild(VIEWPORT);
+    let lang_zh = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::LangMenu));
+    assert_eq!(lang_zh, app.state.t("tooltip.lang_menu"));
+    assert_ne!(lang_zh, lang_en);
+
+    let close_zh = hover_and_expect_tooltip(&mut app, VIEWPORT, target::id(Target::WindowClose));
+    assert!(
+        close_zh.contains(app.state.t("tooltip.window.close")) && close_zh.contains("Alt+F4"),
+        "zh-CN close tooltip must contain localized label and Alt+F4, got {close_zh:?}"
+    );
+}
+
+/// Tooltip 演示页使用 Win11 真实 ToolTip 组件（`CARD_BORDER` + `4px` 圆角，无亮蓝 `PRIMARY` 边框），
+/// 同时支持纯文本与富内容组合（图标、标题、正文、`Kbd` 徽章）及双语方位标签。
+#[test]
+fn tooltip_demo_page_uses_win11_shell_and_renders_plain_and_rich_content_bilingually() {
+    use unbound_theme::Token;
+
+    let mut app = app();
+    app.navigate(PageId::Overlays);
+    app.rebuild(VIEWPORT);
+
+    let page_idx = PageId::Overlays.index() as u8;
+    let plain_trigger = target::id(Target::Demo(page_idx, 1, 31));
+    let rich_trigger = target::id(Target::Demo(page_idx, 1, 32));
+    let tip_node = target::id(Target::Demo(page_idx, 1, 40));
+
+    // 确保第二张卡片（Tooltip 演示）滚动入视口。
+    let mut scroll = 0.0_f32;
+    while !app.regions.iter().any(|r| r.node == rich_trigger) && scroll < 1200.0 {
+        scroll += 120.0;
+        app.state.content_scroll = scroll;
+        app.rebuild(VIEWPORT);
+    }
+
+    // 1. 悬停纯文本 Win11 Tooltip 触发器（英文）。
+    let plain_pos = rect_of(&app, plain_trigger).center();
+    app.pointer_move(plain_pos);
+    app.rebuild(VIEWPORT);
+    assert!(app
+        .emitted_widgets()
+        .contains(&unbound_widgets::WidgetCatalogId::ToolTip));
+    let plain_a11y = app
+        .semantics
+        .get(tip_node)
+        .expect("plain demo tooltip must expose Tooltip semantic node");
+    assert_eq!(plain_a11y.role, accesskit::Role::Tooltip);
+    assert!(
+        plain_a11y
+            .label
+            .contains(app.state.t("tooltip.demo.tr.plain")),
+        "plain tooltip must use localized plain text, got {:?}",
+        plain_a11y.label
+    );
+
+    // 校验无亮蓝 Token::PRIMARY 边框，且存在 Token::CARD_BORDER + 4.0px 圆角外壳。
+    let has_card_border_4px = app.scene.primitives.iter().any(|p| {
+        p.border_token_or_tex == u32::from(Token::CARD_BORDER.raw())
+            && (unbound_math::f16::unpack_radii(p.corner_radii)[0] - 4.0).abs() < 0.05
+            && p.fill_token_or_uv == u32::from(Token::NONE.raw())
+    });
+    assert!(
+        has_card_border_4px,
+        "demo tooltip shell must emit 4px CARD_BORDER outline"
+    );
+
+    // 2. 悬停富内容 Tooltip 触发器（图标 + 标题 + 正文 + Kbd 徽章）。
+    let rich_pos = rect_of(&app, rich_trigger).center();
+    app.pointer_move(rich_pos);
+    app.rebuild(VIEWPORT);
+    let rich_a11y = app
+        .semantics
+        .get(tip_node)
+        .expect("rich demo tooltip must expose Tooltip semantic node");
+    assert_eq!(rich_a11y.role, accesskit::Role::Tooltip);
+    assert!(
+        rich_a11y
+            .label
+            .contains(app.state.t("tooltip.demo.center.title"))
+            && rich_a11y
+                .label
+                .contains(app.state.t("tooltip.demo.center.desc"))
+            && rich_a11y.label.contains("Space"),
+        "rich tooltip a11y must include title, description and Kbd shortcut, got {:?}",
+        rich_a11y.label
+    );
+
+    // 检查 Tooltip 节点自身的图元跨度：禁止出现亮蓝 PRIMARY 边框，且包含 Kbd 键帽与次级正文图元。
+    let (span_start, span_end) = app
+        .node_spans()
+        .get(&tip_node)
+        .copied()
+        .expect("demo tooltip must record primitive span");
+    let tip_prims = &app.scene.primitives[span_start as usize..span_end as usize];
+    assert!(
+        !tip_prims
+            .iter()
+            .any(|p| p.border_token_or_tex == u32::from(Token::PRIMARY.raw())),
+        "demo tooltip must never emit bright blue PRIMARY border"
+    );
+    assert!(
+        tip_prims.iter().any(|p| {
+            p.border_token_or_tex == u32::from(Token::CARD_BORDER.raw())
+                && (unbound_math::f16::unpack_radii(p.corner_radii)[0] - 4.0).abs() < 0.05
+        }),
+        "rich demo tooltip shell must use CARD_BORDER and 4.0px radius"
+    );
+    assert!(
+        tip_prims.iter().any(
+            |p| p.fill_token_or_uv == u32::from(Token::SURFACE_RAISED.raw())
+                && p.border_token_or_tex == u32::from(Token::CONTROL_STROKE.raw())
+        ),
+        "rich demo tooltip must render Kbd keycap badge primitives"
+    );
+    assert!(
+        tip_prims
+            .iter()
+            .any(|p| p.fill_token_or_uv == u32::from(Token::TEXT_SECONDARY.raw())),
+        "rich demo tooltip must render secondary description line glyphs"
+    );
+
+    // 3. 切换为简体中文后，富内容标题、正文与方位标签同步切换为中文（非英文调试名）。
+    app.state.set_locale(unbound_app::Locale::ZhCn);
+    app.rebuild(VIEWPORT);
+    let rich_zh = app
+        .semantics
+        .get(tip_node)
+        .expect("zh-CN rich demo tooltip must expose Tooltip semantic node");
+    assert!(
+        rich_zh
+            .label
+            .contains(app.state.t("tooltip.demo.center.title"))
+            && rich_zh
+                .label
+                .contains(app.state.t("tooltip.demo.center.desc"))
+            && rich_zh.label.contains(app.state.t("tooltip.placement.top")),
+        "zh-CN rich tooltip must translate title, body and placement label, got {:?}",
+        rich_zh.label
+    );
+}

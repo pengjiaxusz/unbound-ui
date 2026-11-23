@@ -1317,8 +1317,16 @@ impl GalleryApp {
             && !state.zoom_dropdown_open
             && editor_menu.is_none()
         {
-            tooltip_target_of(state, &layout, &resolved_nav_layout, hover)
-                .map(|_| hover.unwrap_or(0))
+            tooltip_target_of(
+                state,
+                &layout,
+                &resolved_nav_layout,
+                Some(&page_layout),
+                self.window_maximized,
+                canvas.labels,
+                hover,
+            )
+            .and(hover)
         } else {
             None
         };
@@ -1331,6 +1339,8 @@ impl GalleryApp {
                 state,
                 &layout,
                 &resolved_nav_layout,
+                Some(&page_layout),
+                self.window_maximized,
                 tooltip_hover,
             );
         }
@@ -1408,8 +1418,16 @@ impl GalleryApp {
             && !self.state.zoom_dropdown_open
             && !self.editor_menu_open()
         {
-            tooltip_target_of(&self.state, &self.layout, &self.nav_layout, self.last_hover)
-                .and(self.last_hover)
+            tooltip_target_of(
+                &self.state,
+                &self.layout,
+                &self.nav_layout,
+                self.page_layout.as_ref(),
+                self.window_maximized,
+                &mut self.labels,
+                self.last_hover,
+            )
+            .and(self.last_hover)
         } else {
             None
         };
@@ -3895,53 +3913,121 @@ fn draw_editor_menu(canvas: &mut Canvas<'_>, paint: Option<&EditorMenuPaint>) {
     canvas.widget_output(WidgetCatalogId::ContextMenu, 0, &output);
 }
 
-/// 解析当前悬停节点对应的顶栏/页脚 Tooltip 锚点、提示文案与放置方向。
-fn tooltip_target_of<'a>(
-    state: &'a GalleryState,
+/// 壳层悬停工具提示的解析结果（支持纯文本与带 `Kbd` 快捷键徽章的富内容气泡）。
+struct ShellTooltipTarget {
+    anchor: Rect,
+    text: String,
+    shortcut: &'static [&'static str],
+    placement: unbound_widgets::overlay::Placement,
+}
+
+/// 解析当前悬停节点对应的壳层 Tooltip 锚点、双语文案、快捷键徽章与放置方向。
+fn tooltip_target_of(
+    state: &GalleryState,
     layout: &ShellLayout,
     nav_layout: &NavigationViewLayout,
+    page_layout: Option<&PageLayout>,
+    window_maximized: bool,
+    labels: &mut Labels,
     hovered: Option<u64>,
-) -> Option<(Rect, &'a str, unbound_widgets::overlay::Placement)> {
+) -> Option<ShellTooltipTarget> {
     use unbound_widgets::overlay::Placement;
+    use unbound_widgets::segmented::SegmentedDesc;
 
     let hovered_node = hovered?;
     let target = target::decode(hovered_node)?;
-    let (anchor, text, placement) = match target {
-        Target::Snap => (
-            layout.snap,
-            state.t(if state.pixel_snap {
-                "tooltip.pixel_snap.on"
+    let resolved = match target {
+        Target::Snap => ShellTooltipTarget {
+            anchor: layout.snap,
+            text: state
+                .t(if state.pixel_snap {
+                    "tooltip.pixel_snap.on"
+                } else {
+                    "tooltip.pixel_snap.off"
+                })
+                .to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::Hud => ShellTooltipTarget {
+            anchor: layout.hud,
+            text: state
+                .t(if state.show_hud {
+                    "tooltip.hud.on"
+                } else {
+                    "tooltip.hud.off"
+                })
+                .to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::NavToggle => ShellTooltipTarget {
+            anchor: layout.nav_toggle,
+            text: state.t("tooltip.nav_toggle").to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::LangMenu => ShellTooltipTarget {
+            anchor: layout.lang,
+            text: state.t("tooltip.lang_menu").to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::ZoomMenu => ShellTooltipTarget {
+            anchor: layout.zoom,
+            text: state.t("tooltip.zoom_menu").to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::Theme(bit) => {
+            let anchor = if layout.compact {
+                layout.theme
             } else {
-                "tooltip.pixel_snap.off"
-            }),
-            Placement::Bottom,
-        ),
-        Target::Hud => (
-            layout.hud,
-            state.t(if state.show_hud {
-                "tooltip.hud.on"
-            } else {
-                "tooltip.hud.off"
-            }),
-            Placement::Bottom,
-        ),
-        Target::NavToggle => (
-            layout.nav_toggle,
-            state.t("tooltip.nav_toggle"),
-            Placement::Bottom,
-        ),
-        Target::Theme(bit) if layout.compact => (
-            layout.theme,
-            state.t(if bit == 0 {
-                "tooltip.theme.to_light"
-            } else {
-                "tooltip.theme.to_dark"
-            }),
-            Placement::Bottom,
-        ),
-        Target::Search if layout.search.size.x > 0.0 && layout.search.size.x < 100.0 => {
-            (layout.search, state.t("tooltip.search"), Placement::Bottom)
+                SegmentedDesc::new(layout.theme, &["", ""]).segment_rect(usize::from(bit).min(1))
+            };
+            ShellTooltipTarget {
+                anchor,
+                text: state
+                    .t(if bit == 0 {
+                        "tooltip.theme.to_light"
+                    } else {
+                        "tooltip.theme.to_dark"
+                    })
+                    .to_owned(),
+                shortcut: &[],
+                placement: Placement::Bottom,
+            }
         }
+        Target::Search if layout.search.size.x > 0.0 => ShellTooltipTarget {
+            anchor: layout.search,
+            text: state.t("tooltip.search.label").to_owned(),
+            shortcut: &["Ctrl", "K"],
+            placement: Placement::Bottom,
+        },
+        Target::WindowMinimize => ShellTooltipTarget {
+            anchor: layout.window_minimize,
+            text: state.t("tooltip.window.minimize").to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::WindowMaximize => ShellTooltipTarget {
+            anchor: layout.window_maximize,
+            text: state
+                .t(if window_maximized {
+                    "tooltip.window.restore"
+                } else {
+                    "tooltip.window.maximize"
+                })
+                .to_owned(),
+            shortcut: &[],
+            placement: Placement::Bottom,
+        },
+        Target::WindowClose => ShellTooltipTarget {
+            anchor: layout.window_close,
+            text: state.t("tooltip.window.close").to_owned(),
+            shortcut: &["Alt", "F4"],
+            placement: Placement::Bottom,
+        },
         Target::Footer(idx) => {
             let row = nav_layout
                 .rows
@@ -3952,55 +4038,121 @@ fn tooltip_target_of<'a>(
             } else {
                 "tooltip.footer.settings"
             };
-            (row.rect, state.t(key), Placement::Right)
+            ShellTooltipTarget {
+                anchor: row.rect,
+                text: state.t(key).to_owned(),
+                shortcut: &[],
+                placement: Placement::Right,
+            }
+        }
+        Target::NavPage(_) | Target::NavComponent(_) => {
+            let row = nav_layout
+                .rows
+                .iter()
+                .chain(nav_layout.flyout_rows.iter())
+                .chain(nav_layout.overflow_rows.iter())
+                .find(|row| row.item_id() == Some(hovered_node))?;
+            let NavigationViewRowKind::Item { item, depth, .. } = &row.kind else {
+                return None;
+            };
+            let compact_rail = !nav_layout.is_top
+                && nav_layout.overlay_rect.is_none()
+                && nav_layout.pane_rect.width() <= NAVIGATION_VIEW_COMPACT_PANE_LENGTH + 4.0;
+            let chevron_w = if item.children.is_empty() { 0.0 } else { 20.0 };
+            let avail_text_w =
+                (row.rect.width() - 44.0 - (*depth as f32) * 24.0 - chevron_w).max(0.0);
+            let label_w = labels.measure(&item.content, 12.0).x;
+            if !compact_rail && row.rect.width() > 56.0 && label_w <= avail_text_w {
+                return None;
+            }
+            ShellTooltipTarget {
+                anchor: row.rect,
+                text: item.content.clone(),
+                shortcut: &[],
+                placement: Placement::Right,
+            }
+        }
+        Target::Code(page_idx, card_idx) => {
+            let page = page_layout?;
+            if page.page.index() as u8 != page_idx {
+                return None;
+            }
+            let card = page
+                .cards
+                .iter()
+                .find(|card| card.index as u8 == card_idx)?;
+            if card.code_bar.max().y <= layout.content.origin.y
+                || card.code_bar.origin.y >= layout.content.max().y
+            {
+                return None;
+            }
+            let open = state.code_open(page.page, card_idx);
+            ShellTooltipTarget {
+                anchor: card.code_bar,
+                text: state
+                    .t(if open {
+                        "tooltip.code.collapse"
+                    } else {
+                        "tooltip.code.expand"
+                    })
+                    .to_owned(),
+                shortcut: &[],
+                placement: Placement::Top,
+            }
         }
         _ => return None,
     };
-    if anchor.size.x <= 0.0 || anchor.size.y <= 0.0 {
+    if resolved.anchor.size.x <= 0.0 || resolved.anchor.size.y <= 0.0 {
         return None;
     }
-    Some((anchor, text, placement))
+    Some(resolved)
 }
 
-/// 顶栏工具按钮与侧边栏页脚入口的悬停 Tooltip（基于 `unbound_widgets::tooltip::TooltipDesc`）。
+/// 壳层全部交互入口的悬停 Tooltip（统一走 Win11 默认纯文本或 `Kbd` 富内容桥接）。
 fn draw_top_bar_tooltip(
     canvas: &mut Canvas<'_>,
     state: &GalleryState,
     layout: &ShellLayout,
     nav_layout: &NavigationViewLayout,
+    page_layout: Option<&PageLayout>,
+    window_maximized: bool,
     hovered: Option<u64>,
 ) {
-    use unbound_widgets::tooltip::TooltipDesc;
-
     let Some(hovered_node) = hovered else {
         return;
     };
-    let Some((anchor, text, placement)) = tooltip_target_of(state, layout, nav_layout, hovered)
-    else {
+    let Some(target) = tooltip_target_of(
+        state,
+        layout,
+        nav_layout,
+        page_layout,
+        window_maximized,
+        canvas.labels,
+        hovered,
+    ) else {
         return;
     };
 
-    let measured = canvas.labels.measure(text, 11.0);
-    let padding = Vec2::new(10.0, 6.0);
-    let size = Vec2::new(
-        (measured.x + padding.x * 2.0).clamp(48.0, 420.0),
-        (measured.y + padding.y * 2.0).max(26.0),
-    );
-    let desc = TooltipDesc::new(anchor, layout.viewport, size)
-        .with_label(text)
-        .with_placement(placement)
-        .with_gap(6.0)
-        .with_viewport_margin(8.0)
-        .with_padding(padding);
-    let content = desc.content_rect();
-    let (quads, _) = canvas.layout_text(text, content, 11.0, AlignX::Start, AlignY::Center);
-    let (output, _) = desc.render_with_glyphs(
-        TOP_BAR_TOOLTIP_NODE,
-        hovered_node,
-        ControlState::default(),
-        &quads,
-    );
-    canvas.widget_output(WidgetCatalogId::ToolTip, TOP_BAR_TOOLTIP_NODE, &output);
+    if target.shortcut.is_empty() {
+        canvas.emit_tooltip_plain(
+            TOP_BAR_TOOLTIP_NODE,
+            hovered_node,
+            target.anchor,
+            layout.viewport,
+            &target.text,
+            target.placement,
+        );
+    } else {
+        canvas.emit_tooltip_with_shortcut(
+            TOP_BAR_TOOLTIP_NODE,
+            hovered_node,
+            target.anchor,
+            layout.viewport,
+            &target.text,
+            target.shortcut,
+            target.placement,
+        );
+    }
 }
 
 /// 构造与顶栏对齐的独立窗口控制按钮组描述符（ADR-0029）。
