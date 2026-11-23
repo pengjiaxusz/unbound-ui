@@ -5,7 +5,7 @@ use unbound_text::{
     AtlasConfig, AtlasTarget, EmojiPresentation, GlyphAtlas, GlyphKey, TextEngine, TextStyle,
 };
 
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use super::ENV_MUTEX;
 
 /// 验收标准 1：验证在纯灰度普通文本渲染场景下，RGBA8 图集永不创建（显存严格为 4 MiB）。
 #[test]

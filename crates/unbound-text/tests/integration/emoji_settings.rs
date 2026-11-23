@@ -5,7 +5,7 @@ use unbound_text::{
     PhaseMode, TextCapabilities, TextEngine, TextRenderSettings, TextStyle,
 };
 
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use super::ENV_MUTEX;
 
 #[test]
 fn emoji_presentation_triggers_bitmap_invalidation() {

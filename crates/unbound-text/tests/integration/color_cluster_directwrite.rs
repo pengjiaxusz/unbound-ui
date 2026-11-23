@@ -6,8 +6,6 @@
 //! 只断言外部可观察结果：四边形数量、是否落 RGBA 图集、相位是否为 0、
 //! 位图的色相占比、回退计数。不看内部字段。
 
-#![cfg(all(windows, feature = "backend-directwrite"))]
-
 use unbound_math::Vec2;
 use unbound_text::{
     AtlasTarget, AtlasUpdate, EmojiBackend, EmojiPresentation, GlyphCache, TextEngine,

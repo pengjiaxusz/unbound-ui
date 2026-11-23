@@ -5,7 +5,7 @@ use unbound_math::Vec2;
 use unbound_text::AtlasTarget;
 use unbound_text::{GlyphCache, InvalidationTier, RasterBackend, TextEngine, TextStyle};
 
-static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use super::ENV_MUTEX;
 
 fn create_engine() -> TextEngine {
     TextEngine::new()
@@ -186,8 +186,15 @@ fn directwrite_init_failure_fallback_and_monotonic_counter() {
     // 记录初始回退数
     let initial_fallback_count = cache.fallback_count();
 
-    // 设置强制初始化失败环境变量
+    // 通过 RAII 守卫设置并确保退出时清理强制初始化失败环境变量，避免 panic 污染同进程后续测试
+    struct ForceDwInitFailGuard;
+    impl Drop for ForceDwInitFailGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL");
+        }
+    }
     std::env::set_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL", "1");
+    let _dw_fail_guard = ForceDwInitFailGuard;
 
     let mut dw_settings = cache.settings().clone();
     dw_settings.raster_backend = RasterBackend::DirectWrite;
@@ -195,8 +202,8 @@ fn directwrite_init_failure_fallback_and_monotonic_counter() {
     let tier = cache.apply_settings(&dw_settings, Some(&mut engine));
     assert_eq!(tier, InvalidationTier::Bitmap);
 
-    // 清理环境变量
-    std::env::remove_var("UNBOUND_TEXT_FORCE_DW_INIT_FAIL");
+    // 提前释放守卫以清理环境变量
+    drop(_dw_fail_guard);
 
     // 验证回退到 Cosmic
     let report = cache.report();

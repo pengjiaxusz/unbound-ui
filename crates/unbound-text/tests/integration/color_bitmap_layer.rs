@@ -16,8 +16,6 @@
 //! 返回 `None`，所以这一组在此处走的是跳过分支；位图分支的可测部分压在
 //! `classify_layer_format` 的单元测试与 `bgra_premul_to_rgba` 的换算测试上。
 
-#![cfg(all(windows, feature = "backend-directwrite"))]
-
 use unbound_math::Vec2;
 use unbound_text::{
     AtlasTarget, DirectWriteRasterizer, EmojiPresentation, GlyphCache, TextEngine, TextStyle,
