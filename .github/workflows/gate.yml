@@ -24,13 +24,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # 使用最新主版本 Action（Node 24 运行时，无 Node 20 弃用警告）；项目扩展自有 CI 工作流时，建议统一采用 `actions/checkout@v7`、`actions/cache@v6`、`Swatinem/rust-cache@v2`、`taiki-e/install-action@v2` 并开启 `concurrency`。
+      - uses: actions/checkout@v7
         with:
           # 校验提交范围需要完整历史；检出 head ref 可避免把 GitHub 自动生成的合并提交算进来。
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           # checkout 默认不检出子模块，路径依赖放在子模块里的项目连 workspace 都加载不了，而报错表现为「找不到依赖」而不是缺子模块。没有子模块的项目不受影响。
           submodules: true
+
+      # 保持 `gate` 在每次推送与 PR 上运行以确保必需状态检查永不挂起，但若本次改动仅涉及文档，则跳过 Rust 与代码检查步骤。
+      - name: 探测代码变更
+        id: changes
+        env:
+          GATE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          base="${GATE_BASE:-}"
+          if printf '%s' "$base" | grep -qE '^0+$' || [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" >/dev/null 2>&1; then
+            echo "code_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$base"..HEAD 2>/dev/null || true)
+          if [ -z "$changed" ]; then
+            echo "code_changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code_changed=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              docs/*|.agents/*|.github/pull_request_template.md|LICENSE*)
+                ;;
+              */*)
+                code_changed=true
+                break
+                ;;
+              *.md)
+                ;;
+              *)
+                code_changed=true
+                break
+                ;;
+            esac
+          done <<EOF
+          $changed
+          EOF
+          echo "code_changed=$code_changed" >> "$GITHUB_OUTPUT"
 
       - name: 安装 pengj-templates-cli
         run: |
@@ -70,6 +109,7 @@ jobs:
           exit "$status"
 
       - name: 运行代码语言守卫
+        if: steps.changes.outputs.code_changed == 'true'
         run: |
           set +e
           output=$(pengj-templates-cli gate check 2>&1)
@@ -109,4 +149,5 @@ jobs:
 
       # 本地 pre-commit 钩子会格式化暂存的 Rust 文件；没装 CLI 时这一步不会发生，所以由服务端补上。
       - name: 检查代码格式
+        if: steps.changes.outputs.code_changed == 'true'
         run: cargo fmt --check

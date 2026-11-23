@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.86.0",
+  "version": "0.87.0",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -168,16 +168,16 @@
     ".gitattributes": "a9dccf6d2265dfc6213af7202303ee90533c3f267a8e5bff81b0bca8811b8600",
     ".githooks/commit-msg": "9f2030e7562640e3c6e49b5a2665856ca7e9c4d5f39ab5c1a065d8cc9b16bdf9",
     ".githooks/pre-commit": "dc1c46226c433378514c943fbc84f965bca8f46efb75f690c4ab614cc307515a",
-    ".githooks/pre-push": "65289a4930a1ad794ac93f7ade7be2caa29297beea36399c5b209cd559805cab",
+    ".githooks/pre-push": "2b2372c80e4ef2cd2df4c975ad918227df476f9460eeb06cca45f22e00e13f74",
     ".github/pull_request_template.md": "ef7999ed47385d86be8ca47ab389951923fa95b4df6d59c0942e05c8c888501e",
     ".github/rulesets/gate.json": "2bb6ffbe9d29e527986b86ec139f8ed6138711b594a43240e4e1954a450d67e8",
-    ".github/workflows/gate.yml": "9c6ea4ae781b587bd07ac3f41ffa1543c5605dc2db18209bfb908dff9d1182a8",
+    ".github/workflows/gate.yml": "c85898dec71a50487363ae039f9f05a89f5620987865b674d276fa0e3ffb31e1",
     ".gitignore": "9908a23d777d0023f1b112d02159864081a49f86491e0ee5abdadcac137c0f9d",
-    ".pengj-templates/gate.toml": "800af9020c29544f1f1516cce3ce3644c4f5b778509c6280e56fc2a0e8487245",
+    ".pengj-templates/gate.toml": "0e1a4f66355389ea9002ad833a80349eb2687db319c22cf5ba61063e6ee43e6b",
     ".pengj-templates/just/gate.just": "7106205b7bc88ab81d4befa27ae9bc4a7bdebe1c2918af18b93e2d12a9ce2bfb",
     ".pengj-templates/just/rust-workspace.just": "ca5cb76ff881da972d8a79cea6b35b5ca89f9ed95ab0f2f3f0bf1a416e775ecf",
     ".pengj-templates/just/worktree.just": "fa028c5d36493407cb8713541259262da550e7ceb7631aa171b4cda48b11ce82",
-    ".pengj-templates/scripts/doctor.cmd": "96c12ea97a20e92835af7dae0b982ad9e3c22b9a3a65a744a6960e61d98ea133",
+    ".pengj-templates/scripts/doctor.cmd": "3498d22336badc2843d5b57792d58c18771d805e9fc081e20108fae53b04ee00",
     ".pengj-templates/scripts/doctor.d/README.md": "fb7a29477e7f6216cf076a4344e6f97cda4b7aa48efc1f0e00209339acceb64f",
     ".pengj-templates/scripts/doctor.sh": "daa6ac243414673714acc2e44e8620059e6d6a1f80d4c7bd68c5d2fbb435f2e7",
     ".pengj-templates/scripts/setup.cmd": "dfce2f82d354b734e52f46f0832a3ca11b59db0d2fc97e4f85a0a8a9d4a44cdd",
@@ -187,7 +187,7 @@
     "AGENTS.md": "0fe516aa7d28f8ebb49daadfa87ec7108a56cfcafc251850f940a432bb93652c",
     "CONTRIBUTING.md": "433e060b280aba3d150db28569908c541b4068cf7a0b5aeabdcd056aadecf1f4",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
-    "justfile": "e19804a0e5a79ce509e79f551f59184a770256e61f2dd5cea1d13fc849c11a11",
+    "justfile": "e85ea1ec1bb137b4a35e096f26da31495772aa07ee1c3100ebe5abfeb3081e00",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
   }
 }

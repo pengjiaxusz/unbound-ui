@@ -3,10 +3,10 @@
 #
 # 为什么非要这一层：`git am`、`git cherry-pick`、`git rebase` 都不触发 `pre-commit`，只有 `git commit` 会。于是批量落补丁一路没有格式与语言检查，问题拖到 CI 才炸。`pre-push` 是每一种造历史方式都要经过的那个钩子。
 #
-# 推送离开本机之前跑三项：
+# `pre-push` 默认保持秒级轻量（clippy、全量测试等重型检查交由 CI）：
 #   1. `cargo fmt --check`，与 CI 完全同一条命令；
 #   2. 代码语言守卫，覆盖整个工作树；
-#   3. `.pengj-templates/gate.toml` 里 `prepush.commands` 声明的命令，按序执行——clippy 这类项目自己的检查放这儿。
+#   3. `.pengj-templates/gate.toml` 里 `prepush.commands` 声明的可选命令，默认留空；受限环境可设 `PENGJ_GATE_SKIP_PREPUSH_COMMANDS=1` 仅跳过自定义命令而保留内置秒级门禁。
 #
 # git 把待推的引用写在 stdin 上，本钩子必须原样转交，所以用 `exec` 而不是把输出捕获下来。
 #
