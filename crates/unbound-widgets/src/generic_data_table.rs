@@ -8,6 +8,7 @@ use unbound_text::{GlyphQuad, PinyinMatcher};
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined, surface};
+use crate::scroll::{emit_scrollbar, ScrollBarDesc, ScrollPointerEvent};
 use crate::{ControlState, PointerPhase, WidgetOutput};
 
 const LAYER: u8 = 1;
@@ -62,6 +63,8 @@ pub struct GenericDataTableState {
     pub focused_row: Option<usize>,
     pub scroll_offset_y: f32,
     pub filter_query: String,
+    scrollbar_hovered: bool,
+    scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl GenericDataTableState {
@@ -167,6 +170,70 @@ impl GenericDataTableState {
         self.focused_row = Some(next);
         self.selected_rows = vec![next];
     }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造表格数据区（不含表头与底部汇总栏）对应的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &GenericDataTableDesc, visible_len: usize) -> ScrollBarDesc {
+        let mut bar = ScrollBarDesc::vertical(
+            desc.body_rect(),
+            desc.content_height(visible_len),
+            self.scroll_offset_y,
+        );
+        bar.z = desc.z.saturating_add(5);
+        bar.layer = LAYER;
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于数据区垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(
+        &mut self,
+        desc: &GenericDataTableDesc,
+        visible_len: usize,
+        event: ScrollPointerEvent,
+    ) -> bool {
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc, visible_len);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.scroll_offset_y));
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    self.scroll_offset_y = next_y;
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc, visible_len);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                self.scroll_offset_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
+        }
+    }
 }
 
 /// 泛型数据表渲染描述符。
@@ -241,6 +308,40 @@ impl GenericDataTableDesc {
                 .map(|c| c.width.max(c.min_width))
                 .collect()
         }
+    }
+
+    /// 表头栏矩形（固定 32px 高）。
+    #[must_use]
+    pub fn header_rect(&self) -> Rect {
+        Rect::new(
+            self.rect.origin.x + 1.0,
+            self.rect.origin.y + 1.0,
+            (self.rect.size.x - 2.0).max(1.0),
+            32.0,
+        )
+    }
+
+    /// 表头下方、汇总栏上方的数据区视口矩形（绝不覆盖表头与底部汇总栏）。
+    #[must_use]
+    pub fn body_rect(&self) -> Rect {
+        let top = self.header_rect().max().y;
+        let bottom = if self.show_summary_footer {
+            self.rect.max().y - 28.0
+        } else {
+            self.rect.max().y - 1.0
+        };
+        Rect::new(
+            self.rect.origin.x + 1.0,
+            top,
+            (self.rect.size.x - 2.0).max(0.0),
+            (bottom - top).max(0.0),
+        )
+    }
+
+    /// 可见数据行的总内容高度（逻辑像素）。
+    #[must_use]
+    pub fn content_height(&self, visible_len: usize) -> f32 {
+        visible_len as f32 * self.row_height
     }
 }
 
@@ -362,7 +463,16 @@ pub fn emit_generic_data_table(
         control.focused && !control.disabled,
     ));
 
-    WidgetOutput {
+    // 按需叠加垂直滚动条：宿主在数据区 `body_rect()` 内，绝不覆盖表头与底部汇总栏。
+    let mut bar = state.scrollbar_desc(desc, visible_len);
+    bar.hovered = bar.hovered
+        || (!control.disabled
+            && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+    bar.disabled = control.disabled;
+    let bar_out = emit_scrollbar(node, &bar);
+    primitives.extend(bar_out.output.primitives);
+
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit: (!control.disabled)
@@ -370,7 +480,13 @@ pub fn emit_generic_data_table(
         a11y: Some(A11yNode::new(Role::Table, "Data Table", r).disabled(control.disabled)),
         focusable: !control.disabled,
         ..Default::default()
+    };
+    if !control.disabled {
+        for hit in bar_out.hits {
+            out.sub_hits.push(hit);
+        }
     }
+    out
 }
 
 #[cfg(test)]
@@ -405,5 +521,99 @@ mod tests {
 
         GenericDataTableState::resize_column(&mut cols, 0, -500.0);
         assert_eq!(cols[0].width, cols[0].min_width);
+    }
+
+    #[test]
+    fn generic_data_table_overlay_scrollbar_stays_in_body_rect_and_emits_only_on_overflow() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+        use unbound_math::Vec2;
+
+        let cols = vec![
+            DataColumnSpec::new("id", "ID", 80.0),
+            DataColumnSpec::new("name", "Name", 160.0),
+        ];
+        let rect = Rect::new(0.0, 0.0, 320.0, 200.0);
+        let node = 42u64;
+        let thumb_node = scrollbar_thumb_node(node, ScrollbarAxis::Vertical);
+        let track_node = scrollbar_track_node(node, ScrollbarAxis::Vertical);
+
+        // 未溢出：2 行（64px <= body 139px）不发射滚动条图元与命中区。
+        let short_rows = vec![
+            vec!["1".into(), "Alpha".into()],
+            vec!["2".into(), "Beta".into()],
+        ];
+        let short_desc = GenericDataTableDesc::new(rect, cols.clone(), 4).with_rows(short_rows);
+        let short_state = GenericDataTableState::new();
+        let short_out = emit_generic_data_table(
+            node,
+            &short_desc,
+            &short_state,
+            ControlState::default(),
+            &[],
+        );
+        assert!(short_out.sub_hits.is_empty());
+
+        // 溢出：12 行（384px > body 139px）在数据区发射 2 个稳定槽位与轨道/滑块命中区。
+        let tall_rows: Vec<Vec<String>> = (0..12)
+            .map(|i| vec![format!("{i}"), format!("Row {i}")])
+            .collect();
+        let tall_desc = GenericDataTableDesc::new(rect, cols, 4).with_rows(tall_rows);
+        let mut tall_state = GenericDataTableState::new();
+        let idle_out =
+            emit_generic_data_table(node, &tall_desc, &tall_state, ControlState::default(), &[]);
+        assert_eq!(idle_out.primitives.len(), short_out.primitives.len() + 2);
+        let track_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == track_node)
+            .expect("generic data table track hit");
+        let thumb_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == thumb_node)
+            .expect("generic data table thumb hit");
+        assert!(track_hit.bounds.origin.y >= tall_desc.header_rect().max().y);
+        assert!(tall_desc.body_rect().contains_rect(&track_hit.bounds));
+        assert!(tall_desc.body_rect().contains_rect(&thumb_hit.bounds));
+
+        let n = idle_out.primitives.len();
+        assert_eq!(idle_out.primitives[n - 2].opacity(), 0.0);
+        assert!((idle_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+
+        // 悬停展开为 6px 粗滑块与半透明轨道胶囊，图元总数恒定。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_out =
+            emit_generic_data_table(node, &tall_desc, &tall_state, ControlState::default(), &[]);
+        assert_eq!(hovered_out.primitives.len(), n);
+        assert!(hovered_out.primitives[n - 2].opacity() > 0.0);
+        assert!((hovered_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击轨道翻页与拖拽滑块。
+        let track_click = Vec2::new(track_hit.bounds.center().x, track_hit.bounds.max().y - 4.0);
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &tall_desc,
+            12,
+            ScrollPointerEvent::Press(track_click)
+        ));
+        assert!(tall_state.scroll_offset_y > 0.0);
+
+        let cur_thumb = tall_state.scrollbar_desc(&tall_desc, 12).thumb_rect();
+        let drag_start = cur_thumb.center();
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &tall_desc,
+            12,
+            ScrollPointerEvent::Press(drag_start)
+        ));
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &tall_desc,
+            12,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 30.0))
+        ));
+        assert!(tall_state.reduce_scrollbar_pointer(&tall_desc, 12, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }

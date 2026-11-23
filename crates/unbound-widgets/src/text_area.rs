@@ -20,13 +20,15 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
-use crate::scroll::{ScrollState, ScrollViewDesc};
+use crate::scroll::{
+    emit_scrollbar, ScrollBarDesc, ScrollPointerEvent, ScrollState, ScrollViewDesc,
+};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::{
     floor_boundary, focus_underline, reduce_text_input, TextEditState, TextInputDesc,
     TextInputEvent,
 };
-use crate::{ControlState, WidgetOutput};
+use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 边框与文本之间的水平内边距（左）。
 pub const AREA_PADDING: f32 = 10.0;
@@ -146,6 +148,12 @@ pub struct TextAreaState {
     preferred_column: Option<usize>,
     /// 垂直滚动偏移量。
     pub scroll: ScrollState,
+    /// 最近一次同步的完整排版内容高度（支持软折行）。
+    content_height: Option<f32>,
+    /// 指针是否悬停在按需叠加滚动条热区上。
+    scrollbar_hovered: bool,
+    /// 滚动条滑块拖拽起始快照 `(start_pointer_y, start_offset_y)`。
+    scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl TextAreaState {
@@ -156,6 +164,9 @@ impl TextAreaState {
             edit: TextEditState::new(),
             preferred_column: None,
             scroll: ScrollState::new(),
+            content_height: None,
+            scrollbar_hovered: false,
+            scrollbar_drag: None,
         }
     }
 
@@ -166,6 +177,9 @@ impl TextAreaState {
             edit: TextEditState::with_text(text),
             preferred_column: None,
             scroll: ScrollState::new(),
+            content_height: None,
+            scrollbar_hovered: false,
+            scrollbar_drag: None,
         }
     }
 
@@ -294,8 +308,91 @@ impl TextAreaState {
         self.move_vertical(&lines, delta, extend)
     }
 
+    /// 显式同步外部排版测量得到的内容总高度（用于软折行场景）。
+    pub fn set_content_height(&mut self, height: f32) {
+        self.content_height = Some(height.max(0.0));
+    }
+
+    /// 结合逻辑行数与外部排版高度估算当前内容总高度。
+    #[must_use]
+    pub fn effective_content_height(&self, desc: &TextAreaDesc) -> f32 {
+        let logical_height = logical_lines(self.edit.text()).len() as f32 * desc.line_height;
+        self.content_height
+            .map_or(logical_height, |h| h.max(logical_height))
+    }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造宿主在 `TextAreaDesc::text_rect()` 内的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &TextAreaDesc) -> ScrollBarDesc {
+        let mut bar = ScrollBarDesc::vertical(
+            desc.text_rect(),
+            self.effective_content_height(desc),
+            self.scroll.offset().y,
+        );
+        bar.z = desc.z.saturating_add(1);
+        bar.layer = CONTROL_LAYER;
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于多行文本区垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(
+        &mut self,
+        desc: &TextAreaDesc,
+        content_height: f32,
+        event: ScrollPointerEvent,
+    ) -> bool {
+        self.content_height = Some(content_height.max(0.0));
+        let viewport = desc.text_rect();
+        let scroll_desc = ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, content_height));
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.scroll.offset().y));
+                    self.scroll.reveal_scrollbar();
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    self.scroll.scroll_to(&scroll_desc, Vec2::new(0.0, next_y));
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                let next_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                self.scroll.jump_to(&scroll_desc, Vec2::new(0.0, next_y));
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
+        }
+    }
+
     /// 按像素增量滚动并夹紧到内容范围。
     pub fn scroll_by(&mut self, desc: &TextAreaDesc, dy: f32, content_height: f32) -> bool {
+        self.content_height = Some(content_height.max(0.0));
         let viewport = desc.text_rect();
         let scroll_desc = ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, content_height));
         let before = self.scroll.target().y;
@@ -305,6 +402,7 @@ impl TextAreaState {
 
     /// 推进滚动弹簧动画。
     pub fn step(&mut self, desc: &TextAreaDesc, dt: f32, content_height: f32) -> bool {
+        self.content_height = Some(content_height.max(0.0));
         let viewport = desc.text_rect();
         let scroll_desc = ScrollViewDesc::new(viewport, Vec2::new(viewport.size.x, content_height));
         self.scroll.step(&scroll_desc, dt)
@@ -426,6 +524,15 @@ pub fn emit_text_area(
         control.focused,
     ));
 
+    // 按需叠加垂直滚动条：宿主在 `text_rect()` 右缘，未溢出零图元。
+    let mut bar = state.scrollbar_desc(desc);
+    bar.hovered = bar.hovered
+        || (!control.disabled
+            && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+    bar.disabled = control.disabled;
+    let bar_out = emit_scrollbar(node, &bar);
+    primitives.extend(bar_out.output.primitives);
+
     let hit = (!control.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(desc.z), rect)
             .with_shape(Shape::Rounded {
@@ -440,14 +547,20 @@ pub fn emit_text_area(
     a11y.description = desc.placeholder.clone();
     a11y.actions.insert(A11yAction::SetValue);
 
-    WidgetOutput {
+    let mut out = WidgetOutput {
         primitives,
         payloads,
         hit,
         a11y: Some(a11y),
         focusable: !control.disabled,
         ..Default::default()
+    };
+    if !control.disabled {
+        for sub_hit in bar_out.hits {
+            out.sub_hits.push(sub_hit);
+        }
     }
+    out
 }
 
 #[cfg(test)]
@@ -608,5 +721,102 @@ mod tests {
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn text_area_overlay_scrollbar_emits_only_on_overflow_and_supports_drag_and_paging() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+
+        let desc = desc();
+        let node = 5u64;
+        let thumb_node = scrollbar_thumb_node(node, ScrollbarAxis::Vertical);
+        let track_node = scrollbar_track_node(node, ScrollbarAxis::Vertical);
+        let visual = TextAreaVisual::default();
+
+        // 未溢出：2 行（40px <= text_rect 109px）不发射滚动条图元与命中区。
+        let short_state = TextAreaState::with_text("one\ntwo");
+        let short_out = emit_text_area(
+            node,
+            &desc,
+            &short_state,
+            ControlState::default(),
+            &visual,
+            &mut [],
+        );
+        assert_eq!(short_out.primitives.len(), 5);
+        assert!(short_out.sub_hits.is_empty());
+
+        // 溢出：15 行（300px > text_rect 109px）发射 2 个稳定槽位与轨道/滑块命中区。
+        let long_text = (0..15)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut tall_state = TextAreaState::with_text(long_text);
+        let idle_out = emit_text_area(
+            node,
+            &desc,
+            &tall_state,
+            ControlState::default(),
+            &visual,
+            &mut [],
+        );
+        assert_eq!(idle_out.primitives.len(), 7);
+        let track_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == track_node)
+            .expect("text area track hit");
+        let thumb_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == thumb_node)
+            .expect("text area thumb hit");
+        assert!(desc.text_rect().contains_rect(&track_hit.bounds));
+        assert!(desc.text_rect().contains_rect(&thumb_hit.bounds));
+        assert_eq!(idle_out.primitives[5].opacity(), 0.0);
+        assert!((idle_out.primitives[6].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+
+        // 悬停展开为 6px 粗滑块与半透明轨道胶囊，图元总数恒定。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_out = emit_text_area(
+            node,
+            &desc,
+            &tall_state,
+            ControlState::default(),
+            &visual,
+            &mut [],
+        );
+        assert_eq!(hovered_out.primitives.len(), 7);
+        assert!(hovered_out.primitives[5].opacity() > 0.0);
+        assert!((hovered_out.primitives[6].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击轨道翻页与拖拽滑块。
+        let content_h = tall_state.effective_content_height(&desc);
+        let track_click = Vec2::new(track_hit.bounds.center().x, track_hit.bounds.max().y - 4.0);
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            content_h,
+            ScrollPointerEvent::Press(track_click)
+        ));
+        assert!(tall_state.scroll.target().y > 0.0);
+
+        let drag_start = thumb_hit.bounds.center();
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            content_h,
+            ScrollPointerEvent::Press(drag_start)
+        ));
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            content_h,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 30.0))
+        ));
+        assert!(tall_state.scroll.offset().y > 0.0);
+        assert!(tall_state.reduce_scrollbar_pointer(&desc, content_h, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }

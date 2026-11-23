@@ -16,6 +16,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
+use crate::scroll::{emit_scrollbar, ScrollBarDesc, ScrollPointerEvent};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, PointerPhase, SceneCollector, WidgetOutput};
 
@@ -285,6 +286,10 @@ pub struct VirtualGridState {
     pub selected_index: Option<usize>,
     /// 最近一次布局计算得到的列数（用于检测容器缩放导致的列数重排）。
     last_columns: usize,
+    /// 指针是否悬停在按需叠加滚动条热区上。
+    scrollbar_hovered: bool,
+    /// 滚动条滑块拖拽起始快照 `(start_pointer_y, start_scroll_y)`。
+    scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl VirtualGridState {
@@ -419,6 +424,66 @@ impl VirtualGridState {
         self.ensure_visible(next, desc);
         true
     }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造网格容器 `desc.rect` 对应的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &VirtualGridDesc) -> ScrollBarDesc {
+        let mut bar = ScrollBarDesc::vertical(desc.rect, desc.total_height(), self.scroll_y);
+        bar.z = desc.z.saturating_add(4);
+        bar.layer = CONTROL_LAYER;
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于虚拟网格垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(
+        &mut self,
+        desc: &VirtualGridDesc,
+        event: ScrollPointerEvent,
+    ) -> bool {
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.scroll_y));
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    self.set_scroll_y(next_y, desc);
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                let next_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                self.set_scroll_y(next_y, desc);
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
+        }
+    }
 }
 
 /// 发射二维虚拟化网格容器（仅发射视口可见单元格，24 态下同视口图元数恒定）。
@@ -525,6 +590,15 @@ pub fn emit_virtual_grid(
         control.focused && !control.disabled,
     ));
 
+    // 按需叠加垂直滚动条：宿主在 `desc.rect` 内，未溢出零图元，溢出保持 2 个稳定槽位。
+    let mut bar = state.scrollbar_desc(desc);
+    bar.hovered = bar.hovered
+        || (!control.disabled
+            && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+    bar.disabled = control.disabled;
+    let bar_out = emit_scrollbar(node, &bar);
+    primitives.extend(bar_out.output.primitives);
+
     let hit = (!control.disabled).then(|| {
         HitRegion::new(node, CONTROL_LAYER, u32::from(z), r)
             .with_shape(Shape::Rounded {
@@ -559,6 +633,9 @@ pub fn emit_virtual_grid(
                     .clickable(),
                 true,
             );
+        }
+        for hit in bar_out.hits {
+            out.sub_hits.push(hit);
         }
     }
 
@@ -743,8 +820,9 @@ mod tests {
             ControlState::default(),
             &[inside_glyph, outside_glyph],
         );
-        // 完全落在容器外的 overscan 单元格与字形均不会被发射。
-        assert_eq!(out.sub_hits.len(), 4);
+        // 完全落在容器外的 overscan 单元格与字形均不会被发射；
+        // 内容溢出时额外包含 2 个按需叠加滚动条命中区（滑块与轨道），总计 4 + 2 = 6。
+        assert_eq!(out.sub_hits.len(), 6);
         assert_eq!(out.payloads.len(), 1);
         for hit in &out.sub_hits {
             assert!(
@@ -795,5 +873,90 @@ mod tests {
             collector.primitives[trailing_count].clip_idx,
             unbound_gpu::data::CLIP_NONE
         );
+    }
+
+    #[test]
+    fn virtual_grid_overlay_scrollbar_emits_only_on_overflow_and_supports_drag_and_paging() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+        use unbound_math::Vec2;
+
+        let rect = Rect::new(10.0, 20.0, 320.0, 260.0);
+        let node = 77u64;
+        let thumb_node = scrollbar_thumb_node(node, ScrollbarAxis::Vertical);
+        let track_node = scrollbar_track_node(node, ScrollbarAxis::Vertical);
+
+        // 未溢出：2 项 1 行（总高 116px <= 260px）不发射滚动条图元与命中区。
+        let short_desc = VirtualGridDesc::new(rect, 2)
+            .with_column_sizing(GridColumnSizing::Fixed(140.0))
+            .with_row_height(100.0);
+        let short_state = VirtualGridState::new();
+        let short_out = emit_virtual_grid(
+            node,
+            &short_desc,
+            &short_state,
+            ControlState::default(),
+            &[],
+        );
+        assert!(!short_out
+            .sub_hits
+            .iter()
+            .any(|h| h.node == thumb_node || h.node == track_node));
+        // 外框 1 + 2 单元格 + 焦点环 1 = 4（0 滚动条图元）。
+        assert_eq!(short_out.primitives.len(), 4);
+
+        // 溢出：40 项（总高远超 260px）发射 2 个稳定槽位与轨道/滑块命中区。
+        let tall_desc = VirtualGridDesc::new(rect, 40)
+            .with_column_sizing(GridColumnSizing::Fixed(140.0))
+            .with_row_height(100.0);
+        let mut tall_state = VirtualGridState::new();
+        let idle_out =
+            emit_virtual_grid(node, &tall_desc, &tall_state, ControlState::default(), &[]);
+        let track_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == track_node)
+            .expect("virtual grid track hit");
+        let thumb_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == thumb_node)
+            .expect("virtual grid thumb hit");
+        assert!(rect.contains_rect(&track_hit.bounds));
+        assert!(rect.contains_rect(&thumb_hit.bounds));
+
+        let n = idle_out.primitives.len();
+        assert_eq!(idle_out.primitives[n - 2].opacity(), 0.0);
+        assert!((idle_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+
+        // 悬停展开为 6px 粗滑块与半透明轨道胶囊，图元总数恒定。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_out =
+            emit_virtual_grid(node, &tall_desc, &tall_state, ControlState::default(), &[]);
+        assert_eq!(hovered_out.primitives.len(), n);
+        assert!(hovered_out.primitives[n - 2].opacity() > 0.0);
+        assert!((hovered_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击轨道翻页与拖拽滑块。
+        let track_click = Vec2::new(track_hit.bounds.center().x, track_hit.bounds.max().y - 4.0);
+        assert!(
+            tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Press(track_click))
+        );
+        assert!(tall_state.scroll_y > 0.0);
+
+        let cur_thumb = tall_state.scrollbar_desc(&tall_desc).thumb_rect();
+        let drag_start = cur_thumb.center();
+        assert!(
+            tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Press(drag_start))
+        );
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &tall_desc,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 40.0))
+        ));
+        assert!(tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }

@@ -17,14 +17,16 @@ use rustc_hash::FxHashSet;
 use unbound_a11y::A11yNode;
 use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, Shape};
-use unbound_math::Rect;
+use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::primitive::{focus_ring, glyphs, instance, surface};
-use crate::scroll::{ScrollState, ScrollViewDesc};
+use crate::scroll::{
+    emit_scrollbar, ScrollBarDesc, ScrollPointerEvent, ScrollState, ScrollViewDesc,
+};
 use crate::switch::CONTROL_LAYER;
-use crate::{ControlState, WidgetOutput};
+use crate::{ControlState, PointerPhase, WidgetOutput};
 
 /// 单元格内容的水平对齐方式。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -304,6 +306,9 @@ pub struct TableState {
     selected: FxHashSet<usize>,
     widths: Vec<f32>,
     resizing: Option<(usize, f32, f32)>,
+    total_rows: usize,
+    scrollbar_hovered: bool,
+    scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl TableState {
@@ -325,20 +330,98 @@ impl TableState {
         self.scroll.offset().y
     }
 
+    /// 记录总数据行数（供虚拟化场景仅传入可见行窗口时准确计算滚动条比例）。
+    pub fn set_row_count(&mut self, row_count: usize) {
+        self.total_rows = row_count;
+    }
+
+    /// 返回最近记录的总数据行数。
+    #[must_use]
+    pub fn row_count(&self) -> usize {
+        self.total_rows
+    }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造严格限定在 `TableDesc::body_rect()` 内的垂直按需叠加滚动条描述符（绝不覆盖表头）。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &TableDesc, row_count: usize) -> ScrollBarDesc {
+        let content = row_count as f32 * desc.row_height;
+        let mut bar = ScrollBarDesc::vertical(desc.body_rect(), content, self.offset());
+        bar.z = desc.z.saturating_add(6);
+        bar.layer = CONTROL_LAYER;
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于表格数据区垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(
+        &mut self,
+        desc: &TableDesc,
+        row_count: usize,
+        event: ScrollPointerEvent,
+    ) -> bool {
+        self.total_rows = row_count;
+        let content = row_count as f32 * desc.row_height;
+        let view = ScrollViewDesc::new(desc.body_rect(), Vec2::new(0.0, content));
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc, row_count);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.offset()));
+                    self.scroll.reveal_scrollbar();
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    self.scroll.scroll_to(&view, Vec2::new(0.0, next_y));
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc, row_count);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                let next_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                self.scroll.jump_to(&view, Vec2::new(0.0, next_y));
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
+        }
+    }
+
     /// 按 `delta` 像素滚动并夹紧至内容范围。
     pub fn scroll_by(&mut self, desc: &TableDesc, row_count: usize, delta: f32) -> bool {
+        self.total_rows = row_count;
         let content = row_count as f32 * desc.row_height;
-        let view = ScrollViewDesc::new(desc.body_rect(), unbound_math::Vec2::new(0.0, content));
+        let view = ScrollViewDesc::new(desc.body_rect(), Vec2::new(0.0, content));
         let before = self.scroll.target();
-        self.scroll
-            .scroll_by(&view, unbound_math::Vec2::new(0.0, delta));
+        self.scroll.scroll_by(&view, Vec2::new(0.0, delta));
         self.scroll.target() != before
     }
 
     /// 推进滚动动画。
     pub fn step(&mut self, desc: &TableDesc, row_count: usize, dt: f32) -> bool {
+        self.total_rows = row_count;
         let content = row_count as f32 * desc.row_height;
-        let view = ScrollViewDesc::new(desc.body_rect(), unbound_math::Vec2::new(0.0, content));
+        let view = ScrollViewDesc::new(desc.body_rect(), Vec2::new(0.0, content));
         self.scroll.step(&view, dt)
     }
 
@@ -591,6 +674,22 @@ pub fn emit_table(
         control.focused,
     ));
 
+    // 按需叠加垂直滚动条：严格宿主在 `body_rect()` 内，绝不覆盖固定表头。
+    let inferred_rows = rows
+        .iter()
+        .map(|row| row.index.saturating_add(1))
+        .max()
+        .unwrap_or(0)
+        .max(rows.len());
+    let total_rows = state.total_rows.max(inferred_rows);
+    let mut bar = state.scrollbar_desc(desc, total_rows);
+    bar.hovered = bar.hovered
+        || (!control.disabled
+            && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+    bar.disabled = control.disabled;
+    let bar_out = emit_scrollbar(node, &bar);
+    primitives.extend(bar_out.output.primitives);
+
     let mut a11y = A11yNode::new(Role::Grid, desc.label.clone(), desc.rect).clickable();
     a11y.description = format!("{} × {} grid", rows.len(), desc.columns.len());
     a11y.disabled = control.disabled;
@@ -652,6 +751,9 @@ pub fn emit_table(
                 row_a11y,
                 false,
             );
+        }
+        for hit in bar_out.hits {
+            out.sub_hits.push(hit);
         }
     }
 
@@ -843,5 +945,114 @@ mod tests {
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn table_overlay_scrollbar_stays_in_body_rect_and_emits_only_on_overflow() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+
+        let desc = desc();
+        let node = 7u64;
+        let thumb_node = scrollbar_thumb_node(node, ScrollbarAxis::Vertical);
+        let track_node = scrollbar_track_node(node, ScrollbarAxis::Vertical);
+
+        // 未溢出：2 行（64px <= body 168px）不发射滚动条图元与命中区。
+        let short_rows = [
+            TableRow {
+                index: 0,
+                glyphs: &[],
+            },
+            TableRow {
+                index: 1,
+                glyphs: &[],
+            },
+        ];
+        let short_state = TableState::new();
+        let short_out = emit_table(
+            node,
+            &desc,
+            &short_state,
+            &short_rows,
+            &[],
+            ControlState::default(),
+        );
+        assert!(!short_out
+            .sub_hits
+            .iter()
+            .any(|h| h.node == thumb_node || h.node == track_node));
+
+        // 溢出：20 行（640px > body 168px）在 body_rect 内发射 2 个稳定槽位与轨道/滑块命中区。
+        let tall_rows: Vec<TableRow<'_>> = (0..20)
+            .map(|index| TableRow { index, glyphs: &[] })
+            .collect();
+        let mut tall_state = TableState::new();
+        let idle_out = emit_table(
+            node,
+            &desc,
+            &tall_state,
+            &tall_rows,
+            &[],
+            ControlState::default(),
+        );
+        let track_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == track_node)
+            .expect("table vertical track hit");
+        let thumb_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == thumb_node)
+            .expect("table vertical thumb hit");
+        // 严格限定在 body_rect 内，绝不覆盖表头。
+        assert!(track_hit.bounds.origin.y >= desc.header_rect().max().y);
+        assert!(desc.body_rect().contains_rect(&track_hit.bounds));
+        assert!(desc.body_rect().contains_rect(&thumb_hit.bounds));
+
+        let n = idle_out.primitives.len();
+        assert_eq!(idle_out.primitives[n - 2].opacity(), 0.0);
+        assert!((idle_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+
+        // 悬停展开为 6px 粗滑块 + 半透明轨道胶囊，且图元总数不变。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_out = emit_table(
+            node,
+            &desc,
+            &tall_state,
+            &tall_rows,
+            &[],
+            ControlState::default(),
+        );
+        assert_eq!(hovered_out.primitives.len(), n);
+        assert!(hovered_out.primitives[n - 2].opacity() > 0.0);
+        assert!((hovered_out.primitives[n - 1].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击轨道翻页与拖拽滑块。
+        let track_click = Vec2::new(track_hit.bounds.center().x, track_hit.bounds.max().y - 4.0);
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            20,
+            ScrollPointerEvent::Press(track_click)
+        ));
+        assert!(tall_state.scroll().target().y > 0.0);
+
+        let drag_start = thumb_hit.bounds.center();
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            20,
+            ScrollPointerEvent::Press(drag_start)
+        ));
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            20,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 36.0))
+        ));
+        assert!(tall_state.offset() > 0.0);
+        assert!(tall_state.reduce_scrollbar_pointer(&desc, 20, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }

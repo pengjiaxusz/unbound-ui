@@ -127,8 +127,22 @@ fn a_tall_menu_clamps_to_the_viewport_and_embeds_a_scroll_state() {
     let output = emit_menu(1, 2, &desc, &state, ControlState::default()).0;
     // 行图元随滚动偏移一起移动；高亮胶囊相对行上下各内缩 2px。
     assert_eq!(output.primitives[2].local_pos[1], -98.0);
-    // 2 个外框图元 + 20 行 * 2 + 边框。
-    assert_eq!(output.primitives.len(), 43);
+    // 2 个外框图元 + 20 行 * 2 + 边框 + 溢出态按需叠加滚动条 2 个稳定槽位。
+    assert_eq!(output.primitives.len(), 45);
+    assert!(output.sub_hits.iter().any(|h| {
+        h.node
+            == unbound_widgets::scroll::scrollbar_thumb_node(
+                1,
+                unbound_widgets::scroll::ScrollbarAxis::Vertical,
+            )
+    }));
+    assert!(output.sub_hits.iter().any(|h| {
+        h.node
+            == unbound_widgets::scroll::scrollbar_track_node(
+                1,
+                unbound_widgets::scroll::ScrollbarAxis::Vertical,
+            )
+    }));
 }
 
 #[test]
@@ -138,4 +152,17 @@ fn a_short_menu_needs_no_scroll_state() {
     assert!(!state.ensure_scroll(&desc));
     assert!(state.scroll.is_none());
     assert_eq!(state.scroll_offset(), Vec2::ZERO);
+    let output = emit_menu(1, 2, &desc, &state, ControlState::default()).0;
+    assert!(!output.sub_hits.iter().any(|h| {
+        h.node
+            == unbound_widgets::scroll::scrollbar_thumb_node(
+                1,
+                unbound_widgets::scroll::ScrollbarAxis::Vertical,
+            )
+            || h.node
+                == unbound_widgets::scroll::scrollbar_track_node(
+                    1,
+                    unbound_widgets::scroll::ScrollbarAxis::Vertical,
+                )
+    }));
 }

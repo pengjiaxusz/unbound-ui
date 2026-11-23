@@ -2018,6 +2018,12 @@ where
                 &mut out,
                 emit_tree_row_divider(&desc, &child_row, TreeViewTokens::standard()),
             );
+            // 按需叠加滚动条发射器同样纳入穷举目录（未溢出时返回空输出，不改变既有图元数）。
+            let tree_state = crate::tree_view::TreeViewState::new(36.0);
+            merge_output(
+                &mut out,
+                crate::tree_view::emit_tree_scrollbar(node, &desc, &tree_state, state).output,
+            );
             out
         }
         WidgetCatalogId::ListView => {
