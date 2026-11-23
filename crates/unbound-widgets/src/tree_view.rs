@@ -18,8 +18,12 @@ use unbound_theme::Token;
 use unbound_world::virtualize::{TreeRow, VirtualTree, WindowUpdate};
 
 use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, outlined};
-use crate::scroll::{ScrollState, ScrollViewDesc};
-use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
+use crate::scroll::{
+    emit_scrollbar, ScrollBarDesc, ScrollBarOutput, ScrollPointerEvent, ScrollState, ScrollViewDesc,
+};
+use crate::shell::{
+    emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon,
+};
 use crate::switch::CONTROL_LAYER;
 use crate::text_input::TextEditState;
 use crate::{ControlState, PointerPhase, WidgetOutput};
@@ -241,6 +245,15 @@ impl TreeViewDesc {
     pub fn visible_capacity(&self) -> usize {
         (self.rect.size.y / self.row_height).ceil().max(1.0) as usize
     }
+
+    /// 构造树形视图内容视口对应的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, content_height: f32, scroll_offset: f32) -> ScrollBarDesc {
+        let mut bar = ScrollBarDesc::vertical(self.rect, content_height, scroll_offset);
+        bar.z = self.z.saturating_add(2);
+        bar.layer = CONTROL_LAYER;
+        bar
+    }
 }
 
 /// 树形视图的实时状态。
@@ -280,6 +293,10 @@ pub struct TreeViewState {
     pub last_window: WindowUpdate,
     /// 上一次调用 [`TreeViewState::rows`] 时使用的视口高度。
     viewport_height: f32,
+    /// 指针是否悬停在按需叠加滚动条热区上。
+    scrollbar_hovered: bool,
+    /// 滚动条滑块拖拽起始快照 `(start_pointer_y, start_offset_y)`。
+    scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl TreeViewState {
@@ -304,6 +321,8 @@ impl TreeViewState {
             parent: FxHashMap::default(),
             last_window: WindowUpdate::default(),
             viewport_height: 0.0,
+            scrollbar_hovered: false,
+            scrollbar_drag: None,
         }
     }
 
@@ -886,6 +905,66 @@ impl TreeViewState {
         let scroll_desc = self.effective_scroll_desc(desc);
         self.scroll.step(&scroll_desc, dt)
     }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造当前树形视图内容与滚动偏移对应的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &TreeViewDesc) -> ScrollBarDesc {
+        let mut bar = desc.scrollbar_desc(self.content_height(), self.scroll_offset());
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(
+        &mut self,
+        desc: &TreeViewDesc,
+        event: ScrollPointerEvent,
+    ) -> bool {
+        let scroll_desc = desc.scroll_desc(self.order.len());
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.scroll_offset()));
+                    self.scroll.reveal_scrollbar();
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    self.scroll.scroll_to(&scroll_desc, Vec2::new(0.0, next_y));
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc);
+                if !bar.is_overflowing() {
+                    return false;
+                }
+                let next_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                self.scroll.jump_to(&scroll_desc, Vec2::new(0.0, next_y));
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
+        }
+    }
 }
 
 /// 树形视图绘制所用的颜色槽位。
@@ -994,7 +1073,15 @@ pub fn emit_tree_row(
     label: &[GlyphQuad],
     tokens: TreeViewTokens,
 ) -> WidgetOutput {
-    emit_tree_row_with_icon(desc, row, TreeRowIcon::None, selected, control, label, tokens)
+    emit_tree_row_with_icon(
+        desc,
+        row,
+        TreeRowIcon::None,
+        selected,
+        control,
+        label,
+        tokens,
+    )
 }
 
 /// 输出带前置图标槽的单行树节点（支持 `Vector(ShellIcon)` 与 `ExternalTexture(u64)` 双通道，
@@ -1334,6 +1421,22 @@ pub fn emit_tree_background(desc: &TreeViewDesc, tokens: TreeViewTokens) -> Widg
     }
 }
 
+/// 输出树形视图内容视口右缘的 Win11 按需叠加垂直滚动条（未溢出时返回空输出）。
+#[must_use]
+pub fn emit_tree_scrollbar(
+    node: u64,
+    desc: &TreeViewDesc,
+    state: &TreeViewState,
+    control: ControlState,
+) -> ScrollBarOutput {
+    let mut bar = state.scrollbar_desc(desc);
+    bar.hovered = bar.hovered
+        || (!control.disabled
+            && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+    bar.disabled = control.disabled;
+    emit_scrollbar(node, &bar)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1665,7 +1768,10 @@ mod tests {
 
         state.rebuild(&[unloaded], kids);
         assert!(state.request_expand(300));
-        assert!(!state.request_expand(300), "duplicate expand must be suppressed");
+        assert!(
+            !state.request_expand(300),
+            "duplicate expand must be suppressed"
+        );
         assert!(state.tree.is_expanded(300));
 
         let events = state.drain_events();
@@ -1780,11 +1886,20 @@ mod tests {
                                 selected,
                             };
                             let count = emit_tree_row_with_icon(
-                                &desc, &row, icon, selected, control, &[], tokens,
+                                &desc,
+                                &row,
+                                icon,
+                                selected,
+                                control,
+                                &[],
+                                tokens,
                             )
                             .primitives
                             .len();
-                            assert_eq!(count, base, "primitive count changed for {icon:?} {control:?}");
+                            assert_eq!(
+                                count, base,
+                                "primitive count changed for {icon:?} {control:?}"
+                            );
                         }
                     }
                 }
@@ -1869,8 +1984,8 @@ mod tests {
         state.set_row_divider_before(2, true);
         assert!(state.has_row_divider_before(2));
 
-        let desc = TreeViewDesc::new(Rect::new(16.0, 80.0, 240.0, 160.0))
-            .with_navigation_pane(true);
+        let desc =
+            TreeViewDesc::new(Rect::new(16.0, 80.0, 240.0, 160.0)).with_navigation_pane(true);
         let rows = state.rows(&desc);
         let row2 = rows.iter().find(|r| r.row.id == 2).expect("row 2 visible");
         let div_out = emit_tree_row_divider(&desc, row2, TreeViewTokens::navigation_pane());
@@ -2133,5 +2248,68 @@ mod tests {
         let no_icon_x = tree_row_label_x(&desc, 0, false);
         let with_icon_x = tree_row_label_x(&desc, 0, true);
         assert!((with_icon_x - no_icon_x - (TREE_ICON_SIZE + TREE_ICON_GAP)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tree_view_overlay_scrollbar_emits_only_on_overflow_and_supports_drag_and_paging() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+
+        let desc = TreeViewDesc::new(Rect::new(10.0, 20.0, 240.0, 180.0));
+        // 未溢出：2 行（72px <= 180px）不发射任何滚动条图元与命中区。
+        let short_state = state();
+        let short_bar = emit_tree_scrollbar(50, &desc, &short_state, ControlState::default());
+        assert!(short_bar.is_empty());
+        assert!(short_bar.output.primitives.is_empty());
+        assert!(short_bar.hits.is_empty());
+
+        // 溢出：20 行（720px > 180px）发射 2 个稳定槽位与轨道/滑块命中区。
+        let mut tall_state = TreeViewState::new(TREE_ROW);
+        let roots: Vec<TreeRow> = (1..=20).map(root).collect();
+        tall_state.rebuild(&roots, |_| Vec::new());
+
+        let idle_bar = emit_tree_scrollbar(50, &desc, &tall_state, ControlState::default());
+        assert_eq!(idle_bar.output.primitives.len(), 2);
+        assert_eq!(idle_bar.hits.len(), 2);
+        assert_eq!(idle_bar.output.primitives[0].opacity(), 0.0);
+        assert!((idle_bar.output.primitives[1].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+        assert!(idle_bar
+            .hits
+            .iter()
+            .any(|h| h.node == scrollbar_thumb_node(50, ScrollbarAxis::Vertical)));
+        assert!(idle_bar
+            .hits
+            .iter()
+            .any(|h| h.node == scrollbar_track_node(50, ScrollbarAxis::Vertical)));
+        let track_rect = idle_bar.track_rect.expect("overflowing track rect");
+        assert!(desc.rect.contains_rect(&track_rect));
+
+        // 悬停展开为 6px 粗滑块与半透明轨道胶囊，且图元数保持恒定。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_bar = emit_tree_scrollbar(50, &desc, &tall_state, ControlState::default());
+        assert_eq!(hovered_bar.output.primitives.len(), 2);
+        assert!(hovered_bar.output.primitives[0].opacity() > 0.0);
+        assert!((hovered_bar.output.primitives[1].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击滑块下方轨道翻页。
+        let track_bottom_click = Vec2::new(track_rect.center().x, track_rect.max().y - 4.0);
+        assert!(tall_state
+            .reduce_scrollbar_pointer(&desc, ScrollPointerEvent::Press(track_bottom_click)));
+        assert!(tall_state.scroll.target().y > 0.0);
+
+        // 拖拽滑块更新偏移量。
+        let thumb_rect = tall_state.scrollbar_desc(&desc).thumb_rect();
+        let drag_start = thumb_rect.center();
+        assert!(tall_state.reduce_scrollbar_pointer(&desc, ScrollPointerEvent::Press(drag_start)));
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &desc,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 40.0))
+        ));
+        assert!(tall_state.scroll_offset() > 0.0);
+        assert!(tall_state.reduce_scrollbar_pointer(&desc, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }

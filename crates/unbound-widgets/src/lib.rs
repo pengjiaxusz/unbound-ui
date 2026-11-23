@@ -774,7 +774,7 @@ pub use tree_table::{
 };
 pub use tree_view::{
     emit_tree_background, emit_tree_row, emit_tree_row_divider, emit_tree_row_with_icon,
-    emit_tree_row_with_options, tree_row_label_max_width, tree_row_label_x,
+    emit_tree_row_with_options, emit_tree_scrollbar, tree_row_label_max_width, tree_row_label_x,
     tree_row_trailing_icon_rect, tree_toggle_node, TreeRowIcon, TreeRowOptions, TreeViewDensity,
     TreeViewDesc, TreeViewEvent, TreeViewRow, TreeViewState, TreeViewTokens, TREE_DIVIDER_HEIGHT,
     TREE_FONT_SIZE, TREE_ICON_GAP, TREE_ICON_SIZE, TREE_ROW_COMPACT, TREE_TRAILING_ICON_SIZE,

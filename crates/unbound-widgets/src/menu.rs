@@ -16,8 +16,12 @@ use unbound_theme::Token;
 use crate::image::IconDesc;
 use crate::overlay::OverlayEntry;
 use crate::primitive::{glyphs, instance, surface};
-use crate::scroll::{ScrollState, ScrollViewDesc};
-use crate::shell::{emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon};
+use crate::scroll::{
+    emit_scrollbar, ScrollBarDesc, ScrollPointerEvent, ScrollState, ScrollViewDesc,
+};
+use crate::shell::{
+    emit_shell_icon_primitives, emit_widget_icon_primitives, ShellIcon, WidgetIcon,
+};
 use crate::{ControlState, PointerPhase, WidgetDesc, WidgetOutput};
 
 /// 菜单的命中测试层级。
@@ -419,6 +423,10 @@ pub struct MenuState {
     /// 行未溢出时为 `None`。由 [`Self::ensure_scroll`] 安装；滚动偏移量刻意不参与 `PartialEq`，
     /// 因为它是实时指针状态，而非菜单选区的一部分。
     pub scroll: Option<ScrollState>,
+    /// 指针是否悬停在按需叠加滚动条热区上（不参与 `PartialEq`）。
+    pub scrollbar_hovered: bool,
+    /// 滚动条滑块拖拽起始快照 `(start_pointer_y, start_offset_y)`（不参与 `PartialEq`）。
+    pub scrollbar_drag: Option<(f32, f32)>,
 }
 
 impl PartialEq for MenuState {
@@ -586,6 +594,74 @@ impl MenuState {
         if let Some(scroll) = self.scroll.as_mut() {
             scroll.scroll_by(&view, delta);
             scroll.jump_to(&view, scroll.target());
+        }
+    }
+
+    /// 更新垂直叠加滚动条热区悬停状态。
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar_hovered = hovered;
+    }
+
+    /// 当前是否正在拖拽垂直叠加滚动条滑块。
+    #[must_use]
+    pub fn is_dragging_scrollbar(&self) -> bool {
+        self.scrollbar_drag.is_some()
+    }
+
+    /// 构造菜单面板右缘对应的垂直按需叠加滚动条描述符。
+    #[must_use]
+    pub fn scrollbar_desc(&self, desc: &MenuDesc) -> ScrollBarDesc {
+        let mut bar =
+            ScrollBarDesc::vertical(desc.rect, desc.content_height(), self.scroll_offset().y);
+        bar.z = desc.z.saturating_add(2);
+        bar.layer = MENU_LAYER;
+        bar.hovered = self.scrollbar_hovered;
+        bar.dragging = self.scrollbar_drag.is_some();
+        bar
+    }
+
+    /// 归约作用于溢出菜单垂直叠加滚动条的指针手势（滑块拖拽与点击轨道翻页）。
+    pub fn reduce_scrollbar_pointer(&mut self, desc: &MenuDesc, event: ScrollPointerEvent) -> bool {
+        let overflow = desc.content_height() > desc.rect.height() + f32::EPSILON;
+        if !overflow {
+            self.scrollbar_drag = None;
+            return false;
+        }
+        self.ensure_scroll(desc);
+        let view = ScrollViewDesc::new(
+            desc.rect,
+            unbound_math::Vec2::new(desc.rect.width(), desc.content_height()),
+        );
+        match event {
+            ScrollPointerEvent::Press(pos) => {
+                let bar = self.scrollbar_desc(desc);
+                if bar.thumb_rect().contains_point(pos) {
+                    self.scrollbar_drag = Some((pos.y, self.scroll_offset().y));
+                    if let Some(scroll) = self.scroll.as_mut() {
+                        scroll.reveal_scrollbar();
+                    }
+                    return true;
+                }
+                if let Some(next_y) = bar.page_offset_for_track_click(pos) {
+                    if let Some(scroll) = self.scroll.as_mut() {
+                        scroll.jump_to(&view, unbound_math::Vec2::new(0.0, next_y));
+                    }
+                    return true;
+                }
+                false
+            }
+            ScrollPointerEvent::Drag(pos) => {
+                let Some((start_pointer, start_offset)) = self.scrollbar_drag else {
+                    return false;
+                };
+                let bar = self.scrollbar_desc(desc);
+                let next_y = bar.offset_for_drag(start_offset, start_pointer, pos.y);
+                if let Some(scroll) = self.scroll.as_mut() {
+                    scroll.jump_to(&view, unbound_math::Vec2::new(0.0, next_y));
+                }
+                true
+            }
+            ScrollPointerEvent::Release => self.scrollbar_drag.take().is_some(),
         }
     }
 }
@@ -775,7 +851,13 @@ pub fn emit_menu_with_rows(
                 row_z,
             ));
         } else {
-            glyphs(label_glyphs, fg_color, row_z, &mut primitives, &mut payloads);
+            glyphs(
+                label_glyphs,
+                fg_color,
+                row_z,
+                &mut primitives,
+                &mut payloads,
+            );
         }
 
         // 统一前置图标（`16×16`，位于胶囊左侧内缩 10px 处垂直居中）；
@@ -893,6 +975,23 @@ pub fn emit_menu_with_rows(
         SubElement::Border,
         row_z,
     ));
+
+    // 仅当菜单内容高度超出视口可用高度时发射按需叠加滚动条；常规短菜单保持 0 滚动条图元。
+    let overflow = desc.content_height() > desc.rect.height() + f32::EPSILON;
+    if overflow {
+        let mut bar = state.scrollbar_desc(desc);
+        bar.hovered = bar.hovered
+            || (!control.disabled
+                && matches!(control.phase, PointerPhase::Hovered | PointerPhase::Pressed));
+        bar.disabled = control.disabled;
+        let bar_out = emit_scrollbar(node, &bar);
+        primitives.extend(bar_out.output.primitives);
+        if !control.disabled {
+            for hit in bar_out.hits {
+                out.sub_hits.push(hit);
+            }
+        }
+    }
 
     out.primitives = primitives;
     out.payloads = payloads;
@@ -1064,10 +1163,8 @@ mod tests {
         assert_eq!(r2.origin.y, r1.max().y);
         assert_eq!(r2.height(), CONTEXT_MENU_ITEM_HEIGHT);
 
-        let sized = MenuDesc::context_menu(
-            Rect::new(20.0, 30.0, 220.0, expected_h),
-            desc.items.clone(),
-        );
+        let sized =
+            MenuDesc::context_menu(Rect::new(20.0, 30.0, 220.0, expected_h), desc.items.clone());
         assert_eq!(
             sized.item_at(unbound_math::Vec2::new(40.0, r0.center().y)),
             Some(0)
@@ -1146,12 +1243,33 @@ mod tests {
         let hover_rows = make_rows(PointerPhase::Hovered, PointerPhase::Hovered);
         let press_rows = make_rows(PointerPhase::Pressed, PointerPhase::Pressed);
 
-        let idle_out =
-            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &idle_rows).0;
-        let hover_out =
-            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &hover_rows).0;
-        let press_out =
-            emit_menu_with_rows(menu_key, 1, &desc, &state, ControlState::default(), &press_rows).0;
+        let idle_out = emit_menu_with_rows(
+            menu_key,
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &idle_rows,
+        )
+        .0;
+        let hover_out = emit_menu_with_rows(
+            menu_key,
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &hover_rows,
+        )
+        .0;
+        let press_out = emit_menu_with_rows(
+            menu_key,
+            1,
+            &desc,
+            &state,
+            ControlState::default(),
+            &press_rows,
+        )
+        .0;
 
         assert_eq!(idle_out.primitives.len(), hover_out.primitives.len());
         assert_eq!(idle_out.primitives.len(), press_out.primitives.len());
@@ -1190,8 +1308,7 @@ mod tests {
 
         // 危险项字形使用 Token::ERROR，禁用项字形使用 Token::TEXT_DISABLED，快捷键使用 Token::TEXT_SECONDARY。
         assert!(idle_out.primitives.iter().any(|p| {
-            p.prim_type() == PrimType::Glyph
-                && p.fill_token_or_uv == u32::from(Token::ERROR.raw())
+            p.prim_type() == PrimType::Glyph && p.fill_token_or_uv == u32::from(Token::ERROR.raw())
         }));
         assert!(idle_out.primitives.iter().any(|p| {
             p.prim_type() == PrimType::Glyph
@@ -1217,8 +1334,7 @@ mod tests {
     #[test]
     fn context_menu_emits_acrylic_backdrop_and_strict_layer_ordering() {
         let items = vec![
-            MenuItem::action("Refresh")
-                .with_widget_icon(WidgetIcon::Vector(ShellIcon::Refresh)),
+            MenuItem::action("Refresh").with_widget_icon(WidgetIcon::Vector(ShellIcon::Refresh)),
             MenuItem::action("Settings")
                 .disabled()
                 .with_widget_icon(WidgetIcon::Vector(ShellIcon::Settings)),
@@ -1265,5 +1381,80 @@ mod tests {
                 u32::from(SubElement::Content as u8)
             );
         }
+    }
+
+    #[test]
+    fn menu_overlay_scrollbar_emits_only_when_overflowing_and_supports_drag_and_paging() {
+        use crate::scroll::{
+            scrollbar_thumb_node, scrollbar_track_node, ScrollbarAxis, SCROLLBAR_THUMB_IDLE_WIDTH,
+            SCROLLBAR_THUMB_WIDTH,
+        };
+        use unbound_math::Vec2;
+
+        let node = 88u64;
+        let thumb_node = scrollbar_thumb_node(node, ScrollbarAxis::Vertical);
+        let track_node = scrollbar_track_node(node, ScrollbarAxis::Vertical);
+
+        // 常规短菜单（不溢出）：0 滚动条图元与 0 滚动条命中区。
+        let short_desc = desc();
+        let short_state = MenuState::new();
+        let short_out = emit_menu(node, 1, &short_desc, &short_state, ControlState::default()).0;
+        assert!(!short_out
+            .sub_hits
+            .iter()
+            .any(|h| h.node == thumb_node || h.node == track_node));
+
+        // 溢出菜单：20 项（740px > 200px）在面板右缘发射 2 个稳定槽位与轨道/滑块命中区。
+        let items: Vec<MenuItem> = (0..20)
+            .map(|i| MenuItem::action(format!("Item {i}")))
+            .collect();
+        let tall_desc = MenuDesc::new(Rect::new(40.0, 40.0, 220.0, 200.0), items);
+        let mut tall_state = MenuState::new();
+        let idle_out = emit_menu(node, 1, &tall_desc, &tall_state, ControlState::default()).0;
+        // 2 个外框图元 + 20 行 * 2 + 1 边框 + 2 滚动条槽位 = 45。
+        assert_eq!(idle_out.primitives.len(), 45);
+        let track_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == track_node)
+            .expect("overflowing menu track hit");
+        let thumb_hit = idle_out
+            .sub_hits
+            .iter()
+            .find(|h| h.node == thumb_node)
+            .expect("overflowing menu thumb hit");
+        assert_eq!(track_hit.layer, MENU_LAYER);
+        assert_eq!(thumb_hit.layer, MENU_LAYER);
+        assert!(tall_desc.rect.contains_rect(&track_hit.bounds));
+        assert!(tall_desc.rect.contains_rect(&thumb_hit.bounds));
+        assert_eq!(idle_out.primitives[43].opacity(), 0.0);
+        assert!((idle_out.primitives[44].size[0] - SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01);
+
+        // 悬停展开为 6px 粗滑块与半透明轨道胶囊，图元总数保持恒定。
+        tall_state.set_scrollbar_hovered(true);
+        let hovered_out = emit_menu(node, 1, &tall_desc, &tall_state, ControlState::default()).0;
+        assert_eq!(hovered_out.primitives.len(), 45);
+        assert!(hovered_out.primitives[43].opacity() > 0.0);
+        assert!((hovered_out.primitives[44].size[0] - SCROLLBAR_THUMB_WIDTH).abs() < 0.01);
+
+        // 点击轨道翻页与拖拽滑块。
+        let track_click = Vec2::new(track_hit.bounds.center().x, track_hit.bounds.max().y - 4.0);
+        assert!(
+            tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Press(track_click))
+        );
+        assert!(tall_state.scroll_offset().y > 0.0);
+
+        let cur_thumb = tall_state.scrollbar_desc(&tall_desc).thumb_rect();
+        let drag_start = cur_thumb.center();
+        assert!(
+            tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Press(drag_start))
+        );
+        assert!(tall_state.is_dragging_scrollbar());
+        assert!(tall_state.reduce_scrollbar_pointer(
+            &tall_desc,
+            ScrollPointerEvent::Drag(Vec2::new(drag_start.x, drag_start.y + 30.0))
+        ));
+        assert!(tall_state.reduce_scrollbar_pointer(&tall_desc, ScrollPointerEvent::Release));
+        assert!(!tall_state.is_dragging_scrollbar());
     }
 }
