@@ -6,7 +6,7 @@
 //!
 
 use accesskit::Role;
-use unbound_anim::{CubicBezier, Spring};
+use unbound_anim::CubicBezier;
 use unbound_backdrop::{BackdropCombination, BackdropPlan, BackdropSource, MaterialKind};
 use unbound_headless::{Frame, FrameBuilder, NodeKind};
 use unbound_input::{CursorKind, PointerButton};
@@ -15,6 +15,17 @@ use unbound_math::{Rect, Vec2};
 use unbound_platform::{Modifiers, PlatformKey};
 use unbound_widgets::curve_editor::{CurveEditorDesc, CurveEditorState, CurveHandle};
 use unbound_widgets::diff::{diff_primitives, SceneDiff};
+use unbound_widgets::navigation_view::{
+    emit_navigation_view, navigation_view_row_node, NavigationViewBackButtonVisible,
+    NavigationViewDesc, NavigationViewEvent, NavigationViewItem, NavigationViewLayout,
+    NavigationViewMenuItem, NavigationViewPaneDisplayMode, NavigationViewRowKind,
+    NavigationViewState, NavigationViewTitleBarSync, NAVIGATION_VIEW_COMPACT_PANE_LENGTH,
+};
+use unbound_widgets::{
+    emit_window_caption_buttons, ControlState, ShellIcon, WidgetCatalogId, WidgetOutput,
+    WindowCaptionButtonControlStates, WindowCaptionButtons, WindowCaptionButtonsLayout,
+    WindowCaptionFrameHitContract,
+};
 
 use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
 use crate::gallery::{self, Labels, Palette};
@@ -24,10 +35,10 @@ use crate::state::{EditorId, GalleryState, ThemeMode, ZOOM_STEPS};
 use crate::target::{self, Target, ROOT};
 use crate::widgets::{self, Icon};
 
-const NAV_EXPANDED: f32 = 248.0;
-const NAV_COLLAPSED: f32 = 68.0;
-/// 侧边栏在展开树与折叠图标栏之间切换的宽度阈值（绘制、无头帧校验与高度计算统一复用）。
-const NAV_COLLAPSE_THRESHOLD: f32 = 140.0;
+/// `NavigationView` 展开窗格宽度（与展厅壳层既有设计一致）。
+const NAV_OPEN_PANE_LENGTH: f32 = 248.0;
+/// `NavigationView` 控件的稳定节点标识（高位标签避开 `target.rs` 的 1..=26）。
+const NAV_VIEW_NODE: u64 = 94u64 << 56;
 
 /// 过滤出数字字符，最多三位。
 fn numeric_only(text: &str) -> String {
@@ -161,23 +172,6 @@ fn content_scrollbar(layout: &ShellLayout, page: &PageLayout) -> Option<Scrollba
     })
 }
 
-/// 导航窗格滚动条；当树无需滚动时为 `None`。
-fn nav_scrollbar(layout: &ShellLayout) -> Option<Scrollbar> {
-    let tree = nav_tree_rect(layout);
-    let max_scroll = (nav_height(layout) - tree.size.y).max(0.0);
-    if max_scroll <= 1.0 || tree.size.y <= 1.0 {
-        return None;
-    }
-    let track = Rect::new(layout.nav.max().x - 10.0, tree.origin.y, 6.0, tree.size.y);
-    let thumb_h =
-        (track.size.y * tree.size.y / (tree.size.y + max_scroll)).clamp(28.0, track.size.y);
-    Some(Scrollbar {
-        track,
-        thumb_h,
-        max_scroll,
-    })
-}
-
 /// 应用程序。
 pub struct GalleryApp {
     pub state: GalleryState,
@@ -206,7 +200,10 @@ pub struct GalleryApp {
     ///
     tree: ShellTree,
     page_layout: Option<PageLayout>,
-    nav_spring: Spring,
+    /// 规范导航视图状态机（ADR-0026）：托管 Auto 三档响应、弹簧动效与独立滚动。
+    pub nav_view: NavigationViewState,
+    /// 最近一帧 `NavigationView` 求解出的几何布局。
+    pub nav_layout: NavigationViewLayout,
     /// 当前场景的上传代次。
     ///
     /// 每次重建且*仅*在重建时递增代次：当世代未推进时 GPU 跳过上传，
@@ -228,7 +225,6 @@ pub struct GalleryApp {
     last_pressed: Option<u64>,
     last_focus: Option<u64>,
     last_viewport: (f32, f32),
-    nav_max_scroll: f32,
     pointer: Vec2,
     panning: Option<Vec2>,
     dragging_range: Option<u64>,
@@ -240,10 +236,6 @@ pub struct GalleryApp {
     scrollbar: Option<Scrollbar>,
     /// 拖拽过程中滑块内部的抓取偏移量。
     scroll_drag: Option<f32>,
-    /// 当导航树高于窗格时显示的导航窗格滚动条。
-    nav_scrollbar: Option<Scrollbar>,
-    /// 拖拽过程中导航滚动条滑块内部的抓取偏移量。
-    nav_scroll_drag: Option<f32>,
     /// 虚拟列表滚动条拖拽状态：`(card, grab offset)`。
     list_scroll_drag: Option<(usize, f32)>,
     /// 上次重建中发生变化的图元范围。
@@ -346,20 +338,19 @@ impl GalleryApp {
     /// 在首页创建展厅。
     #[must_use]
     pub fn new() -> Self {
-        let mut tree = ShellTree::new();
-        let layout = tree.solve(
-            &GalleryState::default(),
-            Rect::new(0.0, 0.0, 1280.0, 800.0),
-            NAV_EXPANDED,
-        );
-        // 使用临界阻尼弹簧（ξ = 1.0）与收敛阈值，消除欠阻尼过冲在 `.clamp(NAV_COLLAPSED, NAV_EXPANDED)` 处反弹造成的侧边栏折叠/展开抖动。
-        let mut nav_spring = Spring::critically_damped(420.0, NAV_EXPANDED);
-        nav_spring.rest_threshold = 0.25;
-        nav_spring.rest_velocity = 2.0;
-        nav_spring.set_target(NAV_EXPANDED);
         let labels = Labels::new();
         let mut state = GalleryState::default();
         state.text_render.report = labels.cache.report();
+        let init_viewport = Rect::new(0.0, 0.0, 1280.0, 800.0);
+        let init_nav_desc = build_navigation_view_desc(&state, init_viewport, None);
+        let mut nav_view = NavigationViewState::from_desc(&init_nav_desc);
+        // 默认展开 Components 分组，确保全部目录组件可直接浏览与滚动定位。
+        nav_view.expanded_item_ids.push(target::id(Target::NavPage(
+            PageId::Components.index() as u8
+        )));
+        let nav_layout = init_nav_desc.compute_layout(&nav_view);
+        let mut tree = ShellTree::new();
+        let layout = tree.solve(&state, init_viewport, nav_layout.pane_rect.width());
         Self {
             state,
             mica: unbound_app::MicaBackdrop::new(),
@@ -373,7 +364,8 @@ impl GalleryApp {
             semantics: unbound_a11y::Semantics::new(ROOT),
             tree,
             page_layout: None,
-            nav_spring,
+            nav_view,
+            nav_layout,
             generation: 0,
             atlas_clock: 0,
             last_revision: 0,
@@ -381,7 +373,6 @@ impl GalleryApp {
             last_pressed: None,
             last_focus: None,
             last_viewport: (0.0, 0.0),
-            nav_max_scroll: 0.0,
             pointer: Vec2::ZERO,
             panning: None,
             dragging_range: None,
@@ -390,8 +381,6 @@ impl GalleryApp {
             window_maximized: false,
             scrollbar: None,
             scroll_drag: None,
-            nav_scrollbar: None,
-            nav_scroll_drag: None,
             list_scroll_drag: None,
             dirty_ranges: Vec::new(),
             layout_key: LayoutKey {
@@ -819,28 +808,101 @@ impl GalleryApp {
         gallery::palette()
     }
 
-    /// 导航并关闭瞬态表面。
-    pub fn navigate(&mut self, page: PageId) {
+    /// 当前帧与自定义标题栏双向同步的 `NavigationView` 快照（ADR-0026）。
+    #[must_use]
+    pub fn nav_title_bar_sync(&self) -> NavigationViewTitleBarSync {
+        let desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+        self.nav_view.title_bar_sync(&desc)
+    }
+
+    /// 构建与当前顶栏尺寸及最大化状态对齐的 [`WindowCaptionButtons`] 描述符（ADR-0029）。
+    #[must_use]
+    pub fn window_caption_buttons_desc(&self) -> WindowCaptionButtons {
+        window_caption_buttons_desc(self.layout.top_bar, self.window_maximized)
+    }
+
+    /// 计算当前顶栏窗口控制按钮组的几何布局。
+    #[must_use]
+    pub fn window_caption_buttons_layout(&self) -> WindowCaptionButtonsLayout {
+        self.window_caption_buttons_desc()
+            .layout(self.layout.top_bar)
+    }
+
+    /// 导出当前帧对齐 `FrameHitMetrics` 的统一窗口控制按钮热区契约（ADR-0029）。
+    #[must_use]
+    pub fn window_caption_hit_contract(&self) -> WindowCaptionFrameHitContract {
+        self.window_caption_buttons_layout().frame_hit_contract()
+    }
+
+    /// 消费并映射 `NavigationViewState` 产生的强类型事件队列。
+    fn drain_navigation_view_events(&mut self) {
+        let events = self.nav_view.drain_events();
+        for event in events {
+            match event {
+                NavigationViewEvent::ItemInvoked { item_id, .. } => match target::decode(item_id) {
+                    Some(Target::NavPage(page)) => {
+                        let target_page = PageId::from_index(page as usize);
+                        self.navigate_internal(target_page, item_id);
+                    }
+                    Some(Target::NavComponent(index)) => {
+                        if let Some(&id) = WidgetCatalogId::ALL.get(index as usize) {
+                            self.navigate_to_component(id);
+                        }
+                    }
+                    Some(Target::Footer(index)) => {
+                        let target_page = if index == 0 {
+                            PageId::Telemetry
+                        } else {
+                            PageId::Settings
+                        };
+                        self.navigate_internal(target_page, item_id);
+                    }
+                    _ => {}
+                },
+                NavigationViewEvent::PaneOpening
+                | NavigationViewEvent::PaneClosing
+                | NavigationViewEvent::DisplayModeChanged { .. }
+                | NavigationViewEvent::Expanding { .. }
+                | NavigationViewEvent::Collapsed { .. }
+                | NavigationViewEvent::SelectionChanged { .. }
+                | NavigationViewEvent::BackRequested
+                | NavigationViewEvent::SearchRequested { .. } => {
+                    self.state.bump();
+                }
+            }
+        }
+    }
+
+    fn navigate_internal(&mut self, page: PageId, nav_item_id: u64) {
         self.state.navigate(page);
+        self.nav_view.selected_item_id = Some(nav_item_id);
         self.state.blur_editors();
         self.state.search.edit.set_text(String::new());
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
-        self.pending_focus = Some(target::id(Target::NavPage(page.index() as u8)));
+        self.pending_focus = Some(nav_item_id);
+    }
+
+    /// 导航并关闭瞬态表面。
+    pub fn navigate(&mut self, page: PageId) {
+        let item_id = target::id(Target::NavPage(page.index() as u8));
+        self.navigate_internal(page, item_id);
     }
 
     /// 导航至组件展厅中的指定目录组件卡片，并将其滚动到视口顶部。
     pub fn navigate_to_component(&mut self, id: unbound_widgets::WidgetCatalogId) {
         self.state.navigate_to_component(id);
+        let item_id = target::id(Target::NavComponent(id as u8));
+        self.nav_view.selected_item_id = Some(item_id);
         self.state.blur_editors();
         self.state.search.edit.set_text(String::new());
         self.state.demo.modal_open = false;
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
-        self.pending_focus = Some(target::id(Target::NavComponent(id as u8)));
+        self.pending_focus = Some(item_id);
     }
 
     /// 像等价的指针或键盘手势一样应用无障碍动作。
@@ -972,7 +1034,10 @@ impl GalleryApp {
             || self.last_pressed != inter.pressed
             || self.last_focus != inter.focused
             || self.last_viewport != viewport
-            || !self.nav_spring.is_settled()
+            || !self.nav_view.pane_width_spring.is_settled()
+            || !self.nav_view.overlay_progress_spring.is_settled()
+            || !self.nav_view.indicator_pos_spring.is_settled()
+            || !self.nav_view.indicator_len_spring.is_settled()
     }
 
     /// 上次重建中发生变化的图元范围。
@@ -1079,7 +1144,24 @@ impl GalleryApp {
     pub fn rebuild(&mut self, viewport: (f32, f32), inter: Interaction) {
         let (width, height) = viewport;
         let viewport_rect = Rect::new(0.0, 0.0, width.max(320.0), height.max(240.0));
-        let raw_nav_width = self.nav_spring.value.clamp(NAV_COLLAPSED, NAV_EXPANDED);
+        let hover = inter.hovered;
+        let pressed = inter.pressed;
+        let nav_hovered = hover.filter(|&id| is_nav_item_node(id));
+        let nav_desc = build_navigation_view_desc(&self.state, viewport_rect, nav_hovered);
+        self.nav_view.sync_viewport(&nav_desc, viewport_rect.size.x);
+        self.drain_navigation_view_events();
+        self.nav_view.hovered_item_id = nav_hovered;
+        let pre_nav_layout = nav_desc.compute_layout(&self.nav_view);
+        self.nav_view.scroll_max = (pre_nav_layout.menu_content_height
+            - pre_nav_layout.menu_viewport_rect.height())
+        .max(0.0);
+        self.nav_view.scroll_offset = self
+            .nav_view
+            .scroll_offset
+            .clamp(0.0, self.nav_view.scroll_max);
+        let nav_sync = self.nav_view.title_bar_sync(&nav_desc);
+
+        let raw_nav_width = pre_nav_layout.pane_rect.width();
         let scale = self.effective_scale.max(0.5);
         // 在布局求解前将侧边栏宽度对齐到物理像素网格，使 `layout.nav` 与 `layout.content` 的分界线在动画过程中不会出现亚像素往返跳变。
         let nav_width = if self.state.pixel_snap {
@@ -1091,8 +1173,6 @@ impl GalleryApp {
         // 云母已覆盖整窗（或原生材质从客户区透出）时根背景必须透明，
         // 否则不透明底色会把后景盖住。
         let mica_visible = self.root_background_transparent();
-        let hover = inter.hovered;
-        let pressed = inter.pressed;
         // 对照报告在布局求解前载入：舞台高度取决于用例数，先拿到用例数再求解，
         // 才能在进入报告页的首帧就得到完整滚动范围，而不是等到某次悬停才补一次重排。
         if self.state.active_page == PageId::Parity {
@@ -1113,8 +1193,6 @@ impl GalleryApp {
             self.frame_layout_stats = LayoutStats::default();
         }
         let layout = self.layout;
-        let nav_max_scroll = nav_height(&layout) - nav_tree_rect(&layout).size.y;
-        self.state.nav_scroll = self.state.nav_scroll.clamp(0.0, nav_max_scroll.max(0.0));
         let content_height = self.tree.content_height();
         self.state.content_scroll = self.state.content_scroll.clamp(
             0.0,
@@ -1173,6 +1251,7 @@ impl GalleryApp {
             scene,
             labels,
             state,
+            nav_view,
             ..
         } = self;
         labels.set_raster_scale(scale);
@@ -1196,10 +1275,31 @@ impl GalleryApp {
             scale,
             pixel_snap,
         );
+        let nav_output = {
+            let mut text_ctx = canvas.text_ctx(atlas_clock);
+            emit_navigation_view(
+                NAV_VIEW_NODE,
+                &nav_desc,
+                ControlState::default(),
+                nav_view,
+                &mut text_ctx,
+            )
+        };
+        let resolved_nav_layout = nav_output.layout.clone();
         draw_background(&mut canvas, &layout, mica_visible);
-        draw_top_bar(&mut canvas, state, &layout, self.window_maximized);
-        draw_nav(&mut canvas, state, &layout);
+        draw_top_bar(
+            &mut canvas,
+            state,
+            &layout,
+            self.window_maximized,
+            nav_sync,
+            atlas_clock,
+        );
+        // NavigationView 前 2 个图元为窗格透明底与圆角内容区容器，需位于页面内容下方；
+        // 其余窗格行、Overlay 浮层与子菜单 Flyout 在页面内容之上发射，确保紧凑/极简浮层覆盖页面。
+        draw_navigation_view_shell_backdrop(&mut canvas, &nav_output.output);
         draw_page(&mut canvas, state, &layout, &page_layout);
+        draw_navigation_view_pane(&mut canvas, &nav_output.output, &resolved_nav_layout);
         draw_hud(&mut canvas, state, &layout, page_layout.cards.len());
         draw_search_overlay(&mut canvas, state, &layout);
         draw_top_bar_dropdowns(&mut canvas, state, &layout);
@@ -1260,8 +1360,7 @@ impl GalleryApp {
         self.layout = layout;
         self.page_layout = Some(page_layout);
         self.scrollbar = scrollbar;
-        self.nav_scrollbar = nav_scrollbar(&layout);
-        self.nav_max_scroll = nav_max_scroll.max(0.0);
+        self.nav_layout = resolved_nav_layout;
         self.last_revision = self.state.revision;
         self.last_hover = hover;
         self.last_pressed = pressed;
@@ -1269,15 +1368,10 @@ impl GalleryApp {
         self.last_viewport = viewport;
     }
 
-    /// 推进时间驱动的演示。
+    /// 推进时间驱动的演示与 `NavigationView` 弹簧动效。
     pub fn tick(&mut self, dt: f32) -> bool {
-        let target = if self.state.nav_expanded {
-            NAV_EXPANDED
-        } else {
-            NAV_COLLAPSED
-        };
-        self.nav_spring.set_target(target);
-        let nav_moving = self.nav_spring.step(dt);
+        let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+        let nav_moving = self.nav_view.tick(dt, &nav_desc);
         let demo_moving = self.state.tick(dt);
         if nav_moving || demo_moving {
             self.state.bump();
@@ -1296,15 +1390,6 @@ impl GalleryApp {
                 let scroll = bar.scroll_for(position.y - grab);
                 if (scroll - self.state.content_scroll).abs() > 0.01 {
                     self.state.content_scroll = scroll;
-                    self.state.bump();
-                }
-            }
-        }
-        if let Some(grab) = self.nav_scroll_drag {
-            if let Some(bar) = self.nav_scrollbar {
-                let scroll = bar.scroll_for(position.y - grab);
-                if (scroll - self.state.nav_scroll).abs() > 0.01 {
-                    self.state.nav_scroll = scroll;
                     self.state.bump();
                 }
             }
@@ -1393,6 +1478,29 @@ impl GalleryApp {
             self.close_editor_menu(unbound_widgets::context_menu::ContextClose::ClickOutside);
             return;
         }
+        // 当 NavigationView 处于 Overlay 浮层或子菜单 Flyout 打开态时，点击外部区域自动轻闭。
+        let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+        if self.nav_view.has_open_transient_surface(&nav_desc) {
+            let inside_overlay = self
+                .nav_layout
+                .overlay_rect
+                .is_some_and(|r| r.contains_point(position));
+            let inside_flyout = self
+                .nav_layout
+                .flyout_rect
+                .is_some_and(|r| r.contains_point(position));
+            let on_toggle = target == Some(target::id(Target::NavToggle));
+            if !inside_overlay && !inside_flyout && !on_toggle {
+                if self.nav_view.open_flyout_parent_id.is_some() {
+                    self.nav_view.open_flyout_parent_id = None;
+                    self.state.bump();
+                } else if self.nav_view.is_overlay_open(&nav_desc) {
+                    self.nav_view.set_pane_open(false, &nav_desc);
+                    self.drain_navigation_view_events();
+                    self.state.bump();
+                }
+            }
+        }
         // 点击标题栏语言或缩放下拉菜单之外的区域时自动收起浮层。
         if (self.state.lang_dropdown_open || self.state.zoom_dropdown_open)
             && !matches!(
@@ -1457,7 +1565,6 @@ impl GalleryApp {
     ///
     pub fn cancel_interactions(&mut self) {
         self.scroll_drag = None;
-        self.nav_scroll_drag = None;
         self.list_scroll_drag = None;
         self.dragging_range = None;
         self.panning = None;
@@ -1487,10 +1594,14 @@ impl GalleryApp {
             return;
         }
         let point = self.pointer;
-        if self.layout.nav.contains_point(point) {
-            self.state.nav_scroll =
-                (self.state.nav_scroll - delta_y * 44.0).clamp(0.0, self.nav_max_scroll);
-            self.state.bump();
+        let active_nav_rect = self
+            .nav_layout
+            .overlay_rect
+            .unwrap_or(self.nav_layout.pane_rect);
+        if active_nav_rect.contains_point(point) {
+            if self.nav_view.scroll_by(-delta_y * 44.0) {
+                self.state.bump();
+            }
             return;
         }
         if !self.layout.content.contains_point(point) {
@@ -1805,6 +1916,11 @@ impl GalleryApp {
                 }
             }
             PlatformKey::Named(name) if name == "Escape" => {
+                let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+                if self.nav_view.has_open_transient_surface(&nav_desc) {
+                    self.nav_view.request_back(&nav_desc);
+                    self.drain_navigation_view_events();
+                }
                 self.state.demo.modal_open = false;
                 self.state.demo.dropdown_open = false;
                 self.state.lang_dropdown_open = false;
@@ -1899,12 +2015,7 @@ impl GalleryApp {
         };
         matches!(
             target::decode(node),
-            Some(
-                Target::ContentScrollbar
-                    | Target::NavScrollbar
-                    | Target::Knob(..)
-                    | Target::Demo(..)
-            )
+            Some(Target::ContentScrollbar | Target::Knob(..) | Target::Demo(..))
         )
     }
     /// 开始拖拽页面滚动条滑块。
@@ -1930,25 +2041,6 @@ impl GalleryApp {
                 self.state.bump();
             }
             self.scroll_drag = Some(bar.thumb_h * 0.5);
-        }
-    }
-
-    /// 开始拖拽导航窗格滚动条滑块。
-    fn begin_nav_scrollbar_drag(&mut self, position: Vec2) {
-        let Some(bar) = self.nav_scrollbar else {
-            return;
-        };
-        let thumb_top = bar.thumb_top(self.state.nav_scroll);
-        let grab = position.y - thumb_top;
-        self.nav_scroll_drag = Some(grab);
-        if !(0.0..=bar.thumb_h).contains(&grab) {
-            let centred = position.y - bar.thumb_h * 0.5;
-            let scroll = bar.scroll_for(centred);
-            if (scroll - self.state.nav_scroll).abs() > 0.01 {
-                self.state.nav_scroll = scroll;
-                self.state.bump();
-            }
-            self.nav_scroll_drag = Some(bar.thumb_h * 0.5);
         }
     }
 
@@ -1988,9 +2080,6 @@ impl GalleryApp {
         match target {
             Target::ContentScrollbar => {
                 self.begin_scrollbar_drag(position);
-            }
-            Target::NavScrollbar => {
-                self.begin_nav_scrollbar_drag(position);
             }
             Target::Knob(page, card, knob) => {
                 // 仅滑块捕获指针。开关或复选框属于离散控件，等待释放。
@@ -2032,14 +2121,15 @@ impl GalleryApp {
             return;
         }
         match target {
-            Target::NavPage(page) => self.navigate(PageId::from_index(page as usize)),
-            Target::NavComponent(index) => {
-                if let Some(&id) = unbound_widgets::WidgetCatalogId::ALL.get(index as usize) {
-                    self.navigate_to_component(id);
-                }
+            Target::NavPage(_) | Target::NavComponent(_) => {
+                let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+                self.nav_view.invoke_item(&nav_desc, target::id(target));
+                self.drain_navigation_view_events();
             }
             Target::NavToggle => {
-                self.state.nav_expanded = !self.state.nav_expanded;
+                let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+                self.nav_view.toggle_pane(&nav_desc);
+                self.drain_navigation_view_events();
                 self.state.bump();
             }
             Target::Theme(bit) => {
@@ -2094,11 +2184,11 @@ impl GalleryApp {
                 self.focus_editor_at(EditorId::Fps, target::id(Target::FpsInput), position, false);
             }
             Target::EditorMenuItem(_) => {}
-            Target::Footer(index) => self.navigate(if index == 0 {
-                PageId::Telemetry
-            } else {
-                PageId::Settings
-            }),
+            Target::Footer(_) => {
+                let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
+                self.nav_view.invoke_item(&nav_desc, target::id(target));
+                self.drain_navigation_view_events();
+            }
             Target::SearchResult(page) => self.navigate(PageId::from_index(page as usize)),
             Target::SearchComponent(index) => {
                 if let Some(&id) = unbound_widgets::WidgetCatalogId::ALL.get(index as usize) {
@@ -2165,9 +2255,6 @@ impl GalleryApp {
             }
             Target::ContentScrollbar => {
                 // 滚动条在按压时生效，而非释放时。
-            }
-            Target::NavScrollbar => {
-                // 导航滚动条在按压时生效，而非释放时。
             }
         }
     }
@@ -2805,7 +2892,6 @@ impl GalleryApp {
 
     fn finish_drag(&mut self, position: Vec2) {
         self.scroll_drag = None;
-        self.nav_scroll_drag = None;
         self.list_scroll_drag = None;
         if let Some(start) = self.state.demo.marquee.map(|(start, _)| start) {
             let marquee = Rect::from_points(start, position);
@@ -2939,11 +3025,20 @@ impl GalleryApp {
             "Button \"Toggle navigation\"",
         );
         builder.close();
-        text_node(
-            &mut builder,
-            Rect::new(52.0, 14.0, 190.0, 28.0),
-            "Unbound UI Gallery",
-        );
+        let right_bound = if self.layout.lang.size.x > 0.0 {
+            self.layout.lang.origin.x
+        } else if self.layout.theme.size.x > 0.0 {
+            self.layout.theme.origin.x
+        } else {
+            self.layout.zoom.origin.x
+        };
+        if right_bound > 292.0 {
+            text_node(
+                &mut builder,
+                Rect::new(52.0, 14.0, 190.0, 28.0),
+                "Unbound UI Gallery",
+            );
+        }
         if self.layout.search.size.x > 100.0 {
             builder.open(
                 interactive_rect(self.layout.search),
@@ -2955,23 +3050,40 @@ impl GalleryApp {
         bundle_controls(&mut builder, &self.layout);
         builder.close();
 
-        // 导航窗格。
-        builder.open(NodeKind::Container, self.layout.nav, "NavigationView");
-        builder.set_clip(self.layout.nav);
-        builder.set_scrollable(true);
-        let nav_rect = self.layout.nav;
-        let nav_rows = nav_rows(&self.state, &self.layout);
-        for (rect, label) in nav_rows {
-            // 滚出窗格的行不绘制任何内容；校验其被裁剪为零的目标只会把滚动位置误报为布局缺陷。
-            //
-            //
-            let visible = rect.intersect(&nav_rect);
-            if visible.size.y >= 24.0 && visible.size.x >= 24.0 {
-                builder.open(interactive_rect(rect), rect, &label);
-                builder.close();
+        // 导航窗格（由 `NavigationView` 布局结果驱动）。
+        let nav_rect = self
+            .nav_layout
+            .overlay_rect
+            .unwrap_or(self.nav_layout.pane_rect);
+        if nav_rect.size.x > 0.0 && nav_rect.size.y > 0.0 {
+            builder.open(NodeKind::Container, nav_rect, "NavigationView");
+            builder.set_clip(nav_rect);
+            builder.set_scrollable(true);
+            for row in &self.nav_layout.rows {
+                let (label, clip_bounds) = match &row.kind {
+                    NavigationViewRowKind::Item { item, .. } => (
+                        format!("Navigation \"{}\"", item.content),
+                        self.nav_layout.menu_viewport_rect.intersect(&nav_rect),
+                    ),
+                    NavigationViewRowKind::FooterItem { item } => (
+                        format!("Navigation \"{}\"", item.content),
+                        self.nav_layout.footer_rect.intersect(&nav_rect),
+                    ),
+                    NavigationViewRowKind::Settings => (
+                        "Navigation \"Settings\"".to_string(),
+                        self.nav_layout.footer_rect.intersect(&nav_rect),
+                    ),
+                    NavigationViewRowKind::Header { .. }
+                    | NavigationViewRowKind::Separator { .. } => continue,
+                };
+                let visible = row.rect.intersect(&clip_bounds);
+                if visible.size.y >= 24.0 && visible.size.x >= 24.0 {
+                    builder.open(interactive_rect(visible), visible, &label);
+                    builder.close();
+                }
             }
+            builder.close();
         }
-        builder.close();
 
         // 页面内容。
         builder.open(NodeKind::Container, self.layout.content, "Page");
@@ -3217,67 +3329,6 @@ fn bundle_controls(builder: &mut FrameBuilder, layout: &ShellLayout) {
     }
 }
 
-fn nav_rows(state: &GalleryState, layout: &ShellLayout) -> Vec<(Rect, String)> {
-    let mut rows = Vec::new();
-    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
-        let mut y = layout.nav.origin.y + 10.0;
-        for page in [
-            PageId::Home,
-            PageId::Colors,
-            PageId::Buttons,
-            PageId::Flex,
-            PageId::ListView,
-            PageId::Viewport,
-            PageId::Springs,
-            PageId::Systems,
-            PageId::Settings,
-        ] {
-            rows.push((
-                Rect::new(layout.nav.origin.x + 14.0, y, NAV_COLLAPSED - 28.0, 36.0),
-                format!("Navigation \"{}\"", page.info().title),
-            ));
-            y += 42.0;
-        }
-        let _ = state;
-        return rows;
-    }
-    let mut y = layout.nav.origin.y + 10.0;
-    rows.push((
-        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
-        "Navigation \"Home\"".to_string(),
-    ));
-    // 树从 Home 行及其分隔符下方开始——与 `nav_tree_rect` 使用相同的偏移，并按树裁剪区过滤可见项。
-    let tree = nav_tree_rect(layout);
-    y = tree.origin.y - state.nav_scroll;
-    for category in CategoryId::ALL {
-        y += 24.0;
-        for page in category.pages() {
-            let row_rect = Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 30.0);
-            let clipped = row_rect.intersect(&tree);
-            if clipped.size.y >= 24.0 && clipped.size.x >= 24.0 {
-                rows.push((clipped, format!("Navigation \"{}\"", page.info().short)));
-            }
-            y += 30.0;
-            if *page == PageId::Components {
-                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
-                    let comp_rect =
-                        Rect::new(layout.nav.origin.x + 22.0, y, layout.nav_width - 32.0, 28.0);
-                    let comp_clipped = comp_rect.intersect(&tree);
-                    if comp_clipped.size.y >= 24.0 && comp_clipped.size.x >= 24.0 {
-                        rows.push((
-                            comp_clipped,
-                            format!("Component \"{}\"", pages::component_nav_label(comp_id)),
-                        ));
-                    }
-                    y += 28.0;
-                }
-            }
-        }
-        y += 8.0;
-    }
-    rows
-}
-
 fn demo_rect(app: &GalleryApp, page: PageId, card: u8, part: u16) -> Option<Rect> {
     let node = target::id(Target::Demo(page.index() as u8, card, part));
     node_rect_from_regions(app, node)
@@ -3293,31 +3344,6 @@ fn node_rect_from_regions(app: &GalleryApp, node: u64) -> Option<Rect> {
 // ---------------------------------------------------------------------------
 // 布局
 // ---------------------------------------------------------------------------
-
-fn nav_tree_rect(layout: &ShellLayout) -> Rect {
-    let top = layout.nav.origin.y + 56.0;
-    let bottom = layout.viewport.max().y - 10.0 - 82.0;
-    Rect::new(
-        layout.nav.origin.x,
-        top,
-        layout.nav.width(),
-        (bottom - top).max(0.0),
-    )
-}
-
-fn nav_height(layout: &ShellLayout) -> f32 {
-    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
-        return 9.0 * 42.0 + 10.0;
-    }
-    let mut height = 10.0 + 38.0 + 8.0;
-    for category in CategoryId::ALL {
-        height += 24.0 + category.pages().len() as f32 * 30.0 + 8.0;
-        if category == CategoryId::Components {
-            height += pages::SIDEBAR_COMPONENT_IDS.len() as f32 * 28.0;
-        }
-    }
-    height + 90.0
-}
 
 fn search_overlay_rect(layout: &ShellLayout, count: usize) -> Rect {
     let width = layout.search.size.x.max(380.0);
@@ -3368,19 +3394,23 @@ fn draw_top_bar(
     state: &GalleryState,
     layout: &ShellLayout,
     window_maximized: bool,
+    nav_sync: NavigationViewTitleBarSync,
+    atlas_clock: u64,
 ) {
     let palette = *canvas.palette;
     canvas.rect(layout.top_bar, 0.0, palette.header_bg, 0, 0.0, 0.0);
     canvas.divider(0.0, layout.top_bar.max().y - 1.0, layout.top_bar.size.x);
 
-    widgets::icon_button(
-        canvas,
-        target::id(Target::NavToggle),
-        layout.nav_toggle,
-        Icon::Menu,
-        state.t("a11y.toggle_nav"),
-        !state.nav_expanded,
-    );
+    if nav_sync.is_pane_toggle_button_visible {
+        widgets::icon_button(
+            canvas,
+            target::id(Target::NavToggle),
+            layout.nav_toggle,
+            Icon::Menu,
+            state.t("a11y.toggle_nav"),
+            !nav_sync.is_pane_open,
+        );
+    }
 
     let logo = Rect::new(52.0, 14.0, 28.0, 28.0);
     widgets::brand_badge(canvas, logo, "U");
@@ -3638,8 +3668,8 @@ fn draw_top_bar(
         state.show_hud,
     );
 
-    // 客户端窗口按钮。
-    draw_window_controls(canvas, state, layout, window_maximized);
+    // 客户端窗口按钮（ADR-0029 独立 WindowCaptionButtons 发射器）。
+    draw_window_controls(canvas, layout, window_maximized, atlas_clock);
 }
 
 fn draw_top_bar_dropdowns(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
@@ -3770,375 +3800,284 @@ fn draw_editor_menu(canvas: &mut Canvas<'_>, paint: Option<&EditorMenuPaint>) {
     }
 }
 
+/// 构造与顶栏对齐的独立窗口控制按钮组描述符（ADR-0029）。
+fn window_caption_buttons_desc(top_bar: Rect, window_maximized: bool) -> WindowCaptionButtons {
+    WindowCaptionButtons::new()
+        .height(top_bar.size.y)
+        .button_width(46.0)
+        .maximized(window_maximized)
+        .focused(true)
+        .minimize_id(target::id(Target::WindowMinimize))
+        .maximize_id(target::id(Target::WindowMaximize))
+        .close_id(target::id(Target::WindowClose))
+}
+
 fn draw_window_controls(
     canvas: &mut Canvas<'_>,
-    state: &GalleryState,
     layout: &ShellLayout,
-    canvas_maximized: bool,
+    window_maximized: bool,
+    atlas_clock: u64,
 ) {
-    let palette = *canvas.palette;
-    let buttons = [
-        (
-            Target::WindowMinimize,
-            layout.window_minimize,
-            state.t("window.minimize"),
-            false,
-        ),
-        (
-            Target::WindowMaximize,
-            layout.window_maximize,
-            state.t("window.maximize"),
-            false,
-        ),
-        (
-            Target::WindowClose,
-            layout.window_close,
-            state.t("window.close"),
-            true,
-        ),
-    ];
-    for (target, rect, label, destructive) in buttons {
-        let node = target::id(target);
-        let start = canvas.span_start();
-        let hovered = canvas.hovered(node);
-        let pressed = canvas.pressed(node);
-        // 背景始终存在，仅在悬停时淡入，因此指向窗口按钮仅重绘一个图元，而非插入新图元。
-        //
-        //
-        let fill = if destructive {
-            palette.danger
-        } else {
-            palette.control_hover
-        };
-        canvas.rect_faded(rect, 0.0, fill, if hovered || pressed { 1.0 } else { 0.0 });
-        let color = if destructive && hovered {
-            palette.on_hero
-        } else {
-            palette.text
-        };
-        let middle = rect.center();
-        match target {
-            Target::WindowMinimize => {
-                // 垂直居中的 10 × 1 逻辑像素横条。描边四舍五入为整物理像素并对齐像素网格，
-                // 因此在 100%、125%、150% 与 200% 下均保持一像素粗细
-                // （旧的 `middle.y + 4.0` 落在图标框底边上，在小数缩放下粗细会翻倍）。
-                //
-                //
-                let scale = canvas.scale().max(0.5);
-                let stroke = scale.round().max(1.0) / scale;
-                let top = (middle.y * scale - stroke * scale * 0.5).round() / scale;
-                canvas.rect(
-                    Rect::new(middle.x - 5.0, top, 10.0, stroke),
-                    0.0,
-                    color,
-                    0,
-                    0.0,
-                    0.0,
-                );
-            }
-            Target::WindowMaximize => {
-                let middle = rect.center();
-                // 两种状态都精确绘制**两个**图元，因此切换只需修补两个切片，
-                // 而不会改变场景形状。形状变化会推进上传代次并全量重传场景——
-                // 更糟的是，在缓冲池落后于 diff 基准时可能会让丢帧漏洞穿透。
-                //
-                //
-                //
-                if canvas_maximized {
-                    // 还原图标：两个错位方框。前方方框用图标背后的颜色填充，
-                    // 否则后方方框的边线会穿过其内部，使一对图形看起来像井字棋网格。
-                    //
-                    //
-                    let occluder = if hovered || pressed {
-                        palette.control_hover
-                    } else {
-                        palette.header_bg
-                    };
-                    canvas.rect(
-                        Rect::new(middle.x - 3.0, middle.y - 5.0, 8.0, 8.0),
-                        0.0,
-                        0,
-                        color,
-                        1.0,
-                        0.0,
-                    );
-                    canvas.rect(
-                        Rect::new(middle.x - 5.0, middle.y - 3.0, 8.0, 8.0),
-                        0.0,
-                        occluder,
-                        color,
-                        1.0,
-                        0.0,
-                    );
-                } else {
-                    // 最大化图标：一个描边方框，外加一个充当还原图标第二个方框的透明填充。
-                    // 该填充无颜色且不透明度为零，因此不绘制任何像素，但将图元数保持为两个。
-                    //
-                    //
-                    let square = Rect::new(middle.x - 5.0, middle.y - 5.0, 10.0, 10.0);
-                    canvas.rect_faded(square, 0.0, 0, 0.0);
-                    canvas.rect(square, 0.0, 0, color, 1.0, 0.0);
-                }
-            }
-            Target::WindowClose => {
-                // 两条解析描边，而非 "×" 字形（U+00D7）。该字形位于字体的数学轴上且墨水仅占
-                // em 框的一小部分，在 200% 下小了 40% 且偏低 4 px。
-                // 解析描边精确相交于按钮中心，并由 SDF 进行抗锯齿。
-                //
-                //
-                let half = 4.5;
-                let mid = [middle.x, middle.y];
-                canvas.curve(
-                    [middle.x - half, middle.y - half],
-                    mid,
-                    [middle.x + half, middle.y + half],
-                    1.25,
-                    color,
-                );
-                canvas.curve(
-                    [middle.x + half, middle.y - half],
-                    mid,
-                    [middle.x - half, middle.y + half],
-                    1.25,
-                    color,
-                );
-            }
-            _ => {}
-        }
-        canvas.control(
-            node,
-            rect,
-            Role::Button,
-            label,
-            CursorKind::Default,
-            false,
-            false,
-        );
-        canvas.record_span(node, start);
-    }
-}
-
-fn draw_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    let palette = *canvas.palette;
-    canvas.begin_clip(layout.nav);
-    canvas.rect(layout.nav, 0.0, palette.nav_bg, 0, 0.0, 0.0);
-    canvas.divider(layout.nav.max().x - 1.0, layout.nav.origin.y, 1.0);
-
-    // 弹簧仍在运动时即切换内容：展开的标签会被收缩中的窗格裁剪，
-    // 因此提前回退到固定水平锚点的图标栏。
-    if layout.nav_width < NAV_COLLAPSE_THRESHOLD {
-        draw_collapsed_nav(canvas, state, layout);
-        canvas.end_clip();
-        return;
-    }
-
-    let mut y = layout.nav.origin.y + 10.0;
-    nav_item(
-        canvas,
-        layout,
-        Rect::new(layout.nav.origin.x + 10.0, y, layout.nav_width - 20.0, 36.0),
-        state.t("nav.home"),
-        Icon::Grid,
-        state.active_page == PageId::Home,
-        Target::NavPage(PageId::Home.index() as u8),
-    );
-    y += 38.0;
-    canvas.divider(layout.nav.origin.x + 14.0, y + 6.0, layout.nav_width - 28.0);
-
-    let tree = nav_tree_rect(layout);
-    canvas.begin_clip(tree);
-    let mut tree_y = tree.origin.y - state.nav_scroll;
-    for category in CategoryId::ALL {
-        let active = state.active_page.category() == category;
-        let header_rect = Rect::new(
-            layout.nav.origin.x + 18.0,
-            tree_y,
-            layout.nav_width - 36.0,
-            22.0,
-        );
-        if header_rect.max().y > tree.origin.y && header_rect.origin.y < tree.max().y {
-            widgets::sidebar_section_header(
-                canvas,
-                header_rect,
-                category.localized_label(state.locale),
-                active,
-            );
-        }
-        tree_y += 24.0;
-        for page in category.pages() {
-            let row_rect = Rect::new(
-                layout.nav.origin.x + 10.0,
-                tree_y,
-                layout.nav_width - 20.0,
-                30.0,
-            );
-            let selected = state.active_page == *page
-                && (*page != PageId::Components || state.active_component.is_none());
-            if row_rect.max().y > tree.origin.y && row_rect.origin.y < tree.max().y {
-                let page_icon = if *page == PageId::Components {
-                    Icon::ChevronDown
-                } else {
-                    Icon::ChevronRight
-                };
-                nav_item(
-                    canvas,
-                    layout,
-                    row_rect,
-                    page.localized_info(state.locale).short,
-                    page_icon,
-                    selected,
-                    Target::NavPage(page.index() as u8),
-                );
-            }
-            tree_y += 30.0;
-            if *page == PageId::Components {
-                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
-                    let comp_rect = Rect::new(
-                        layout.nav.origin.x + 22.0,
-                        tree_y,
-                        layout.nav_width - 32.0,
-                        28.0,
-                    );
-                    let comp_selected = state.active_page == PageId::Components
-                        && state.active_component == Some(comp_id);
-                    if comp_rect.max().y > tree.origin.y && comp_rect.origin.y < tree.max().y {
-                        nav_item(
-                            canvas,
-                            layout,
-                            comp_rect,
-                            pages::component_nav_label_localized(comp_id, state.locale),
-                            Icon::Dot,
-                            comp_selected,
-                            Target::NavComponent(comp_id as u8),
-                        );
-                    }
-                    tree_y += 28.0;
-                }
-            }
-        }
-        tree_y += 8.0;
-    }
-    canvas.end_clip();
-
-    let footer_y = layout.viewport.max().y - 90.0;
-    canvas.divider(
-        layout.nav.origin.x + 14.0,
-        footer_y,
-        layout.nav_width - 28.0,
-    );
-    nav_item(
-        canvas,
-        layout,
-        Rect::new(
-            layout.nav.origin.x + 10.0,
-            footer_y + 8.0,
-            layout.nav_width - 20.0,
-            34.0,
-        ),
-        state.t("nav.footer.telemetry"),
-        Icon::Chart,
-        state.active_page == PageId::Telemetry,
-        Target::Footer(0),
-    );
-    nav_item(
-        canvas,
-        layout,
-        Rect::new(
-            layout.nav.origin.x + 10.0,
-            footer_y + 44.0,
-            layout.nav_width - 20.0,
-            34.0,
-        ),
-        state.t("nav.footer.settings"),
-        Icon::Layers,
-        state.active_page == PageId::Settings,
-        Target::Footer(1),
-    );
-
-    draw_nav_scrollbar(canvas, state, layout);
-    canvas.end_clip();
-}
-
-/// 绘制导航树的滚动指示条。
-fn draw_nav_scrollbar(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    let Some(bar) = nav_scrollbar(layout) else {
-        return;
+    let desc = window_caption_buttons_desc(layout.top_bar, window_maximized);
+    let states = WindowCaptionButtonControlStates {
+        minimize: canvas.control_state(desc.minimize_id, false, false),
+        maximize: canvas.control_state(desc.maximize_id, false, false),
+        close: canvas.control_state(desc.close_id, false, false),
     };
-    let palette = *canvas.palette;
-    canvas.rect(bar.track, 3.0, palette.control_track, 0, 0.0, 0.0);
-    let thumb = Rect::new(
-        bar.track.origin.x,
-        bar.thumb_top(state.nav_scroll),
-        6.0,
-        bar.thumb_h,
-    );
-    canvas.rect(thumb, 3.0, palette.primary, 0, 0.0, 0.0);
-    // 导航滚动条是真实控件而非装饰：14px 热区允许拖拽滑块与点击轨道，
-    // 与页面滚动条完全一致。
-    //
-    canvas.control(
-        target::id(Target::NavScrollbar),
-        Rect::new(
-            bar.track.origin.x - 4.0,
-            bar.track.origin.y,
-            14.0,
-            bar.track.size.y,
-        ),
-        Role::ScrollBar,
-        "Scroll navigation",
-        CursorKind::Pointer,
-        false,
-        false,
-    );
-}
-
-fn nav_item(
-    canvas: &mut Canvas<'_>,
-    _layout: &ShellLayout,
-    rect: Rect,
-    label: &str,
-    icon: Icon,
-    selected: bool,
-    target: Target,
-) {
-    widgets::sidebar_item(canvas, target::id(target), rect, label, icon, selected);
-}
-
-fn draw_collapsed_nav(canvas: &mut Canvas<'_>, state: &GalleryState, layout: &ShellLayout) {
-    let items = [
-        (PageId::Home, Icon::Grid),
-        (PageId::Colors, Icon::Layers),
-        (PageId::Buttons, Icon::Snap),
-        (PageId::Flex, Icon::Grid),
-        (PageId::ListView, Icon::Chart),
-        (PageId::Viewport, Icon::Snap),
-        (PageId::Springs, Icon::Layers),
-        (PageId::Systems, Icon::Chart),
-        (PageId::Settings, Icon::Menu),
-    ];
-    let mut y = layout.nav.origin.y + 10.0;
-    // 使用固定宽度 `NAV_COLLAPSED - 28.0`（40px）与固定左锚点 `+14.0`（中心固定在 34.0），
-    // 确保侧边栏宽度在 140px 与 68px 之间过渡时图标中心点绝对静止，彻底消除水平位移抖动。
-    let button_width = NAV_COLLAPSED - 28.0;
-    for (page, icon) in items {
-        let rect = Rect::new(layout.nav.origin.x + 14.0, y, button_width, 36.0);
-        let selected = state.active_page == page
-            || (page == PageId::Colors && state.active_page.category() == CategoryId::Design);
-        widgets::icon_button(
-            canvas,
-            target::id(Target::NavPage(page.index() as u8)),
-            rect,
-            icon,
-            page.localized_info(state.locale).short,
-            selected,
-        );
-        y += 42.0;
+    let caption_out = {
+        let mut text_ctx = canvas.text_ctx(atlas_clock);
+        emit_window_caption_buttons(
+            &desc,
+            layout.top_bar,
+            window_maximized,
+            states,
+            &mut text_ctx,
+        )
+    };
+    for entry in &caption_out.entries {
+        canvas.control_output(entry.node, &entry.output);
     }
-    canvas.divider(
-        layout.nav.origin.x + 10.0,
-        layout.nav.max().y - 12.0,
-        NAV_COLLAPSED - 20.0,
+}
+
+/// 判断节点 ID 是否属于 Showcase 导航项（页面、目录组件或页脚快捷入口）。
+const fn is_nav_item_node(node: u64) -> bool {
+    matches!(
+        target::decode(node),
+        Some(Target::NavPage(_) | Target::NavComponent(_) | Target::Footer(_))
+    )
+}
+
+/// 为每个页面分配稳定的 `ShellIcon`，用于 `Auto` 紧凑图标栏与展开导航树。
+const fn nav_page_icon(page: PageId) -> ShellIcon {
+    match page {
+        PageId::Home => ShellIcon::Grid,
+        PageId::Components => ShellIcon::ChevronDown,
+        PageId::Telemetry => ShellIcon::Chart,
+        PageId::Settings => ShellIcon::Layers,
+        _ => match page.category() {
+            CategoryId::Design => ShellIcon::Layers,
+            CategoryId::Components => ShellIcon::Grid,
+            CategoryId::Layout => ShellIcon::Grid,
+            CategoryId::Collections => ShellIcon::Chart,
+            CategoryId::Motion => ShellIcon::Layers,
+            CategoryId::System => ShellIcon::Chart,
+            _ => ShellIcon::Snap,
+        },
+    }
+}
+
+/// 构造当前展厅状态对应的规范 [`NavigationViewDesc`]（ADR-0026）。
+fn build_navigation_view_desc(
+    state: &GalleryState,
+    viewport: Rect,
+    hovered_item: Option<u64>,
+) -> NavigationViewDesc {
+    let body_rect = Rect::new(
+        viewport.origin.x,
+        viewport.origin.y + crate::layout_tree::TOP_BAR_HEIGHT,
+        viewport.size.x,
+        (viewport.size.y - crate::layout_tree::TOP_BAR_HEIGHT).max(0.0),
     );
+
+    let mut menu_items = Vec::with_capacity(2 + CategoryId::ALL.len() * 5);
+    menu_items.push(NavigationViewMenuItem::item(
+        NavigationViewItem::new(
+            target::id(Target::NavPage(PageId::Home.index() as u8)),
+            state.t("nav.home"),
+        )
+        .with_icon(ShellIcon::Grid),
+    ));
+    menu_items.push(NavigationViewMenuItem::separator());
+
+    for category in CategoryId::ALL {
+        menu_items.push(NavigationViewMenuItem::header(
+            category.localized_label(state.locale),
+        ));
+        for page in category.pages() {
+            let mut item = NavigationViewItem::new(
+                target::id(Target::NavPage(page.index() as u8)),
+                page.localized_info(state.locale).short,
+            )
+            .with_icon(nav_page_icon(*page));
+            if *page == PageId::Components {
+                let children: Vec<NavigationViewMenuItem> = pages::SIDEBAR_COMPONENT_IDS
+                    .iter()
+                    .map(|&comp_id| {
+                        NavigationViewMenuItem::item(
+                            NavigationViewItem::new(
+                                target::id(Target::NavComponent(comp_id as u8)),
+                                pages::component_nav_label_localized(comp_id, state.locale),
+                            )
+                            .with_icon(ShellIcon::Dot),
+                        )
+                    })
+                    .collect();
+                item = item.with_children(children);
+            }
+            menu_items.push(NavigationViewMenuItem::item(item));
+        }
+    }
+
+    let footer_menu_items = vec![
+        NavigationViewMenuItem::item(
+            NavigationViewItem::new(
+                target::id(Target::Footer(0)),
+                state.t("nav.footer.telemetry"),
+            )
+            .with_icon(ShellIcon::Chart),
+        ),
+        NavigationViewMenuItem::item(
+            NavigationViewItem::new(
+                target::id(Target::Footer(1)),
+                state.t("nav.footer.settings"),
+            )
+            .with_icon(ShellIcon::Layers),
+        ),
+    ];
+
+    let selected = if state.active_page == PageId::Components {
+        if let Some(comp_id) = state.active_component {
+            Some(target::id(Target::NavComponent(comp_id as u8)))
+        } else {
+            Some(target::id(
+                Target::NavPage(PageId::Components.index() as u8),
+            ))
+        }
+    } else {
+        Some(target::id(Target::NavPage(state.active_page.index() as u8)))
+    };
+
+    let mut desc = NavigationViewDesc::new(body_rect, menu_items)
+        .pane_display_mode(NavigationViewPaneDisplayMode::Auto)
+        .open_pane_length(NAV_OPEN_PANE_LENGTH)
+        .compact_pane_length(NAVIGATION_VIEW_COMPACT_PANE_LENGTH)
+        .is_pane_toggle_button_visible(false)
+        .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+        .is_settings_visible(false)
+        .footer_menu_items(footer_menu_items)
+        .selected_item(selected)
+        .hovered_item(hovered_item)
+        .label("NavigationView");
+    desc.always_show_header = false;
+    desc
+}
+
+/// 发射 `NavigationView` 底层背景（窗格透明底与内容区圆角卡片），需置于页面内容之前。
+fn draw_navigation_view_shell_backdrop(canvas: &mut Canvas<'_>, nav_output: &WidgetOutput) {
+    let backdrop_count = nav_output.primitives.len().min(2);
+    if backdrop_count == 0 {
+        return;
+    }
+    let slice = WidgetOutput {
+        primitives: nav_output.primitives[..backdrop_count].to_vec(),
+        ..Default::default()
+    };
+    canvas.control_output(0, &slice);
+}
+
+/// 发射 `NavigationView` 窗格条目、Overlay 浮层与子菜单 Flyout，并将子热区标识还原为规范 `target::id`。
+fn draw_navigation_view_pane(
+    canvas: &mut Canvas<'_>,
+    nav_output: &WidgetOutput,
+    nav_layout: &NavigationViewLayout,
+) {
+    let backdrop_count = nav_output.primitives.len().min(2);
+    // 建立 `navigation_view_row_node(NAV_VIEW_NODE, item_id) -> (item_id, is_main_menu_row)` 映射表。
+    let mut row_map: rustc_hash::FxHashMap<u64, (u64, bool)> = rustc_hash::FxHashMap::default();
+    for row in &nav_layout.rows {
+        if let Some(item_id) = row.item_id() {
+            let is_main = matches!(row.kind, NavigationViewRowKind::Item { .. });
+            row_map.insert(
+                navigation_view_row_node(NAV_VIEW_NODE, item_id),
+                (item_id, is_main),
+            );
+        }
+    }
+    for row in &nav_layout.flyout_rows {
+        if let Some(item_id) = row.item_id() {
+            row_map.insert(
+                navigation_view_row_node(NAV_VIEW_NODE, item_id),
+                (item_id, false),
+            );
+        }
+    }
+
+    let menu_clip = unbound_input::ClipRect::new(nav_layout.menu_viewport_rect);
+    let mut remapped_hits = Vec::with_capacity(nav_output.sub_hits.len());
+    for mut hit in nav_output.sub_hits.iter().cloned() {
+        if let Some(&(item_id, is_main)) = row_map.get(&hit.node) {
+            hit.node = item_id;
+            if is_main && nav_layout.menu_viewport_rect.height() > 0.0 {
+                hit = hit.with_clip(menu_clip);
+            }
+            remapped_hits.push(hit);
+        }
+    }
+
+    let mut remapped_a11y = Vec::with_capacity(nav_output.sub_a11y.len());
+    for (sub_key, a11y) in &nav_output.sub_a11y {
+        if let Some(&(item_id, _)) = row_map.get(sub_key) {
+            remapped_a11y.push((item_id, a11y.clone()));
+        }
+    }
+
+    let mut remapped_focus = Vec::with_capacity(nav_output.sub_focus_order.len());
+    for sub_key in &nav_output.sub_focus_order {
+        if let Some(&(item_id, _)) = row_map.get(sub_key) {
+            remapped_focus.push(item_id);
+        }
+    }
+
+    let pane_out = WidgetOutput {
+        primitives: nav_output.primitives[backdrop_count..].to_vec(),
+        payloads: nav_output.payloads.clone(),
+        hit: None,
+        a11y: None,
+        focusable: false,
+        sub_hits: remapped_hits.into(),
+        sub_a11y: remapped_a11y.into(),
+        sub_focus_order: remapped_focus.into(),
+    };
+
+    let clip_rect = nav_layout.overlay_rect.unwrap_or(nav_layout.pane_rect);
+    let has_flyout = nav_layout.flyout_rect.is_some();
+    let base_prim = canvas.span_start();
+    if !has_flyout && clip_rect.width() > 0.0 && clip_rect.height() > 0.0 {
+        canvas.begin_clip(clip_rect);
+        canvas.widget_output(WidgetCatalogId::NavigationView, 0, &pane_out);
+        canvas.end_clip();
+    } else {
+        canvas.widget_output(WidgetCatalogId::NavigationView, 0, &pane_out);
+    }
+    // 按行记录精确的图元跨度 `[start, end)`，确保悬停单行导航项时的脏切片归因于该行自身。
+    let mut cursor = 0usize;
+    let prims = &pane_out.primitives;
+    for row in &nav_layout.rows {
+        let Some(item_id) = row.item_id() else {
+            continue;
+        };
+        let row_pos = [row.rect.origin.x, row.rect.origin.y];
+        let row_size = [row.rect.size.x, row.rect.size.y];
+        let focus_rect = row.rect.inflate(3.0);
+        let focus_pos = [focus_rect.origin.x, focus_rect.origin.y];
+        let focus_size = [focus_rect.size.x, focus_rect.size.y];
+        let approx =
+            |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.1 && (a[1] - b[1]).abs() < 0.1;
+        if let Some(rel_start) = prims[cursor..]
+            .iter()
+            .position(|p| approx(p.local_pos, row_pos) && approx(p.size, row_size))
+        {
+            let start_idx = cursor + rel_start;
+            if let Some(rel_end) = prims[start_idx..]
+                .iter()
+                .position(|p| approx(p.local_pos, focus_pos) && approx(p.size, focus_size))
+            {
+                let end_idx = start_idx + rel_end + 1;
+                canvas.record_exact_span(item_id, base_prim + start_idx, base_prim + end_idx);
+                cursor = end_idx;
+            }
+        }
+    }
 }
 
 fn draw_page(

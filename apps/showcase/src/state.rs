@@ -421,7 +421,6 @@ pub struct GalleryState {
     pub window_screen_rect: Option<unbound_platform::ScreenRect>,
     /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
-    pub nav_expanded: bool,
     /// 顶栏全局搜索框的共享编辑状态。
     pub search: TextEditor,
     /// 搜索命中列表中的键盘选中项索引；随查询变化归零。
@@ -448,7 +447,6 @@ pub struct GalleryState {
     pub fps_input: TextEditor,
     pub show_hud: bool,
     pub content_scroll: f32,
-    pub nav_scroll: f32,
     pub knobs: HashMap<u32, f32>,
     pub expanded_code: HashSet<(u8, u8)>,
     pub demo: DemoState,
@@ -482,7 +480,6 @@ impl Default for GalleryState {
             windows_build: None,
             window_screen_rect: None,
             active_component: None,
-            nav_expanded: true,
             search: TextEditor::default(),
             search_selection: 0,
             editor_views: core::array::from_fn(|_| core::cell::Cell::new(200.0)),
@@ -500,7 +497,6 @@ impl Default for GalleryState {
             //
             show_hud: false,
             content_scroll: 0.0,
-            nav_scroll: 0.0,
             knobs: HashMap::new(),
             expanded_code: HashSet::new(),
             demo: DemoState::default(),

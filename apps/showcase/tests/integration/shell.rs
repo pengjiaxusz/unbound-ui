@@ -299,15 +299,19 @@ fn navigation_updates_the_breadcrumb_and_active_page() {
 fn the_navigation_pane_collapses_and_expands() {
     let mut app = app();
     let expanded = app.layout.nav_width;
+    assert!(app.nav_view.is_pane_open);
+    assert!(app.nav_title_bar_sync().is_pane_open);
     click_node(&mut app, target::id(Target::NavToggle));
-    assert!(!app.state.nav_expanded);
+    assert!(!app.nav_view.is_pane_open);
+    assert!(!app.nav_title_bar_sync().is_pane_open);
     for _ in 0..120 {
         app.tick(1.0 / 60.0);
     }
     app.rebuild(VIEWPORT);
     assert!(app.layout.nav_width < expanded);
     click_node(&mut app, target::id(Target::NavToggle));
-    assert!(app.state.nav_expanded);
+    assert!(app.nav_view.is_pane_open);
+    assert!(app.nav_title_bar_sync().is_pane_open);
 }
 
 #[test]
@@ -1601,12 +1605,12 @@ fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
     );
 }
 
-/// 窄卡片会将选项面板折叠到舞台下方。
+/// 窄卡片会将选项面板折叠到舞台下方（接入 `NavigationView` Auto 模式后，560px 窄视口进入 Minimal 档且内容区仍足够窄以触发折叠）。
 #[test]
 fn a_narrow_card_folds_its_options_panel_below_the_stage() {
     let mut app = app();
     app.navigate(PageId::Home);
-    app.rebuild((760.0, 900.0));
+    app.rebuild((560.0, 900.0));
     let card = &app.page_layout().expect("page layout").cards[0];
     assert!(
         card.knobs.origin.y > card.stage.max().y,
@@ -1629,7 +1633,7 @@ fn the_options_panel_folds_while_the_window_is_resized() {
     let mut app = app();
     app.navigate(PageId::Home);
     let mut folded = Vec::new();
-    for width in [1440.0, 1200.0, 1000.0, 900.0, 800.0, 700.0, 1440.0] {
+    for width in [1440.0, 1200.0, 1000.0, 800.0, 580.0, 500.0, 1440.0] {
         app.rebuild((width, 900.0));
         let card = &app.page_layout().expect("page layout").cards[0];
         folded.push(card.knobs.origin.y > card.stage.max().y);
@@ -2021,7 +2025,7 @@ fn the_footer_shortcuts_navigate_on_their_own_identity() {
 ///
 ///
 #[test]
-fn the_maximise_icon_keeps_its_primitive_count() {
+fn the_maximise_icon_matches_window_caption_buttons_primitive_contract() {
     let mut app = app();
     app.set_window_maximized(false);
     app.rebuild(VIEWPORT);
@@ -2031,9 +2035,12 @@ fn the_maximise_icon_keeps_its_primitive_count() {
     app.rebuild(VIEWPORT);
     let maximized = app.scene.primitives.len();
 
+    // `WindowCaptionButtons`（ADR-0029）还原态采用镂空前框 + 后框 L 形两条边（共 4 图元），
+    // 相比最大化态单框（2 图元）精确多出 2 个图元，避免在透明 Mica 下使用实心遮挡块。
     assert_eq!(
-        restored, maximized,
-        "the maximise icon changed the scene's shape: {restored} -> {maximized}"
+        maximized,
+        restored + 2,
+        "WindowCaptionButtons restore icon should add exactly 2 L-edge primitives: {restored} -> {maximized}"
     );
 }
 
@@ -2184,34 +2191,25 @@ fn dragging_the_virtual_list_scrollbar_scrolls_to_100k_end() {
     );
 }
 
-/// 导航窗格的滚动条在跨越拖拽阈值后仍可拖动树。
+/// 导航窗格在内容溢出时响应滚轮独立滚动。
 #[test]
-fn dragging_the_navigation_scrollbar_scrolls_the_tree() {
+fn scrolling_the_navigation_pane_updates_nav_view_scroll_offset() {
     let mut app = app();
-    // 较矮的窗口确保树溢出窗格。
+    // 较矮的窗口确保导航菜单溢出窗格。
     app.rebuild((1440.0, 520.0));
-    let node = target::id(Target::NavScrollbar);
-    let bar = rect_of(&app, node);
-    assert_eq!(app.state.nav_scroll, 0.0);
-
-    let grab = Vec2::new(bar.center().x, bar.origin.y + 6.0);
-    app.pointer_move(grab);
-    app.pointer_down(grab, 0.0);
-    let mut previous = 0.0;
-    for step in 1..=8 {
-        let point = Vec2::new(grab.x, grab.y + 15.0 * step as f32);
-        app.pointer_move(point);
-        let scroll = app.state.nav_scroll;
-        assert!(
-            scroll >= previous,
-            "step {step}: nav scroll {scroll} must not regress from {previous}"
-        );
-        previous = scroll;
-    }
-    app.pointer_up(Vec2::new(grab.x, grab.y + 120.0), 0.1);
     assert!(
-        app.state.nav_scroll > 0.0,
-        "dragging the nav scrollbar must scroll the tree"
+        app.nav_view.scroll_max > 0.0,
+        "nav pane should overflow at 520px height"
+    );
+    assert_eq!(app.nav_view.scroll_offset, 0.0);
+
+    let nav_center = app.nav_layout.menu_viewport_rect.center();
+    app.pointer_move(nav_center);
+    app.wheel(-3.0);
+    app.rebuild((1440.0, 520.0));
+    assert!(
+        app.nav_view.scroll_offset > 0.0,
+        "wheel scrolling over NavigationView pane must advance scroll_offset"
     );
 }
 
@@ -2299,55 +2297,149 @@ fn dragging_the_easing_curve_moves_its_control_point() {
     assert_eq!(app.state.demo.curve_editor.active(), None);
 }
 
-/// 侧边栏折叠与展开过程严格单调收敛，无欠阻尼过冲或水平位移抖动。
+/// `NavigationView` 折叠与展开过程在 48px 紧凑轨与 248px 展开态之间平滑收敛。
 #[test]
-fn sidebar_collapse_and_expand_is_monotonic_without_jitter() {
+fn sidebar_collapse_and_expand_converges_cleanly() {
     let mut app = app();
     let initial = app.layout.nav_width;
     assert!((initial - 248.0).abs() < 0.01);
 
-    // 触发折叠：宽度必须单调递减至 68.0，不得反弹或过冲。
+    // 触发折叠：宽度收敛至 WinUI 3 标准紧凑轨 48.0。
     click_node(&mut app, target::id(Target::NavToggle));
-    assert!(!app.state.nav_expanded);
-    let mut prev = app.layout.nav_width;
-    for step in 0..90 {
+    assert!(!app.nav_view.is_pane_open);
+    for _ in 0..120 {
         app.tick(1.0 / 60.0);
         app.rebuild(VIEWPORT);
-        let cur = app.layout.nav_width;
-        assert!(
-            cur <= prev + 1e-4,
-            "collapse step {step} jittered upward: {prev} -> {cur}"
-        );
-        if cur < 140.0 {
-            let home_rect = rect_of(
-                &app,
-                target::id(Target::NavPage(PageId::Home.index() as u8)),
-            );
-            assert!(
-                (home_rect.center().x - (app.layout.nav.origin.x + 34.0)).abs() < 0.01,
-                "collapsed icon center shifted horizontally during collapse: {:?}",
-                home_rect
-            );
-        }
-        prev = cur;
     }
-    assert!((app.layout.nav_width - 68.0).abs() < 0.5);
+    assert!(
+        (app.layout.nav_width - 48.0).abs() < 0.5,
+        "collapsed nav width expected ~48.0, got {}",
+        app.layout.nav_width
+    );
 
-    // 触发展开：宽度必须单调递增至 248.0，不得过冲或回弹。
+    // 触发展开：宽度收敛回 248.0。
     click_node(&mut app, target::id(Target::NavToggle));
-    assert!(app.state.nav_expanded);
-    let mut prev = app.layout.nav_width;
-    for step in 0..90 {
+    assert!(app.nav_view.is_pane_open);
+    for _ in 0..120 {
         app.tick(1.0 / 60.0);
         app.rebuild(VIEWPORT);
-        let cur = app.layout.nav_width;
-        assert!(
-            cur >= prev - 1e-4,
-            "expand step {step} jittered downward: {prev} -> {cur}"
-        );
-        prev = cur;
     }
-    assert!((app.layout.nav_width - 248.0).abs() < 0.5);
+    assert!(
+        (app.layout.nav_width - 248.0).abs() < 0.5,
+        "expanded nav width expected ~248.0, got {}",
+        app.layout.nav_width
+    );
+}
+
+/// Showcase `NavigationView` 在宽 / 中 / 窄三档视口下按 `Auto` 规范自动切换并与顶栏联动。
+#[test]
+fn navigation_view_auto_switches_across_expanded_compact_and_minimal_tiers() {
+    use unbound_widgets::navigation_view::NavigationViewDisplayMode;
+
+    let mut app = app();
+
+    // 1. 宽屏（1440 >= 1008）：Expanded 展开态，窗格常驻 248px。
+    app.rebuild((1440.0, 900.0));
+    assert_eq!(
+        app.nav_view.display_mode,
+        NavigationViewDisplayMode::Expanded
+    );
+    assert!(app.nav_view.is_pane_open);
+    assert!(app.nav_title_bar_sync().is_pane_toggle_button_visible);
+    assert!(app.nav_title_bar_sync().is_pane_open);
+    assert!((app.nav_layout.pane_rect.width() - 248.0).abs() < 0.5);
+    assert!(app.nav_layout.overlay_rect.is_none());
+
+    // 2. 中屏（800 in (640, 1008)）：自动降级为 Compact 紧凑 48px 图标轨，点击顶栏折叠钮弹出 Overlay 浮层。
+    app.rebuild((800.0, 720.0));
+    assert_eq!(
+        app.nav_view.display_mode,
+        NavigationViewDisplayMode::Compact
+    );
+    assert!(!app.nav_view.is_pane_open);
+    assert!(!app.nav_title_bar_sync().is_pane_open);
+    assert!((app.nav_layout.pane_rect.width() - 48.0).abs() < 0.5);
+    assert!(app.nav_layout.overlay_rect.is_none());
+
+    let toggle_center = rect_of(&app, target::id(Target::NavToggle)).center();
+    app.pointer_move(toggle_center);
+    app.pointer_down(toggle_center, 0.0);
+    app.pointer_up(toggle_center, 0.05);
+    for _ in 0..90 {
+        app.tick(1.0 / 60.0);
+    }
+    app.rebuild((800.0, 720.0));
+    assert!(app.nav_view.is_pane_open);
+    assert!(app.nav_title_bar_sync().is_pane_open);
+    assert!(
+        app.nav_layout.overlay_rect.is_some(),
+        "Compact open pane must render as an overlay"
+    );
+
+    // 3. 窄屏（560 <= 640）：自动降级为 Minimal 极简 0px，点击顶栏折叠钮弹出 Overlay，点击外部自动轻闭。
+    app.rebuild((560.0, 720.0));
+    assert_eq!(
+        app.nav_view.display_mode,
+        NavigationViewDisplayMode::Minimal
+    );
+    assert!(!app.nav_view.is_pane_open);
+    assert_eq!(app.nav_layout.pane_rect.width(), 0.0);
+    assert!(app.nav_layout.overlay_rect.is_none());
+
+    let toggle_center = rect_of(&app, target::id(Target::NavToggle)).center();
+    app.pointer_move(toggle_center);
+    app.pointer_down(toggle_center, 0.0);
+    app.pointer_up(toggle_center, 0.05);
+    for _ in 0..90 {
+        app.tick(1.0 / 60.0);
+    }
+    app.rebuild((560.0, 720.0));
+    assert!(app.nav_view.is_pane_open);
+    let overlay = app
+        .nav_layout
+        .overlay_rect
+        .expect("Minimal open pane must render as an overlay");
+    assert!(overlay.width() > 100.0);
+
+    // 点击 Overlay 外部区域应自动轻闭。
+    let outside = Vec2::new(500.0, 400.0);
+    app.pointer_move(outside);
+    app.pointer_down(outside, 0.0);
+    app.pointer_up(outside, 0.05);
+    app.rebuild((560.0, 720.0));
+    assert!(!app.nav_view.is_pane_open);
+    assert!(app.nav_layout.overlay_rect.is_none());
+}
+
+/// Showcase 顶栏 `WindowCaptionButtons` 热区契约仅暴露最大化按钮（ADR-0029），最小化与关闭经框架事件层分发。
+#[test]
+fn window_caption_buttons_hit_contract_exposes_only_maximize_rect() {
+    use showcase::shell::WindowCommand;
+    use unbound_platform::win32_frame::FrameHitMetrics;
+
+    let mut app = app();
+    app.rebuild((1440.0, 900.0));
+    let layout = app.window_caption_buttons_layout();
+    let contract = app.window_caption_hit_contract();
+
+    assert_eq!(contract.title_bar_height, 0.0);
+    assert_eq!(contract.minimize_button_rect, Rect::ZERO);
+    assert_eq!(contract.close_button_rect, Rect::ZERO);
+    assert_eq!(Some(contract.maximize_button_rect), layout.maximize_rect);
+    assert_eq!(contract.maximize_button_rect, app.layout.window_maximize);
+
+    // 验证同步至 FrameHitMetrics 契约接口可无误执行，且 DPI 换算矩形保持精确对齐。
+    let metrics = FrameHitMetrics::new();
+    metrics.apply_caption_hit_contract(layout.maximize_rect, 1.5, 1.0);
+    let scaled_max =
+        FrameHitMetrics::ui_rect_to_frame_logical(app.layout.window_maximize, 1.5, 1.0);
+    assert!((scaled_max.size.x - 46.0 * 1.5).abs() < 0.01);
+
+    // 最小化与关闭通过框架事件层正常触发 WindowCommand。
+    click_node(&mut app, target::id(Target::WindowMinimize));
+    assert_eq!(app.take_window_command(), Some(WindowCommand::Minimize));
+    click_node(&mut app, target::id(Target::WindowClose));
+    assert_eq!(app.take_window_command(), Some(WindowCommand::Close));
 }
 
 /// 侧边栏导航目标 100% 覆盖全部 25 个页面与全部 106 个目录组件，且点击组件导航项可精确定位。

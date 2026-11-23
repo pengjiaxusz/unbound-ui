@@ -1961,18 +1961,6 @@ impl<'a> ViewBuilder<'a> {
         self.color_swatch(raw_key, desc)
     }
 
-    /// 声明绑定了强类型 Action 的侧边栏导航条目快捷方式。
-    pub fn sidebar_item_action<A: Clone + Send + Sync + 'static>(
-        &mut self,
-        key: impl KeyDiscriminator,
-        desc: unbound_widgets::SidebarItemDesc,
-        action: A,
-    ) -> NodeId {
-        let raw_key = key.into_u64();
-        self.bind_action(raw_key, action);
-        self.sidebar_item(raw_key, desc)
-    }
-
     /// 以固定图元预留空间追加控件输出，使动态字形序列不会移动后续控件的 span。
     ///
     pub fn push_with_capacity(&mut self, key: u64, output: WidgetOutput, reserved_slots: usize) {
@@ -2691,34 +2679,6 @@ impl<'a> ViewBuilder<'a> {
     /// 声明式应用品牌徽标（圆角渐变色块 + 中心字母）快捷方式。
     pub fn brand_badge(&mut self, key: u64, desc: unbound_widgets::AppBrandBadgeDesc) -> NodeId {
         self.add(key, desc)
-    }
-
-    /// 声明式侧边栏分组标题快捷方式。
-    pub fn sidebar_section(
-        &mut self,
-        key: u64,
-        desc: unbound_widgets::SidebarSectionHeaderDesc,
-    ) -> NodeId {
-        let mut layout = RawNodeDesc::container()
-            .width(Dim::percent(100.0))
-            .height(Dim::px(desc.height));
-        layout.flex_shrink = 0.0;
-        self.add_with_layout(key, layout, desc)
-    }
-
-    /// 声明式侧边栏导航项（含矢量图标、选中态胶囊高亮、左侧 3px 强调色竖条与尾部徽标）快捷方式。
-    pub fn sidebar_item(&mut self, key: u64, desc: unbound_widgets::SidebarItemDesc) -> NodeId {
-        let mut layout = if desc.collapsed {
-            RawNodeDesc::container()
-                .width(Dim::px(40.0))
-                .height(Dim::px(desc.height))
-        } else {
-            RawNodeDesc::container()
-                .width(Dim::percent(100.0))
-                .height(Dim::px(desc.height))
-        };
-        layout.flex_shrink = 0.0;
-        self.add_with_layout(key, layout, desc)
     }
 
     /// 声明式 Showcase 风格特性入口卡片快捷方式。

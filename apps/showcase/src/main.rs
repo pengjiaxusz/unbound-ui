@@ -1478,30 +1478,14 @@ impl Showcase {
 
         if let Some(metrics) = &self.frame_metrics {
             let ui_scale = self.effective_scale();
-            metrics.set_scale_factor(ui_scale);
-            // 同步右上角窗口控制按钮矩形，以激活 Win11 贴靠布局（HTMAXBUTTON）与原生边缘缩放。
-            // title_bar_height 保持为 0，使标题栏内的搜索框、主题切换与缩放按钮仍由客户端事件驱动。
-            let logical_w = self.app.context().viewport.x;
-            let btn_w = 46.0;
-            let btn_h = showcase::layout_tree::TOP_BAR_HEIGHT;
-            metrics.set_minimize_button_rect(unbound_math::Rect::new(
-                logical_w - 3.0 * btn_w,
-                0.0,
-                btn_w,
-                btn_h,
-            ));
-            metrics.set_maximize_button_rect(unbound_math::Rect::new(
-                logical_w - 2.0 * btn_w,
-                0.0,
-                btn_w,
-                btn_h,
-            ));
-            metrics.set_close_button_rect(unbound_math::Rect::new(
-                logical_w - btn_w,
-                0.0,
-                btn_w,
-                btn_h,
-            ));
+            // 遵循 ADR-0029 统一窗口控制按钮热区契约：仅向 Win32 暴露最大化按钮（HTMAXBUTTON）
+            // 以支持 Win11 Snap Layout；最小化与关闭按钮矩形清零，确保点击始终经框架事件层分发。
+            let caption_layout = self.shell().window_caption_buttons_layout();
+            metrics.apply_caption_hit_contract(
+                caption_layout.maximize_rect,
+                ui_scale,
+                self.os_scale,
+            );
         }
 
         // 上传计划。当场景形状变化时推进代次；当上一帧被丢弃时也会推进代次：

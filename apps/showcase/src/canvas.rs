@@ -201,6 +201,13 @@ impl<'a> Canvas<'a> {
         }
     }
 
+    /// 显式记录精确的 `[start, end)` 图元跨度（用于复合控件子项的逐行悬停归因）。
+    pub fn record_exact_span(&mut self, node: u64, start: usize, end: usize) {
+        if end > start {
+            self.node_spans.insert(node, (start as u32, end as u32));
+        }
+    }
+
     /// `node` 当前是否拥有悬停高亮。
     #[must_use]
     pub fn hovered(&self, node: u64) -> bool {
@@ -652,11 +659,19 @@ impl<'a> Canvas<'a> {
     ///
     ///
     ///
+    /// 构造与当前画布共享字形引擎和缓存的 [`unbound_widgets::TextCtx`]。
+    pub fn text_ctx(&mut self, atlas_clock: u64) -> unbound_widgets::TextCtx<'_> {
+        let raster_scale = self.scale;
+        unbound_widgets::TextCtx {
+            engine: &mut self.labels.engine,
+            cache: &mut self.labels.cache,
+            atlas_clock,
+            raster_scale,
+        }
+    }
+
     pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
         let start = self.scene.primitives.len();
-        if node != 0 {
-            self.record_span(node, start);
-        }
         let payload_base = self.scene.payloads.len() as u32;
         for mut primitive in output.primitives.iter().copied() {
             primitive.z_and_opacity =
@@ -670,6 +685,9 @@ impl<'a> Canvas<'a> {
         self.scene.payloads.extend(output.payloads.iter().copied());
         self.glyphs_emitted += output.payloads.len();
         self.apply_clip(start);
+        if node != 0 {
+            self.record_span(node, start);
+        }
 
         let clip_shape = self.clip_shape();
         if let Some(mut region) = output.hit.clone() {

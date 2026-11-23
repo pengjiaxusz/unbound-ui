@@ -644,7 +644,7 @@ pub fn badge_sized(
 
 pub use unbound_widgets::shell::{
     emit_shell_icon_primitives, AppBrandBadgeDesc, FeatureCardDesc, HeroBackdropDesc,
-    IconButtonDesc, ShellIcon as Icon, SidebarItemDesc, SidebarSectionHeaderDesc,
+    IconButtonDesc, ShellIcon as Icon,
 };
 
 /// 将图标居中绘制在 `rect` 中。
@@ -683,89 +683,6 @@ pub fn brand_badge(canvas: &mut Canvas<'_>, rect: Rect, letter: &str) {
         AlignX::Center,
         AlignY::Center,
     );
-}
-
-/// 侧边栏分组大写小标题（基于 [`SidebarSectionHeaderDesc`] 组件描述符）。
-pub fn sidebar_section_header(canvas: &mut Canvas<'_>, rect: Rect, label: &str, active: bool) {
-    let palette = *canvas.palette;
-    let desc = SidebarSectionHeaderDesc::new(label).active(active);
-    let upper = desc.title.to_uppercase();
-    canvas.text(
-        &upper,
-        rect,
-        9.5,
-        if desc.active {
-            palette.primary
-        } else {
-            palette.nav_text_muted
-        },
-        AlignX::Start,
-        AlignY::Center,
-    );
-}
-
-/// 侧边栏胶囊导航项（基于 [`SidebarItemDesc`] 组件描述符，保持恒定图元跨度）。
-pub fn sidebar_item(
-    canvas: &mut Canvas<'_>,
-    node: u64,
-    rect: Rect,
-    label: &str,
-    kind: Icon,
-    selected: bool,
-) {
-    let palette = *canvas.palette;
-    let start = canvas.span_start();
-    let hover = canvas.visual(node, false);
-    let desc = SidebarItemDesc::new(label, kind)
-        .selected(selected)
-        .with_rect(rect);
-    let background = if desc.selected {
-        palette.nav_selected
-    } else if hover.is_hovered() {
-        palette.nav_hover
-    } else {
-        palette.nav_bg
-    };
-    canvas.rect(desc.rect, desc.radius, background, 0, 0.0, 0.0);
-    canvas.rect_faded(
-        desc.indicator_rect(),
-        1.5,
-        palette.primary,
-        if desc.selected { 1.0 } else { 0.0 },
-    );
-    icon(
-        canvas,
-        desc.icon,
-        desc.icon_rect(),
-        if desc.selected {
-            palette.primary
-        } else {
-            palette.nav_text_muted
-        },
-        palette.nav_bg,
-    );
-    canvas.text(
-        &desc.label,
-        desc.label_rect(0.0),
-        12.0,
-        if desc.selected {
-            palette.nav_text
-        } else {
-            palette.nav_text_muted
-        },
-        AlignX::Start,
-        AlignY::Center,
-    );
-    canvas.control(
-        node,
-        desc.rect,
-        Role::Link,
-        &desc.label,
-        CursorKind::Pointer,
-        false,
-        desc.selected,
-    );
-    canvas.record_span(node, start);
 }
 
 /// 展厅特性入口卡片（基于 [`FeatureCardDesc`] 组件描述符）。
