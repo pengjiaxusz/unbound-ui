@@ -2068,7 +2068,15 @@ impl Renderer {
             return Ok(());
         }
         for request in scene.backdrops {
-            self.record_one_backdrop(cmd, request, width, height, color_image, color_view)?;
+            self.record_one_backdrop(
+                cmd,
+                request,
+                width,
+                height,
+                color_image,
+                color_view,
+                backdrop_pipeline,
+            )?;
         }
         Ok(())
     }
@@ -2082,6 +2090,7 @@ impl Renderer {
         height: u32,
         color_image: vk::Image,
         color_view: vk::ImageView,
+        backdrop_pipeline: vk::Pipeline,
     ) -> Result<(), GpuError> {
         use unbound_graph::TextureFormat;
 
@@ -2230,7 +2239,16 @@ impl Renderer {
         // 合成 Pass 采样最后一轮模糊的输出，前三轮 Kawase 模糊占用了槽位 0..12，
         // 因此使用独立预留的第 12 号描述符集，避免在提交前覆写第 2 轮正在引用的槽位 8。
         self.bind_blur_binding(12, full_view, vk::ImageLayout::GENERAL, full_view);
-        self.composite_backdrop(cmd, request, width, height, color_image, color_view, 12);
+        self.composite_backdrop(
+            cmd,
+            request,
+            width,
+            height,
+            color_image,
+            color_view,
+            12,
+            backdrop_pipeline,
+        );
 
         self.blur.pool.release(half);
         if let Some(quarter) = quarter_handle {
@@ -2367,6 +2385,7 @@ impl Renderer {
         color_image: vk::Image,
         color_view: vk::ImageView,
         descriptor_set: usize,
+        backdrop_pipeline: vk::Pipeline,
     ) {
         // `request.radius` 表示 Dual-Kawase 模糊半径，`request.corner_radii` 才是四角圆角半径；
         // 不再将全零圆角误回退为模糊半径，避免直角或小圆角背板被错误裁切。
