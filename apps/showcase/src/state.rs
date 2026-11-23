@@ -527,8 +527,66 @@ pub fn build_showcase_i18n(locale: Locale) -> I18nBundle {
             "Window scale selector",
             "窗口缩放选择器",
         ),
-        ("a11y.pixel_snap", "Pixel snapping", "像素网格对齐"),
-        ("a11y.hud", "Performance HUD", "性能监控浮窗"),
+        (
+            "a11y.pixel_snap",
+            "Pixel Snap (align layout to physical pixels)",
+            "像素对齐（Pixel Snap，贴合物理像素网格）",
+        ),
+        (
+            "a11y.hud",
+            "Toggle live FPS HUD overlay",
+            "切换实时帧率 HUD 浮窗",
+        ),
+        (
+            "tooltip.pixel_snap.on",
+            "Pixel Snap: On — Align geometry to physical pixels",
+            "像素对齐：已开启 — 几何边界贴合物理像素网格",
+        ),
+        (
+            "tooltip.pixel_snap.off",
+            "Pixel Snap: Off — Allow subpixel layout coordinates",
+            "像素对齐：已关闭 — 允许亚像素坐标排版",
+        ),
+        (
+            "tooltip.hud.on",
+            "FPS HUD Overlay: On — Hide floating frame-rate & frame-time HUD",
+            "实时帧率 HUD 浮窗：已开启 — 隐藏悬浮帧率与耗时面板",
+        ),
+        (
+            "tooltip.hud.off",
+            "FPS HUD Overlay: Off — Show floating frame-rate & frame-time HUD",
+            "实时帧率 HUD 浮窗：已关闭 — 显示悬浮帧率与耗时面板",
+        ),
+        (
+            "tooltip.nav_toggle",
+            "Toggle navigation pane",
+            "展开或折叠侧边导航栏",
+        ),
+        (
+            "tooltip.theme.to_light",
+            "Switch to Light theme",
+            "切换为浅色主题",
+        ),
+        (
+            "tooltip.theme.to_dark",
+            "Switch to Dark theme",
+            "切换为深色主题",
+        ),
+        (
+            "tooltip.search",
+            "Open Command Palette (Ctrl+K)",
+            "打开命令面板（Ctrl+K）",
+        ),
+        (
+            "tooltip.footer.telemetry",
+            "Open Engine Telemetry page — Full GPU, layout & memory diagnostics",
+            "打开引擎性能遥测页 — 查看完整 GPU、布局与内存诊断图表",
+        ),
+        (
+            "tooltip.footer.settings",
+            "Open Settings & About page",
+            "打开设置与关于页面",
+        ),
         (
             "a11y.code_and_a11y",
             "Code and accessibility",

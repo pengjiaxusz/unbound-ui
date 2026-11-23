@@ -3137,3 +3137,239 @@ fn backdrop_capabilities_drive_the_effective_combination() {
         BackdropSource::SelfDrawn
     );
 }
+
+/// 顶栏 `Pixel Snap` 按钮保留并迁移至 `IconButtonDesc`，切换时更新激活态与悬停 Tooltip 语义。
+#[test]
+fn pixel_snap_toggle_updates_active_state_and_tooltip_semantics() {
+    let mut app = app();
+    let snap_id = target::id(Target::Snap);
+    assert!(app.state.pixel_snap, "Pixel Snap should start enabled");
+    let snap_a11y = app
+        .semantics
+        .get(snap_id)
+        .expect("Pixel Snap button must expose an accessibility node");
+    assert!(
+        snap_a11y.selected,
+        "enabled Pixel Snap must be marked selected"
+    );
+    assert!(
+        snap_a11y.label.contains("Pixel Snap"),
+        "Pixel Snap a11y label should clearly name Pixel Snap, got {:?}",
+        snap_a11y.label
+    );
+
+    // 悬停并推进 Tooltip 延迟后，应通过真实 ToolTip 组件输出开启态语义提示。
+    let snap_pos = rect_of(&app, snap_id).center();
+    app.pointer_move(snap_pos);
+    app.rebuild(VIEWPORT);
+    let _ = app.tick(0.5);
+    app.rebuild(VIEWPORT);
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::ToolTip),
+        "hovering Pixel Snap after delay must emit WidgetCatalogId::ToolTip"
+    );
+    let tip_on = app
+        .semantics
+        .iter()
+        .find(|(_, node)| node.role == accesskit::Role::Tooltip)
+        .map(|(_, node)| node.label.clone())
+        .expect("Pixel Snap hover must expose a Tooltip semantic node");
+    assert!(
+        tip_on.contains("Pixel Snap: On"),
+        "Pixel Snap tooltip must reflect enabled state, got {tip_on:?}"
+    );
+
+    // 点击关闭 Pixel Snap：激活态清除，重新悬停后 Tooltip 同步更新为关闭态。
+    click_node(&mut app, snap_id);
+    assert!(!app.state.pixel_snap, "clicking Pixel Snap must disable it");
+    let snap_a11y_off = app
+        .semantics
+        .get(snap_id)
+        .expect("Pixel Snap button must remain in semantics tree");
+    assert!(
+        !snap_a11y_off.selected,
+        "disabled Pixel Snap must clear selected state"
+    );
+    app.pointer_move(Vec2::new(2.0, 898.0));
+    app.rebuild(VIEWPORT);
+    app.pointer_move(snap_pos);
+    app.rebuild(VIEWPORT);
+    let _ = app.tick(0.5);
+    app.rebuild(VIEWPORT);
+    let tip_off = app
+        .semantics
+        .iter()
+        .find(|(_, node)| node.role == accesskit::Role::Tooltip)
+        .map(|(_, node)| node.label.clone())
+        .expect("Pixel Snap hover must expose updated Tooltip node");
+    assert!(
+        tip_off.contains("Pixel Snap: Off"),
+        "Pixel Snap tooltip must reflect disabled state, got {tip_off:?}"
+    );
+}
+
+/// 顶栏帧率 HUD 快捷开关与左侧 `Engine Telemetry` 页脚入口在无障碍标签和悬停 Tooltip 上语义清晰区分。
+#[test]
+fn hud_toggle_and_engine_telemetry_footer_have_distinct_tooltip_semantics() {
+    let mut app = app();
+    let hud_id = target::id(Target::Hud);
+    let footer_id = target::id(Target::Footer(0));
+
+    let hud_label = app
+        .semantics
+        .get(hud_id)
+        .expect("HUD toggle must have a11y node")
+        .label
+        .clone();
+    let footer_label = app
+        .semantics
+        .get(footer_id)
+        .expect("Engine Telemetry footer must have a11y node")
+        .label
+        .clone();
+    assert_ne!(hud_label, footer_label);
+    assert!(
+        hud_label.contains("FPS HUD"),
+        "top bar HUD button must mention FPS HUD overlay, got {hud_label:?}"
+    );
+    assert!(
+        footer_label.contains("Engine Telemetry"),
+        "sidebar footer must name Engine Telemetry, got {footer_label:?}"
+    );
+
+    // 悬停顶栏 HUD 按钮：提示聚焦悬浮帧率面板。
+    app.pointer_move(rect_of(&app, hud_id).center());
+    app.rebuild(VIEWPORT);
+    let _ = app.tick(0.5);
+    app.rebuild(VIEWPORT);
+    let hud_tip = app
+        .semantics
+        .iter()
+        .find(|(_, node)| node.role == accesskit::Role::Tooltip)
+        .map(|(_, node)| node.label.clone())
+        .expect("HUD toggle hover must show Tooltip");
+    assert!(
+        hud_tip.contains("FPS HUD Overlay"),
+        "HUD tooltip must describe floating FPS HUD overlay, got {hud_tip:?}"
+    );
+
+    // 悬停左侧 Engine Telemetry 页脚：提示聚焦打开完整遥测页面。
+    app.pointer_move(rect_of(&app, footer_id).center());
+    app.rebuild(VIEWPORT);
+    let _ = app.tick(0.5);
+    app.rebuild(VIEWPORT);
+    let footer_tip = app
+        .semantics
+        .iter()
+        .find(|(_, node)| node.role == accesskit::Role::Tooltip)
+        .map(|(_, node)| node.label.clone())
+        .expect("Engine Telemetry footer hover must show Tooltip");
+    assert!(
+        footer_tip.contains("Engine Telemetry page"),
+        "Engine Telemetry footer tooltip must describe opening the full page, got {footer_tip:?}"
+    );
+    assert_ne!(hud_tip, footer_tip);
+}
+
+/// 顶栏语言/缩放下拉菜单、编辑器右键菜单与顶栏面包屑/徽章均走 `unbound-widgets` 真实组件发射器。
+#[test]
+fn top_bar_dropdown_and_editor_context_menu_emit_real_menu_widget() {
+    let mut app = app();
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::BreadcrumbBar),
+        "wide top bar must emit real BreadcrumbBar widget"
+    );
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::InfoBadge),
+        "top bar and page header badges must emit real InfoBadge widget"
+    );
+
+    // 语言下拉菜单：打开后发射 MenuFlyout，选择中文后切换语言并关闭菜单。
+    click_node(&mut app, target::id(Target::LangMenu));
+    assert!(app.state.lang_dropdown_open);
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::MenuFlyout),
+        "language dropdown must emit real MenuFlyout widget"
+    );
+    click_node(&mut app, target::id(Target::Lang(1)));
+    assert!(!app.state.lang_dropdown_open);
+    assert_eq!(app.state.locale, unbound_app::Locale::ZhCn);
+
+    // 缩放下拉菜单：打开后发射 MenuFlyout，选择 125% 后更新缩放档位并关闭菜单。
+    click_node(&mut app, target::id(Target::ZoomMenu));
+    assert!(app.state.zoom_dropdown_open);
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::MenuFlyout),
+        "zoom dropdown must emit real MenuFlyout widget"
+    );
+    click_node(&mut app, target::id(Target::Zoom(1)));
+    assert!(!app.state.zoom_dropdown_open);
+    assert_eq!(app.state.zoom_step, 1);
+
+    // 编辑器右键菜单：打开后发射 ContextMenu，选择 Select all 后全选文本并关闭菜单。
+    let search_rect = rect_of(&app, target::id(Target::Search));
+    click_node(&mut app, target::id(Target::Search));
+    app.type_text("menu");
+    app.rebuild(VIEWPORT);
+    app.open_editor_menu(Target::Search, search_rect.center(), false);
+    app.rebuild(VIEWPORT);
+    assert!(app.editor_menu_open());
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::ContextMenu),
+        "editor context menu must emit real ContextMenu widget"
+    );
+    click_node(&mut app, target::id(Target::EditorMenuItem(4)));
+    assert!(!app.editor_menu_open());
+    assert_eq!(app.state.search.edit.selected_text(), Some("menu"));
+}
+
+/// 示例卡片折叠代码栏通过 `CollapsibleDesc` + `CodeBlockDesc` 渲染，支持展开与收起。
+#[test]
+fn collapsible_code_bar_emits_expander_and_code_block_on_toggle() {
+    let mut app = app();
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
+
+    let code_node = target::id(Target::Code(PageId::Buttons.index() as u8, 0));
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::Expander),
+        "collapsible code bar must emit real Expander widget"
+    );
+    let collapsed = app
+        .semantics
+        .get(code_node)
+        .expect("code bar must expose an accessibility node");
+    assert_eq!(collapsed.role, accesskit::Role::DisclosureTriangle);
+    assert_eq!(collapsed.expanded, Some(false));
+    assert!(!app.state.code_open(PageId::Buttons, 0));
+
+    // 点击展开：发射 CodeBlock 并更新 expanded = Some(true)。
+    click_node(&mut app, code_node);
+    assert!(app.state.code_open(PageId::Buttons, 0));
+    assert!(
+        app.emitted_widgets()
+            .contains(&unbound_widgets::WidgetCatalogId::CodeBlock),
+        "expanded code panel must emit real CodeBlock widget"
+    );
+    let expanded = app
+        .semantics
+        .get(code_node)
+        .expect("expanded code bar must remain in semantics tree");
+    assert_eq!(expanded.expanded, Some(true));
+
+    // 再次点击收起：恢复 expanded = Some(false)。
+    click_node(&mut app, code_node);
+    assert!(!app.state.code_open(PageId::Buttons, 0));
+    let collapsed_again = app
+        .semantics
+        .get(code_node)
+        .expect("collapsed code bar must remain in semantics tree");
+    assert_eq!(collapsed_again.expanded, Some(false));
+}

@@ -298,7 +298,6 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
             &label,
             index,
         );
-        ctx.control(index as u16 + 1, cell, Role::Link, &label, false);
     }
 }
 

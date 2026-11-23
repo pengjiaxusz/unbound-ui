@@ -39,6 +39,10 @@ use crate::widgets::{self, Icon};
 const NAV_OPEN_PANE_LENGTH: f32 = 248.0;
 /// `NavigationView` 控件的稳定节点标识（高位标签避开 `target.rs` 的 1..=26）。
 const NAV_VIEW_NODE: u64 = 94u64 << 56;
+/// 顶栏与页脚悬停工具提示的稳定节点标识（高位标签避开 `target.rs` 与 `NAV_VIEW_NODE`）。
+const TOP_BAR_TOOLTIP_NODE: u64 = 95u64 << 56;
+/// 编辑器上下文菜单容器的临时节点标识（子热区会重映射回 `Target::EditorMenuItem`）。
+const EDITOR_MENU_NODE: u64 = 96u64 << 56;
 
 /// 过滤出数字字符，最多三位。
 fn numeric_only(text: &str) -> String {
@@ -281,6 +285,8 @@ pub struct GalleryApp {
     drag_editor: Option<(EditorId, u64)>,
     /// 打开菜单时剪贴板是否含有可粘贴文本。
     clipboard_has_text: bool,
+    /// 顶栏工具按钮与页脚入口的悬停 Tooltip 延迟状态机。
+    tooltip: unbound_widgets::tooltip::TooltipState,
 }
 
 /// 等待宿主执行的剪贴板动作。
@@ -403,6 +409,7 @@ impl GalleryApp {
             pending_clipboard: None,
             drag_editor: None,
             clipboard_has_text: false,
+            tooltip: unbound_widgets::tooltip::TooltipState::new(),
         }
     }
 
@@ -1252,6 +1259,7 @@ impl GalleryApp {
             labels,
             state,
             nav_view,
+            tooltip,
             ..
         } = self;
         labels.set_raster_scale(scale);
@@ -1304,6 +1312,28 @@ impl GalleryApp {
         draw_search_overlay(&mut canvas, state, &layout);
         draw_top_bar_dropdowns(&mut canvas, state, &layout);
         draw_editor_menu(&mut canvas, editor_menu.as_ref());
+        let tooltip_hover = if !state.search.focused
+            && !state.lang_dropdown_open
+            && !state.zoom_dropdown_open
+            && editor_menu.is_none()
+        {
+            tooltip_target_of(state, &layout, &resolved_nav_layout, hover)
+                .map(|_| hover.unwrap_or(0))
+        } else {
+            None
+        };
+        let tooltip_timer_desc =
+            unbound_widgets::tooltip::TooltipDesc::new(Rect::ZERO, layout.viewport, Vec2::ZERO);
+        let _ = tooltip.update(&tooltip_timer_desc, tooltip_hover, 0.0);
+        if tooltip.visible() {
+            draw_top_bar_tooltip(
+                &mut canvas,
+                state,
+                &layout,
+                &resolved_nav_layout,
+                tooltip_hover,
+            );
+        }
         let output = canvas.finish();
         let scrollbar = content_scrollbar(&layout, &page_layout);
         let scene_len = scene.primitives.len() as u32;
@@ -1368,15 +1398,37 @@ impl GalleryApp {
         self.last_viewport = viewport;
     }
 
-    /// 推进时间驱动的演示与 `NavigationView` 弹簧动效。
+    /// 推进时间驱动的演示、`NavigationView` 弹簧动效与顶栏 Tooltip 延迟计时器。
     pub fn tick(&mut self, dt: f32) -> bool {
         let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
         let nav_moving = self.nav_view.tick(dt, &nav_desc);
         let demo_moving = self.state.tick(dt);
+        let tooltip_hover = if !self.state.search.focused
+            && !self.state.lang_dropdown_open
+            && !self.state.zoom_dropdown_open
+            && !self.editor_menu_open()
+        {
+            tooltip_target_of(&self.state, &self.layout, &self.nav_layout, self.last_hover)
+                .and(self.last_hover)
+        } else {
+            None
+        };
+        let tooltip_desc = unbound_widgets::tooltip::TooltipDesc::new(
+            Rect::ZERO,
+            self.layout.viewport,
+            Vec2::ZERO,
+        );
+        let tooltip_changed =
+            self.tooltip
+                .update(&tooltip_desc, tooltip_hover, (dt * 1000.0).max(0.0));
+        if tooltip_changed {
+            self.state.bump();
+        }
+        let tooltip_pending = self.tooltip.delay().is_some() && !self.tooltip.visible();
         if nav_moving || demo_moving {
             self.state.bump();
         }
-        nav_moving || demo_moving
+        nav_moving || demo_moving || tooltip_changed || tooltip_pending
     }
 
     /// 移动指针（逻辑像素）。
@@ -1462,6 +1514,7 @@ impl GalleryApp {
     ///
     pub fn pointer_down(&mut self, position: Vec2, target: Option<u64>, button: PointerButton) {
         self.pointer = position;
+        self.tooltip.hide();
         // 点击 FPS 输入框之外的任意位置会提交待定值，就像原生微调框在失焦时一样。
         //
         if self.state.fps_input.focused && target != Some(target::id(Target::FpsInput)) {
@@ -3316,8 +3369,8 @@ fn bundle_controls(builder: &mut FrameBuilder, layout: &ShellLayout) {
         (layout.lang, "Language selector"),
         (layout.theme, "Theme selector"),
         (layout.zoom, "Zoom selector"),
-        (layout.snap, "Button \"Pixel snapping\""),
-        (layout.hud, "Button \"Performance HUD\""),
+        (layout.snap, "Button \"Pixel Snap\""),
+        (layout.hud, "Button \"Toggle live FPS HUD overlay\""),
         (layout.window_minimize, "Button \"Minimise window\""),
         (layout.window_maximize, "Button \"Maximise window\""),
         (layout.window_close, "Button \"Close window\""),
@@ -3436,19 +3489,12 @@ fn draw_top_bar(
     if layout.wide {
         let info = state.active_page.localized_info(state.locale);
         let category = state.active_page.category().localized_label(state.locale);
-        let crumb = if category == info.short {
-            info.short.to_string()
+        let crumb_rect = Rect::new(220.0, 12.0, (right_bound - 240.0).max(0.0), 32.0);
+        if category == info.short {
+            widgets::breadcrumb(canvas, crumb_rect, &[info.short]);
         } else {
-            format!("{category}  ›  {}", info.short)
-        };
-        canvas.text(
-            &crumb,
-            Rect::new(220.0, 12.0, (right_bound - 240.0).max(0.0), 32.0),
-            10.5,
-            palette.text_muted,
-            AlignX::Start,
-            AlignY::Center,
-        );
+            widgets::breadcrumb(canvas, crumb_rect, &[category, info.short]);
+        }
     }
 
     let search = layout.search;
@@ -3703,101 +3749,258 @@ type EditorMenuPaint = (unbound_widgets::menu::MenuDesc, Option<usize>);
 /// 每个可操作行都会注册命中区域与 `MenuItem` 语义节点，使指针点击与
 /// `Up`/`Down`/`Enter` 键盘导航复用同一份几何。
 fn draw_editor_menu(canvas: &mut Canvas<'_>, paint: Option<&EditorMenuPaint>) {
+    use unbound_widgets::menu::{
+        emit_menu_with_rows, menu_item_node, MenuItemRenderRow, MenuState, MENU_LAYER,
+    };
+
     let Some((desc, highlighted)) = paint else {
         return;
     };
     let highlighted = *highlighted;
-    let palette = *canvas.palette;
-    canvas.rect(
-        desc.rect,
-        10.0,
-        palette.overlay_bg,
-        palette.card_border,
-        1.0,
-        20.0,
-    );
+    let mut shaped_labels: Vec<Vec<unbound_text::GlyphQuad>> = Vec::with_capacity(desc.items.len());
+    let mut shaped_shortcuts: Vec<Vec<unbound_text::GlyphQuad>> =
+        Vec::with_capacity(desc.items.len());
+    let mut phases: Vec<unbound_widgets::PointerPhase> = Vec::with_capacity(desc.items.len());
     for (index, item) in desc.items.iter().enumerate() {
         let row = desc.item_rect(index);
         if item.separator {
-            let y = row.origin.y + row.size.y * 0.5;
-            canvas.rect(
-                Rect::new(row.origin.x + 10.0, y, row.size.x - 20.0, 1.0),
-                0.0,
-                palette.card_border,
-                0,
-                0.0,
-                0.0,
-            );
+            shaped_labels.push(Vec::new());
+            shaped_shortcuts.push(Vec::new());
+            phases.push(unbound_widgets::PointerPhase::Idle);
             continue;
         }
-        let Ok(index) = u8::try_from(index) else {
-            continue;
-        };
-        let node = target::id(Target::EditorMenuItem(index));
-        let start = canvas.span_start();
-        let visual = canvas.visual(node, false);
-        let active = highlighted == Some(usize::from(index)) || visual.is_hovered();
-        canvas.rect(
-            Rect::new(
-                row.origin.x + 4.0,
-                row.origin.y + 2.0,
-                row.size.x - 8.0,
-                row.size.y - 4.0,
-            ),
-            6.0,
-            if active {
-                palette.primary_soft
-            } else {
-                palette.overlay_bg
-            },
-            0,
-            0.0,
-            0.0,
-        );
-        canvas.text(
+        let (label_quads, _) = canvas.layout_text(
             &item.label,
             Rect::new(
                 row.origin.x + 16.0,
                 row.origin.y,
-                row.size.x - 96.0,
+                (row.size.x - 96.0).max(0.0),
                 row.size.y,
             ),
             11.5,
-            if item.disabled {
-                palette.text_muted
-            } else {
-                palette.text
-            },
             AlignX::Start,
             AlignY::Center,
         );
-        if !item.shortcut.is_empty() {
-            canvas.text(
-                &item.shortcut,
-                Rect::new(
-                    row.origin.x + row.size.x - 84.0,
-                    row.origin.y,
-                    72.0,
-                    row.size.y,
-                ),
-                10.5,
-                palette.text_muted,
-                AlignX::End,
-                AlignY::Center,
+        let shortcut_quads = if item.shortcut.is_empty() {
+            Vec::new()
+        } else {
+            canvas
+                .layout_text(
+                    &item.shortcut,
+                    Rect::new(
+                        row.origin.x + row.size.x - 84.0,
+                        row.origin.y,
+                        72.0,
+                        row.size.y,
+                    ),
+                    10.5,
+                    AlignX::End,
+                    AlignY::Center,
+                )
+                .0
+        };
+        let phase = u8::try_from(index)
+            .ok()
+            .map(|idx| {
+                canvas
+                    .control_state(
+                        target::id(Target::EditorMenuItem(idx)),
+                        item.disabled,
+                        false,
+                    )
+                    .phase
+            })
+            .unwrap_or(unbound_widgets::PointerPhase::Idle);
+        shaped_labels.push(label_quads);
+        shaped_shortcuts.push(shortcut_quads);
+        phases.push(phase);
+    }
+
+    let render_rows: Vec<MenuItemRenderRow<'_>> = (0..desc.items.len())
+        .map(|idx| MenuItemRenderRow {
+            label_glyphs: shaped_labels[idx].as_slice(),
+            shortcut_glyphs: shaped_shortcuts[idx].as_slice(),
+            phase: phases[idx],
+        })
+        .collect();
+    let menu_state = MenuState {
+        highlighted,
+        ..MenuState::default()
+    };
+
+    let (mut output, _) = emit_menu_with_rows(
+        EDITOR_MENU_NODE,
+        0,
+        desc,
+        &menu_state,
+        ControlState::default(),
+        &render_rows,
+    );
+
+    let mut key_map: rustc_hash::FxHashMap<u64, (u64, bool)> = rustc_hash::FxHashMap::default();
+    for (index, item) in desc.items.iter().enumerate() {
+        if item.separator {
+            continue;
+        }
+        if let Ok(idx) = u8::try_from(index) {
+            let target_node = target::id(Target::EditorMenuItem(idx));
+            let active = highlighted == Some(index) || canvas.hovered(target_node);
+            key_map.insert(
+                menu_item_node(EDITOR_MENU_NODE, index),
+                (target_node, active),
             );
         }
-        canvas.control_on_layer(
-            node,
-            row,
-            Role::MenuItem,
-            item.label.clone(),
-            CursorKind::Pointer,
-            item.disabled,
-            active,
-            2,
-        );
-        canvas.record_span(node, start);
     }
+    for hit in &mut output.sub_hits {
+        if let Some(&(target_node, _)) = key_map.get(&hit.node) {
+            hit.node = target_node;
+            hit.layer = MENU_LAYER;
+        }
+    }
+    for (sub_key, a11y) in &mut output.sub_a11y {
+        if let Some(&(target_node, active)) = key_map.get(sub_key) {
+            *sub_key = target_node;
+            a11y.selected = active;
+        }
+    }
+    for focus_id in &mut output.sub_focus_order {
+        if let Some(&(target_node, _)) = key_map.get(focus_id) {
+            *focus_id = target_node;
+        }
+    }
+    // 禁用菜单项同样保留被动热区与禁用无障碍节点，使测试与无障碍朗读均可感知其状态。
+    for (index, item) in desc.items.iter().enumerate() {
+        if item.separator || !item.disabled {
+            continue;
+        }
+        if let Ok(idx) = u8::try_from(index) {
+            let target_node = target::id(Target::EditorMenuItem(idx));
+            let row = desc.item_rect(index);
+            let mut a11y = unbound_a11y::A11yNode::new(Role::MenuItem, item.label.clone(), row);
+            a11y.disabled = true;
+            output.sub_hits.push(
+                unbound_input::HitRegion::new(
+                    target_node,
+                    MENU_LAYER,
+                    u32::from(desc.z).saturating_add(1),
+                    row,
+                )
+                .with_cursor(CursorKind::Default),
+            );
+            output.sub_a11y.push((target_node, a11y));
+        }
+    }
+    output.hit = None;
+    output.a11y = None;
+    canvas.widget_output(WidgetCatalogId::ContextMenu, 0, &output);
+}
+
+/// 解析当前悬停节点对应的顶栏/页脚 Tooltip 锚点、提示文案与放置方向。
+fn tooltip_target_of<'a>(
+    state: &'a GalleryState,
+    layout: &ShellLayout,
+    nav_layout: &NavigationViewLayout,
+    hovered: Option<u64>,
+) -> Option<(Rect, &'a str, unbound_widgets::overlay::Placement)> {
+    use unbound_widgets::overlay::Placement;
+
+    let hovered_node = hovered?;
+    let target = target::decode(hovered_node)?;
+    let (anchor, text, placement) = match target {
+        Target::Snap => (
+            layout.snap,
+            state.t(if state.pixel_snap {
+                "tooltip.pixel_snap.on"
+            } else {
+                "tooltip.pixel_snap.off"
+            }),
+            Placement::Bottom,
+        ),
+        Target::Hud => (
+            layout.hud,
+            state.t(if state.show_hud {
+                "tooltip.hud.on"
+            } else {
+                "tooltip.hud.off"
+            }),
+            Placement::Bottom,
+        ),
+        Target::NavToggle => (
+            layout.nav_toggle,
+            state.t("tooltip.nav_toggle"),
+            Placement::Bottom,
+        ),
+        Target::Theme(bit) if layout.compact => (
+            layout.theme,
+            state.t(if bit == 0 {
+                "tooltip.theme.to_light"
+            } else {
+                "tooltip.theme.to_dark"
+            }),
+            Placement::Bottom,
+        ),
+        Target::Search if layout.search.size.x > 0.0 && layout.search.size.x < 100.0 => {
+            (layout.search, state.t("tooltip.search"), Placement::Bottom)
+        }
+        Target::Footer(idx) => {
+            let row = nav_layout
+                .rows
+                .iter()
+                .find(|row| row.item_id() == Some(hovered_node))?;
+            let key = if idx == 0 {
+                "tooltip.footer.telemetry"
+            } else {
+                "tooltip.footer.settings"
+            };
+            (row.rect, state.t(key), Placement::Right)
+        }
+        _ => return None,
+    };
+    if anchor.size.x <= 0.0 || anchor.size.y <= 0.0 {
+        return None;
+    }
+    Some((anchor, text, placement))
+}
+
+/// 顶栏工具按钮与侧边栏页脚入口的悬停 Tooltip（基于 `unbound_widgets::tooltip::TooltipDesc`）。
+fn draw_top_bar_tooltip(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    layout: &ShellLayout,
+    nav_layout: &NavigationViewLayout,
+    hovered: Option<u64>,
+) {
+    use unbound_widgets::tooltip::TooltipDesc;
+
+    let Some(hovered_node) = hovered else {
+        return;
+    };
+    let Some((anchor, text, placement)) = tooltip_target_of(state, layout, nav_layout, hovered)
+    else {
+        return;
+    };
+
+    let measured = canvas.labels.measure(text, 11.0);
+    let padding = Vec2::new(10.0, 6.0);
+    let size = Vec2::new(
+        (measured.x + padding.x * 2.0).clamp(48.0, 420.0),
+        (measured.y + padding.y * 2.0).max(26.0),
+    );
+    let desc = TooltipDesc::new(anchor, layout.viewport, size)
+        .with_label(text)
+        .with_placement(placement)
+        .with_gap(6.0)
+        .with_viewport_margin(8.0)
+        .with_padding(padding);
+    let content = desc.content_rect();
+    let (quads, _) = canvas.layout_text(text, content, 11.0, AlignX::Start, AlignY::Center);
+    let (output, _) = desc.render_with_glyphs(
+        TOP_BAR_TOOLTIP_NODE,
+        hovered_node,
+        ControlState::default(),
+        &quads,
+    );
+    canvas.widget_output(WidgetCatalogId::ToolTip, TOP_BAR_TOOLTIP_NODE, &output);
 }
 
 /// 构造与顶栏对齐的独立窗口控制按钮组描述符（ADR-0029）。
@@ -4381,121 +4584,94 @@ fn draw_code_bar(
     card: &CardLayout,
     example: &crate::pages::ExampleDef,
 ) {
+    use unbound_widgets::code_block::{emit_code_block, CodeBlockDesc, CodeBlockState};
+    use unbound_widgets::collapsible::{emit_collapsible, CollapsibleDesc};
+
     let palette = *canvas.palette;
     let node = target::id(Target::Code(page.page.index() as u8, card.index as u8));
     let start = canvas.span_start();
-    let hover = canvas.visual(node, false);
     let open = state.code_open(page.page, card.index as u8);
-    // 悬停底色始终存在且仅淡入显示，因此指向代码栏只需重绘一个图元，而非插入新图元。
-    //
-    canvas.rect_faded(
-        card.code_bar,
-        6.0,
-        palette.control_hover,
-        if hover.is_hovered() { 1.0 } else { 0.0 },
-    );
-    canvas.divider(
-        card.code_bar.origin.x,
-        card.code_bar.origin.y,
-        card.code_bar.size.x,
-    );
-    canvas.text(
-        "</>",
+    let bar_label = format!("</>  {}", state.t("page.code_bar"));
+    let collapsible_desc = CollapsibleDesc::new(card.code_bar, &bar_label, open);
+    let ctrl_state = canvas.control_state(node, false, open);
+    let (label_quads, _) = canvas.layout_text(
+        &bar_label,
         Rect::new(
-            card.code_bar.origin.x + 6.0,
+            card.code_bar.origin.x + 10.0,
             card.code_bar.origin.y,
-            28.0,
+            (card.code_bar.size.x - 46.0).max(0.0),
             card.code_bar.size.y,
         ),
         10.0,
-        palette.primary,
         AlignX::Start,
         AlignY::Center,
     );
-    canvas.text(
-        state.t("page.code_bar"),
-        Rect::new(
-            card.code_bar.origin.x + 40.0,
-            card.code_bar.origin.y,
-            card.code_bar.size.x - 80.0,
-            card.code_bar.size.y,
-        ),
-        10.0,
-        palette.text_muted,
-        AlignX::Start,
-        AlignY::Center,
-    );
-    widgets::icon(
-        canvas,
-        if open {
-            Icon::ChevronDown
-        } else {
-            Icon::ChevronRight
-        },
-        Rect::new(
-            card.code_bar.max().x - 28.0,
-            card.code_bar.origin.y,
-            20.0,
-            card.code_bar.size.y,
-        ),
-        palette.text_muted,
-        palette.card_bg,
-    );
-    canvas.control(
-        node,
-        card.code_bar,
-        Role::Button,
-        state.t("a11y.code_and_a11y"),
-        CursorKind::Pointer,
-        false,
-        open,
-    );
+    let mut collapsible_out = emit_collapsible(node, &collapsible_desc, ctrl_state, &label_quads);
+    if let Some(a11y) = collapsible_out.a11y.as_mut() {
+        a11y.label = state.t("a11y.code_and_a11y").to_owned();
+    }
+    canvas.widget_output(WidgetCatalogId::Expander, node, &collapsible_out);
     // 跨度在代码栏处结束：其下方的新面板属于卡片，且无论如何仅在卡片形状变化时出现。
-    //
     canvas.record_span(node, start);
 
     if let Some(panel) = card.code_panel {
-        canvas.rect(panel, 10.0, palette.code_bg, 0, 0.0, 0.0);
-        canvas.begin_clip(panel);
-        canvas.text(
-            state.t("page.source"),
-            Rect::new(
-                panel.origin.x + 12.0,
-                panel.origin.y + 5.0,
-                panel.size.x - 24.0,
-                14.0,
-            ),
-            9.5,
-            palette.text_muted,
-            AlignX::Start,
-            AlignY::Top,
+        let code_height = (panel.size.y - 22.0).max(24.0);
+        let code_rect = Rect::new(panel.origin.x, panel.origin.y, panel.size.x, code_height);
+        let snippet: String = example.code.lines().take(12).collect::<Vec<_>>().join(
+            "
+",
         );
-        let mut y = panel.origin.y + 20.0;
+        let mut code_desc = CodeBlockDesc::new(code_rect, snippet, "rust");
+        code_desc.copyable = false;
+
+        let mut code_quads: Vec<unbound_text::GlyphQuad> = Vec::new();
+        let gutter = code_desc.gutter_rect();
+        let code_area = code_desc.code_rect();
         for (line_index, line) in example.code.lines().take(12).enumerate() {
-            canvas.text(
+            let line_y = code_rect.origin.y + 6.0 + line_index as f32 * 15.0;
+            let (num_quads, _) = canvas.layout_text(
                 &format!("{:>2}", line_index + 1),
-                Rect::new(panel.origin.x + 12.0, y, 20.0, 14.0),
+                Rect::new(
+                    gutter.origin.x + 4.0,
+                    line_y,
+                    (gutter.size.x - 10.0).max(16.0),
+                    14.0,
+                ),
                 9.0,
-                palette.text_muted,
                 AlignX::End,
                 AlignY::Top,
             );
-            canvas.text(
+            code_quads.extend(num_quads);
+            let (src_quads, _) = canvas.layout_text(
                 line,
-                Rect::new(panel.origin.x + 38.0, y, panel.size.x - 50.0, 14.0),
+                Rect::new(
+                    code_area.origin.x + 10.0,
+                    line_y,
+                    (code_area.size.x - 16.0).max(0.0),
+                    14.0,
+                ),
                 9.5,
-                palette.code_text,
                 AlignX::Start,
                 AlignY::Top,
             );
-            y += 15.0;
+            code_quads.extend(src_quads);
         }
+        let mut code_out = emit_code_block(
+            0,
+            &code_desc,
+            &CodeBlockState::new(),
+            &code_quads,
+            ControlState::default(),
+        );
+        code_out.a11y = None;
+        canvas.begin_clip(panel);
+        canvas.widget_output(WidgetCatalogId::CodeBlock, 0, &code_out);
         canvas.text(
             &format!("a11y · {}", example.a11y),
             Rect::new(
                 panel.origin.x + 12.0,
-                panel.max().y - 20.0,
-                panel.size.x - 24.0,
+                panel.max().y - 18.0,
+                (panel.size.x - 24.0).max(0.0),
                 14.0,
             ),
             9.0,

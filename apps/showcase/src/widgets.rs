@@ -9,15 +9,24 @@ use unbound_input::CursorKind;
 use unbound_input::HitRegion;
 use unbound_math::Rect;
 use unbound_theme::Token;
+use unbound_widgets::badge::{emit_badge, BadgeDesc, BadgeVariant};
+use unbound_widgets::breadcrumb::{
+    emit_crumb, emit_crumb_separator, BreadcrumbDesc, BreadcrumbTokens, Crumb,
+};
 use unbound_widgets::button::{
     emit_button_with_tokens, ButtonDesc, ButtonTokens, ButtonVariant as EngineButtonVariant,
 };
 use unbound_widgets::checkbox::{emit_checkbox, CheckboxDesc, CheckboxTokens};
+use unbound_widgets::menu::{
+    emit_menu_with_rows, menu_item_node, MenuDesc, MenuItem, MenuItemRenderRow, MenuState,
+    MENU_LAYER,
+};
 use unbound_widgets::radio::{emit_radio, RadioDesc, RadioTokens};
 use unbound_widgets::segmented::{
     emit_segmented_frame, emit_segmented_segment, SegmentedDesc, SegmentedTokens,
 };
 use unbound_widgets::select::{emit_select_with_glyphs, SelectDesc, SelectState};
+use unbound_widgets::shell::{emit_brand_badge, emit_feature_card, emit_icon_button};
 use unbound_widgets::slider::{emit_slider, SliderDesc, SliderTokens};
 use unbound_widgets::switch::{emit_switch, SwitchDesc, SwitchTokens};
 use unbound_widgets::{ControlState, WidgetCatalogId};
@@ -458,7 +467,10 @@ pub fn select_trigger(
 /// 标题栏下拉菜单的行高（绘制与无障碍语义节点共用，避免两处魔数漂移）。
 pub const MENU_ROW_HEIGHT: f32 = 30.0;
 
-/// 标题栏锚定下拉菜单浮层（绘制在 Portal 层级 2，确保覆盖下方页面内容并优先拾取）。
+/// 下拉菜单容器的内部临时节点标识（高位标签避开 `target.rs` 的 1..=26，子热区会重映射回真实 `Target`）。
+const DROPDOWN_MENU_NODE: u64 = 97u64 << 56;
+
+/// 标题栏锚定下拉菜单浮层（基于 [`MenuDesc`] 与 [`emit_menu_with_rows`]，绘制在 Portal 层级 2）。
 ///
 /// `panel` 由调用方经 `shell::dropdown_panel_rect` 统一求解，使绘制几何与无障碍语义节点
 /// 共用同一份面板矩形，避免两处重复推导而产生漂移。
@@ -468,74 +480,132 @@ pub fn dropdown_menu(
     options: &[(&str, Target)],
     selected: usize,
 ) {
-    let palette = *canvas.palette;
-    let row_h = MENU_ROW_HEIGHT;
-    canvas.rect(
-        panel,
-        10.0,
-        palette.overlay_bg,
-        palette.card_border,
-        1.0,
-        20.0,
-    );
+    let items: Vec<MenuItem> = options
+        .iter()
+        .enumerate()
+        .map(|(idx, &(label, _))| {
+            let mut item = MenuItem::action(label);
+            if idx == selected {
+                item = item.selected(true);
+            }
+            item
+        })
+        .collect();
+    let desc = MenuDesc::context_menu(panel, items).with_item_height(MENU_ROW_HEIGHT);
+
+    let mut shaped_labels: Vec<Vec<unbound_text::GlyphQuad>> = Vec::with_capacity(options.len());
+    let mut phases: Vec<unbound_widgets::PointerPhase> = Vec::with_capacity(options.len());
     for (idx, &(label, target)) in options.iter().enumerate() {
         let node = crate::target::id(target);
-        let start = canvas.span_start();
-        let row = Rect::new(
-            panel.origin.x + 4.0,
-            panel.origin.y + 4.0 + idx as f32 * row_h,
-            panel.size.x - 8.0,
-            row_h,
-        );
-        let is_selected = idx == selected;
-        let visual = canvas.visual(node, false);
-        let bg = if is_selected {
-            palette.primary_soft
-        } else if visual.is_hovered() {
-            palette.control_hover
-        } else {
-            palette.overlay_bg
-        };
-        canvas.rect(row, 6.0, bg, 0, 0.0, 0.0);
-        canvas.rect_faded(
-            Rect::new(
-                row.origin.x + 6.0,
-                row.origin.y + 8.0,
-                3.0,
-                row.size.y - 16.0,
-            ),
-            1.5,
-            palette.primary,
-            if is_selected { 1.0 } else { 0.0 },
-        );
-        canvas.text(
+        let row = desc.item_rect(idx);
+        let (quads, _) = canvas.layout_text(
             label,
             Rect::new(
                 row.origin.x + 16.0,
                 row.origin.y,
-                row.size.x - 24.0,
+                (row.size.x - 24.0).max(0.0),
                 row.size.y,
             ),
             11.5,
-            if is_selected {
-                palette.primary
-            } else {
-                palette.text
-            },
             AlignX::Start,
             AlignY::Center,
         );
-        canvas.control_on_layer(
-            node,
-            row,
-            Role::MenuItem,
-            label,
-            CursorKind::Pointer,
-            false,
-            is_selected,
-            2,
+        shaped_labels.push(quads);
+        phases.push(canvas.control_state(node, false, idx == selected).phase);
+    }
+
+    let render_rows: Vec<MenuItemRenderRow<'_>> = shaped_labels
+        .iter()
+        .zip(phases.iter())
+        .map(|(glyphs, &phase)| MenuItemRenderRow {
+            label_glyphs: glyphs.as_slice(),
+            shortcut_glyphs: &[],
+            phase,
+        })
+        .collect();
+
+    let (mut output, _) = emit_menu_with_rows(
+        DROPDOWN_MENU_NODE,
+        0,
+        &desc,
+        &MenuState::default(),
+        ControlState::default(),
+        &render_rows,
+    );
+
+    // 将菜单项子热区、无障碍节点与焦点序重映射回展厅自身的稳定 `Target` 标识。
+    let mut key_map: rustc_hash::FxHashMap<u64, (u64, bool)> = rustc_hash::FxHashMap::default();
+    for (idx, &(_, target)) in options.iter().enumerate() {
+        key_map.insert(
+            menu_item_node(DROPDOWN_MENU_NODE, idx),
+            (crate::target::id(target), idx == selected),
         );
-        canvas.record_span(node, start);
+    }
+    for hit in &mut output.sub_hits {
+        if let Some(&(target_node, _)) = key_map.get(&hit.node) {
+            hit.node = target_node;
+            hit.layer = MENU_LAYER;
+        }
+    }
+    for (sub_key, a11y) in &mut output.sub_a11y {
+        if let Some(&(target_node, is_selected)) = key_map.get(sub_key) {
+            *sub_key = target_node;
+            a11y.selected = is_selected;
+        }
+    }
+    for focus_id in &mut output.sub_focus_order {
+        if let Some(&(target_node, _)) = key_map.get(focus_id) {
+            *focus_id = target_node;
+        }
+    }
+    // 外壳自身管理面板外点击关闭逻辑，避免菜单底板容器热区干扰 `target::decode`。
+    output.hit = None;
+    output.a11y = None;
+    canvas.widget_output(WidgetCatalogId::MenuFlyout, 0, &output);
+}
+
+/// 顶栏面包屑路径条（基于 [`BreadcrumbDesc`]、[`emit_crumb`] 与 [`emit_crumb_separator`]）。
+pub fn breadcrumb(canvas: &mut Canvas<'_>, rect: Rect, labels: &[&str]) {
+    if labels.is_empty() || rect.size.x <= 8.0 {
+        return;
+    }
+    let crumbs: Vec<Crumb> = labels
+        .iter()
+        .enumerate()
+        .map(|(idx, &label)| Crumb::new(idx as u64 + 1, label))
+        .collect();
+    let widths: Vec<f32> = labels
+        .iter()
+        .map(|label| canvas.labels.measure(label, 10.5).x)
+        .collect();
+    let desc = BreadcrumbDesc::new(rect, crumbs);
+    let slots = desc.layout(&widths);
+    let tokens = BreadcrumbTokens {
+        text: Token::TEXT_SECONDARY,
+        text_current: Token::TEXT_SECONDARY,
+        separator: Token::TEXT_SECONDARY,
+        ..BreadcrumbTokens::standard()
+    };
+    for slot in &slots {
+        if let Some(index) = slot.crumb {
+            let (quads, _) = canvas.layout_text(
+                &desc.crumbs[index].label,
+                slot.rect,
+                10.5,
+                AlignX::Start,
+                AlignY::Center,
+            );
+            let mut out = emit_crumb(&desc, slot, ControlState::default(), &quads, tokens);
+            // 顶栏面包屑当前为只读路径提示，不注册额外交互热区或覆盖根节点语义。
+            out.hit = None;
+            out.a11y = None;
+            out.focusable = false;
+            canvas.widget_output(WidgetCatalogId::BreadcrumbBar, 0, &out);
+        }
+        if slot.separator {
+            let sep = emit_crumb_separator(&desc, slot, tokens);
+            canvas.control_output(0, &sep);
+        }
     }
 }
 
@@ -614,7 +684,26 @@ pub fn badge(
     badge_sized(canvas, rect, label, foreground, background, 11.0)
 }
 
-/// 指定字号的胶囊徽章。
+/// 将展厅调色板前/背景槽位映射为 [`BadgeVariant`]。
+fn badge_variant_for(foreground: u16, background: u16) -> BadgeVariant {
+    if foreground == Token::SUCCESS.raw() || background == Token::SUCCESS_SOFT.raw() {
+        BadgeVariant::Success
+    } else if foreground == Token::WARNING.raw() || background == Token::WARNING_SOFT.raw() {
+        BadgeVariant::Warning
+    } else if foreground == Token::ERROR.raw() || background == Token::ERROR_SOFT.raw() {
+        BadgeVariant::Error
+    } else if foreground == Token::PRIMARY.raw()
+        || foreground == Token::ON_PRIMARY.raw()
+        || background == Token::PRIMARY.raw()
+        || background == Token::PRIMARY_SOFT.raw()
+    {
+        BadgeVariant::Primary
+    } else {
+        BadgeVariant::Neutral
+    }
+}
+
+/// 指定字号的胶囊徽章（基于 [`BadgeDesc`] 与 [`emit_badge`]）。
 ///
 /// 宽度始终依据文本绘制时所使用的同一字号计算，
 /// 以便调用方按返回的矩形推进游标，避免胶囊之间发生重叠。
@@ -630,15 +719,12 @@ pub fn badge_sized(
     let measured = canvas.labels.measure(label, size);
     let width = (measured.x + 16.0).max(28.0);
     let rect = Rect::new(rect.origin.x, rect.origin.y, width, rect.size.y);
-    canvas.rect(rect, rect.size.y * 0.5, background, 0, 0.0, 0.0);
-    canvas.text(
-        label,
-        rect,
-        size,
-        foreground,
-        AlignX::Center,
-        AlignY::Center,
-    );
+    let desc = BadgeDesc::new(rect, label).variant(badge_variant_for(foreground, background));
+    let (quads, _) = canvas.layout_text(label, rect, size, AlignX::Center, AlignY::Center);
+    let mut output = emit_badge(&desc, &quads);
+    // 装饰性徽章使用 `node = 0`，避免在语义树中覆写节点 0。
+    output.a11y = None;
+    canvas.widget_output(WidgetCatalogId::InfoBadge, 0, &output);
     rect
 }
 
@@ -670,22 +756,16 @@ pub fn icon(canvas: &mut Canvas<'_>, kind: Icon, rect: Rect, color: u16, backgro
     );
 }
 
-/// 应用品牌徽标（基于 [`AppBrandBadgeDesc`] 组件描述符）。
+/// 应用品牌徽标（基于 [`AppBrandBadgeDesc`] 与 [`emit_brand_badge`]）。
 pub fn brand_badge(canvas: &mut Canvas<'_>, rect: Rect, letter: &str) {
-    let palette = *canvas.palette;
-    let desc = AppBrandBadgeDesc::new(letter).size(rect.size.x).radius(8.0);
-    canvas.rect(rect, desc.radius, palette.primary, 0, 0.0, 4.0);
-    canvas.text(
-        &desc.symbol,
-        rect,
-        15.0,
-        palette.on_primary,
-        AlignX::Center,
-        AlignY::Center,
-    );
+    let mut desc = AppBrandBadgeDesc::new(letter).size(rect.size.x).radius(8.0);
+    desc.rect = rect;
+    let (quads, _) = canvas.layout_text(&desc.symbol, rect, 15.0, AlignX::Center, AlignY::Center);
+    let output = emit_brand_badge(&desc, &quads);
+    canvas.control_output(0, &output);
 }
 
-/// 展厅特性入口卡片（基于 [`FeatureCardDesc`] 组件描述符）。
+/// 展厅特性入口卡片（基于 [`FeatureCardDesc`] 与 [`emit_feature_card`]）。
 #[allow(clippy::too_many_arguments)]
 pub fn feature_card(
     canvas: &mut Canvas<'_>,
@@ -697,73 +777,44 @@ pub fn feature_card(
     a11y_label: &str,
     accent_index: usize,
 ) {
-    let palette = *canvas.palette;
-    let desc = FeatureCardDesc::new(title, subtitle, kind).with_rect(cell);
-    let hover = canvas.visual(node, false);
-    canvas.rect(
-        desc.rect,
-        desc.radius,
-        if hover.is_hovered() {
-            palette.control_hover
-        } else {
-            palette.card_bg
-        },
-        palette.card_border,
-        1.0,
-        4.0,
-    );
-    let icon_box = desc.icon_box_rect();
-    canvas.rect(
-        icon_box,
-        9.0,
-        match accent_index {
-            0 => palette.primary_soft,
-            1 => palette.success_soft,
-            2 => palette.warning_soft,
-            _ => palette.secondary_soft,
-        },
-        0,
-        0.0,
-        0.0,
-    );
-    icon(
-        canvas,
-        desc.icon,
-        icon_box,
-        match accent_index {
-            0 => palette.primary,
-            1 => palette.success,
-            2 => palette.warning,
-            _ => palette.secondary,
-        },
-        palette.card_bg,
-    );
-    canvas.text(
+    let start = canvas.span_start();
+    let (accent_fg, accent_bg) = match accent_index {
+        0 => (Token::PRIMARY, Token::PRIMARY_SOFT),
+        1 => (Token::SUCCESS, Token::SUCCESS_SOFT),
+        2 => (Token::WARNING, Token::WARNING_SOFT),
+        _ => (Token::SECONDARY, Token::SECONDARY_SOFT),
+    };
+    let desc = FeatureCardDesc::new(title, subtitle, kind)
+        .with_rect(cell)
+        .accent(accent_fg, accent_bg);
+    let state = canvas.control_state(node, false, false);
+    let (title_quads, _) = canvas.layout_text(
         &desc.title,
         desc.title_rect(),
         14.0,
-        palette.text,
         AlignX::Start,
         AlignY::Top,
     );
-    canvas.text_wrapped(
+    let sub_rect = desc.subtitle_rect();
+    let sub_x = canvas.snap_value(sub_rect.origin.x);
+    let sub_y = canvas.snap_value(sub_rect.origin.y);
+    let subtitle_quads = canvas.labels.layout_wrapped(
         &desc.subtitle,
-        desc.subtitle_rect(),
+        unbound_math::Vec2::new(sub_x, sub_y),
         11.5,
-        palette.text_muted,
+        sub_rect.size.x.max(1.0),
     );
-    canvas.text(
-        "→",
-        desc.arrow_rect(),
-        15.0,
-        palette.primary,
-        AlignX::Center,
-        AlignY::Center,
-    );
-    let _ = a11y_label;
+    let mut output = emit_feature_card(node, &desc, state, &title_quads, &subtitle_quads);
+    if !a11y_label.is_empty() {
+        if let Some(a11y) = output.a11y.as_mut() {
+            a11y.label = a11y_label.to_owned();
+        }
+    }
+    canvas.control_output(node, &output);
+    canvas.record_span(node, start);
 }
 
-/// 可点击的图标按钮。
+/// 可点击的图标按钮（基于 [`IconButtonDesc`] 与 [`emit_icon_button`]）。
 pub fn icon_button(
     canvas: &mut Canvas<'_>,
     node: u64,
@@ -773,37 +824,13 @@ pub fn icon_button(
     selected: bool,
 ) {
     let start = canvas.span_start();
-    let palette = *canvas.palette;
-    let visual = canvas.visual(node, false);
-    let fill = match visual {
-        Visual::Hover => palette.control_hover,
-        Visual::Pressed => palette.nav_selected,
-        _ => {
-            if selected {
-                palette.nav_selected
-            } else {
-                0
-            }
-        }
-    };
-    canvas.rect(rect, 8.0, fill, 0, 0.0, 0.0);
-    icon(canvas, kind, rect, palette.text, palette.card_bg);
-    canvas.stroke_faded(
-        rect.inflate(1.0),
-        9.0,
-        palette.focus_ring,
-        2.0,
-        if canvas.focused(node) { 1.0 } else { 0.0 },
-    );
-    canvas.control(
-        node,
-        rect,
-        Role::Button,
-        label,
-        CursorKind::Pointer,
-        false,
-        selected,
-    );
+    let state = canvas.control_state(node, false, selected);
+    let desc = IconButtonDesc::new(kind, label)
+        .with_rect(rect)
+        .selected(selected)
+        .radius(8.0);
+    let output = emit_icon_button(node, &desc, state);
+    canvas.widget_output(WidgetCatalogId::Button, node, &output);
     canvas.record_span(node, start);
 }
 
