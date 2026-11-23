@@ -13,7 +13,7 @@ use core::ptr::NonNull;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -114,28 +114,30 @@ enum WaylandCommand {
     },
 }
 
-/// 线程安全的管道唤醒信号句柄（事件循环退出时原子置 `-1`，杜绝向已关闭 FD 写入）。
+/// 线程安全的管道唤醒信号句柄（持锁写入并在释放时持锁关闭，彻底消除 FD 复用竞态）。
 #[derive(Clone)]
-struct WakeSignal(Arc<AtomicI32>);
+struct WakeSignal(Arc<Mutex<Option<RawFd>>>);
 
 impl WakeSignal {
     fn signal(&self) {
-        let fd = self.0.load(Ordering::Acquire);
-        if fd < 0 {
+        let Ok(guard) = self.0.lock() else {
             return;
-        }
+        };
+        let Some(fd) = *guard else {
+            return;
+        };
         let byte: u8 = 1;
-        // SAFETY: `fd >= 0` 表示管道写端仍由 `WakePipe` 持有且未关闭。
+        // SAFETY: 持锁期间 `WakePipe::drop` 不会关闭 `fd`，且该管道写端为非阻塞模式。
         unsafe {
             let _ = libc::write(fd, (&raw const byte).cast::<c_void>(), 1);
         }
     }
 }
 
-/// 跨线程唤醒事件循环的管道，释放时先原子失效写端再关闭描述符。
+/// 跨线程唤醒事件循环的管道，释放时持锁摘除写端再关闭描述符。
 struct WakePipe {
     read_fd: RawFd,
-    write_fd: Arc<AtomicI32>,
+    write_fd: Arc<Mutex<Option<RawFd>>>,
 }
 
 impl WakePipe {
@@ -156,7 +158,7 @@ impl WakePipe {
         }
         Ok(Self {
             read_fd: fds[0],
-            write_fd: Arc::new(AtomicI32::new(fds[1])),
+            write_fd: Arc::new(Mutex::new(Some(fds[1]))),
         })
     }
 
@@ -179,11 +181,11 @@ impl WakePipe {
 
 impl Drop for WakePipe {
     fn drop(&mut self) {
-        let write_fd = self.write_fd.swap(-1, Ordering::AcqRel);
-        // SAFETY: 写端已原子失效，释放自身持有的管道描述符各一次。
+        let write_fd = self.write_fd.lock().ok().and_then(|mut g| g.take());
+        // SAFETY: 写端已在互斥锁内摘除，释放自身持有的管道描述符各一次。
         unsafe {
-            if write_fd >= 0 {
-                let _ = libc::close(write_fd);
+            if let Some(fd) = write_fd {
+                let _ = libc::close(fd);
             }
             let _ = libc::close(self.read_fd);
         }
@@ -644,7 +646,7 @@ impl WaylandState {
             placed.anchor_width,
             placed.anchor_height,
         );
-        positioner.set_anchor(xdg_positioner::Anchor::BottomLeft);
+        positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
         positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
         positioner.set_offset(placed.offset_x, placed.offset_y);
         let mut constraint = xdg_positioner::ConstraintAdjustment::empty();
@@ -1819,6 +1821,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 owner
                     .pending_events
                     .push(PlatformEvent::PopupDismissed { id: pid });
+                wl.wake_signal.signal();
             }
         }
 
@@ -1833,6 +1836,21 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         }
         for close_id in app.take_window_close_requests() {
             if let Some(pos) = wl.windows.iter().position(|w| w.id as u64 == close_id.0) {
+                let target_id = wl.windows[pos].id;
+                let owned_popups: Vec<u64> = wl
+                    .popups
+                    .iter()
+                    .filter(|(_, p)| p.owner_window_id == target_id)
+                    .map(|(&pid, _)| pid)
+                    .collect();
+                for pid in owned_popups {
+                    if let Some(pentry) = wl.popups.remove(&pid) {
+                        pentry.shared.destroyed.store(true, Ordering::Release);
+                        let proto_id = pentry.popup.wl_surface().id().protocol_id();
+                        wl.surface_to_popup.remove(&proto_id);
+                        app.window_closing(&pentry.native_window);
+                    }
+                }
                 let entry = wl.windows.remove(pos);
                 entry.shared.destroyed.store(true, Ordering::Release);
                 let proto_id = entry.sctk_window.wl_surface().id().protocol_id();
@@ -1918,10 +1936,13 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         }
 
         let _ = conn.flush();
-        if let Some(guard) = conn.prepare_read() {
-            let wl_fd = guard.connection_fd().as_raw_fd();
-            wait_wayland_or_deadline(wl_fd, wake_pipe.read_fd, min_wait);
-            let _ = guard.read();
+        let has_pending = wl.windows.iter().any(|w| !w.pending_events.is_empty());
+        if !has_pending {
+            if let Some(guard) = conn.prepare_read() {
+                let wl_fd = guard.connection_fd().as_raw_fd();
+                wait_wayland_or_deadline(wl_fd, wake_pipe.read_fd, min_wait);
+                let _ = guard.read();
+            }
         }
     }
 
