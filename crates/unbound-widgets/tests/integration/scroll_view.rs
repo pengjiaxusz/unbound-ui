@@ -1,16 +1,18 @@
-//! 滚动视图集成测试：拾取、滚动条拖拽与裁剪/变换。
+//! 滚动视图与独立按需叠加滚动条集成测试：拾取、轨道翻页、滑块拖拽与裁剪/变换。
 //!
-//! 滚动视图是唯一输出被拆分的控件：其自身图元（滚动条）不受任何裁剪，
-//! 而所有**子**图元必须使用输出的裁剪与变换。本测试安装真实命中区域并断言这两部分。
-//!
-//!
+//! 滚动视图是输出被拆分的控件：其自身图元（滚动条）不受任何裁剪，
+//! 而所有**子**图元必须使用输出的裁剪与变换。独立叠加滚动条（`emit_scrollbar`）
+//! 则完全不接管裁剪与变换，供任意复合组件直接挂载。
 
 use unbound_headless::driver::TestApp;
 use unbound_input::Router;
 use unbound_math::{Rect, Vec2};
 use unbound_widgets::button::ButtonDesc;
 use unbound_widgets::scroll::{
-    emit_scroll_view, update_virtual_list, ScrollState, ScrollViewDesc, ScrollbarAxis,
+    emit_scroll_view, emit_scrollbar, scrollbar_thumb_node, scrollbar_track_node,
+    update_virtual_list, ScrollBarDesc, ScrollBarVisibility, ScrollState, ScrollViewDesc,
+    ScrollbarAxis, SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH, SCROLLBAR_THUMB_WIDTH,
+    SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_WIDTH,
 };
 use unbound_widgets::text_input::TextInputDesc;
 use unbound_widgets::{ButtonWidget, ControlState, SceneCollector, TextInputWidget, WidgetDesc};
@@ -161,7 +163,6 @@ fn controls_inside_scroll_view_inherit_clip_and_transform() {
     );
 
     // 滚出视口上方的输入框会坍缩为空区域，无法再被拾取。
-    //
     let outside = Vec2::new(80.0, 100.0 - 420.0);
     assert_eq!(
         unbound_input::pick(&collector.regions, outside).map(|region| region.node),
@@ -260,4 +261,86 @@ fn collect_children_inherits_the_scroll_clip_and_transform() {
     assert!(primitives
         .iter()
         .all(|primitive| primitive.transform_idx == 1));
+}
+
+#[test]
+fn overlay_scrollbar_mounts_without_clip_or_transform_and_routes_thumb_and_track_hits() {
+    let viewport = Rect::new(0.0, 0.0, 320.0, 240.0);
+    let owner = 500_u64;
+    let bar = ScrollBarDesc::vertical(viewport, 1200.0, 0.0);
+    let out = emit_scrollbar(owner, &bar);
+    let track = out.track_rect.expect("overflowing track rect");
+    let thumb = out.thumb_rect.expect("overflowing thumb rect");
+
+    let mut collector = SceneCollector::new(1);
+    out.push_into(&mut collector, owner);
+
+    // 独立叠加滚动条不推入额外裁剪与变换。
+    assert!(collector.clips.is_empty());
+    assert!(collector.transforms.is_empty(), "no extra transform pushed");
+    assert_eq!(collector.regions.len(), 2, "thumb hit + track hit");
+
+    // 点击滑块区域优先命中滑块节点；点击滑块下方轨道命中轨道节点并触发翻页。
+    assert_eq!(
+        unbound_input::pick(&collector.regions, thumb.center()).map(|r| r.node),
+        Some(scrollbar_thumb_node(owner, ScrollbarAxis::Vertical))
+    );
+    let below_thumb = Vec2::new(track.center().x, track.max().y - 4.0);
+    assert_eq!(
+        unbound_input::pick(&collector.regions, below_thumb).map(|r| r.node),
+        Some(scrollbar_track_node(owner, ScrollbarAxis::Vertical))
+    );
+
+    let paged = bar
+        .page_offset_for_track_click(below_thumb)
+        .expect("clicking track outside thumb pages down");
+    assert_eq!(paged, viewport.height());
+
+    // 拖拽滑块走完完整行程恰好抵达最大偏移量。
+    let travel = track.height() - thumb.height();
+    let dragged = bar.offset_for_drag(0.0, thumb.center().y, thumb.center().y + travel);
+    assert!((dragged - bar.max_offset()).abs() < 1e-3);
+}
+
+#[test]
+fn overlay_scrollbar_enforces_win11_auto_hidden_and_always_expanded_contracts() {
+    let viewport = Rect::new(0.0, 0.0, 300.0, 200.0);
+
+    // 1. 不溢出 = 0 图元、0 命中区。
+    let no_overflow = emit_scrollbar(600, &ScrollBarDesc::vertical(viewport, 200.0, 0.0));
+    assert!(no_overflow.is_empty());
+
+    // 2. Auto 溢出静止态 = 轨道胶囊透明（保持稳定槽位）+ 2px 半透明细指示条 + 2 个命中区。
+    let idle = emit_scrollbar(600, &ScrollBarDesc::vertical(viewport, 800.0, 0.0));
+    assert_eq!(idle.output.primitives.len(), 2);
+    assert_eq!(idle.output.primitives[0].opacity(), 0.0);
+    assert_eq!(
+        idle.output.primitives[1].size[0],
+        SCROLLBAR_THUMB_IDLE_WIDTH
+    );
+    assert!((idle.output.primitives[1].opacity() - SCROLLBAR_IDLE_OPACITY).abs() < 0.02);
+    assert_eq!(idle.hits.len(), 2);
+
+    // 3. Auto 溢出悬停 / 拖拽与 AlwaysExpanded = 6px 粗滑块 + 半透明轨道胶囊。
+    let mut hovered = ScrollBarDesc::vertical(viewport, 800.0, 120.0);
+    hovered.hovered = true;
+    let mut always = ScrollBarDesc::vertical(viewport, 800.0, 120.0);
+    always.visibility = ScrollBarVisibility::AlwaysExpanded;
+    for desc in [hovered, always] {
+        let out = emit_scrollbar(600, &desc);
+        assert_eq!(out.output.primitives.len(), 2);
+        assert_eq!(out.output.primitives[0].size[0], SCROLLBAR_WIDTH);
+        assert!(
+            (out.output.primitives[0].opacity() - SCROLLBAR_TRACK_CAPSULE_OPACITY).abs() < 0.02
+        );
+        assert_eq!(out.output.primitives[1].size[0], SCROLLBAR_THUMB_WIDTH);
+        assert!(out.output.primitives[1].opacity() > 0.99);
+        assert_eq!(out.hits.len(), 2);
+    }
+
+    // 4. Hidden 即使溢出且悬停也始终 0 图元、0 命中区。
+    let mut hidden = ScrollBarDesc::vertical(viewport, 800.0, 120.0);
+    hidden.visibility = ScrollBarVisibility::Hidden;
+    hidden.hovered = true;
+    assert!(emit_scrollbar(600, &hidden).is_empty());
 }

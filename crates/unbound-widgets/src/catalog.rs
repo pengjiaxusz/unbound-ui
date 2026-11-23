@@ -1539,7 +1539,16 @@ where
             let desc = ScrollViewDesc::new(rect, Vec2::new(rect.size.x, 3000.0));
             let mut scroll_state = ScrollState::new();
             scroll_state.jump_to(&desc, Vec2::new(0.0, value_norm * 1200.0));
-            let mut out = crate::scroll::emit_scroll_view(node, &desc, &scroll_state, state).output;
+            let mut out = if variant_idx % 2 == 1 {
+                let mut bar =
+                    crate::scroll::ScrollBarDesc::vertical(rect, 3000.0, value_norm * 1200.0);
+                bar.visibility = crate::scroll::ScrollBarVisibility::AlwaysExpanded;
+                bar.hovered = matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed);
+                bar.disabled = state.disabled;
+                crate::scroll::emit_scrollbar(node, &bar).output
+            } else {
+                crate::scroll::emit_scroll_view(node, &desc, &scroll_state, state).output
+            };
             let g = shape(
                 "Scrollable viewport content (3000px virtual height)",
                 Vec2::new(o.x + 14.0, o.y + 14.0),
