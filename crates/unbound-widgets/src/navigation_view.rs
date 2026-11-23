@@ -24,7 +24,7 @@ use unbound_theme::Token;
 use crate::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 use crate::overlay::{place_anchored_popup_detailed, BackdropRequest, Placement};
 use crate::primitive::{focus_ring, glyphs, instance, outlined, surface};
-use crate::scroll::{emit_scrollbar, ScrollBarDesc, ScrollBarVisibility};
+use crate::scroll::{emit_scrollbar, ScrollBarDesc, ScrollBarVisibility, SCROLLBAR_HOLD};
 use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
@@ -564,10 +564,14 @@ pub struct NavigationViewState {
     pub scroll_offset: f32,
     /// 主菜单区最大滚动偏移（由布局回写）。
     pub scroll_max: f32,
+    /// 指针当前是否悬停在 Left 窗格（含 Overlay 浮层）区域内。
+    pub pane_hovered: bool,
     /// 指针当前是否悬停在 Left 窗格菜单区滚动条热区（轨道或滑块）上。
     pub scrollbar_hovered: bool,
     /// Left 窗格菜单区滚动条滑块拖拽起始状态 `(start_pointer_y, start_scroll_offset)`。
     pub scrollbar_drag: Option<(f32, f32)>,
+    /// 近期滚轮滚动后在紧凑折叠态按需保持滚动条可见的剩余时长（秒）。
+    pub scrollbar_recent_scroll_timer: f32,
     /// 搜索框当前文本。
     pub search_query: String,
     /// 搜索框是否请求聚焦（例如紧凑态点击搜索图标后自动展开并聚焦）。
@@ -599,8 +603,10 @@ impl Default for NavigationViewState {
             overflow_menu_open: false,
             scroll_offset: 0.0,
             scroll_max: 0.0,
+            pane_hovered: false,
             scrollbar_hovered: false,
             scrollbar_drag: None,
+            scrollbar_recent_scroll_timer: 0.0,
             search_query: String::new(),
             search_focused: false,
             animations_enabled: true,
@@ -670,7 +676,17 @@ impl NavigationViewState {
         let b = self.indicator_pos_spring.step(dt);
         let c = self.indicator_len_spring.step(dt);
         let d = self.overlay_progress_spring.step(dt);
-        a || b || c || d
+        let mut timer_active = false;
+        if self.scrollbar_recent_scroll_timer > 0.0
+            && !self.pane_hovered
+            && !self.scrollbar_hovered
+            && self.scrollbar_drag.is_none()
+        {
+            self.scrollbar_recent_scroll_timer =
+                (self.scrollbar_recent_scroll_timer - dt.max(0.0)).max(0.0);
+            timer_active = true;
+        }
+        a || b || c || d || timer_active
     }
 
     /// 取出并清空待处理事件队列。
@@ -885,6 +901,17 @@ impl NavigationViewState {
         let next = (self.scroll_offset + delta_y).clamp(0.0, self.scroll_max.max(0.0));
         if (next - self.scroll_offset).abs() > f32::EPSILON {
             self.scroll_offset = next;
+            self.scrollbar_recent_scroll_timer = SCROLLBAR_HOLD;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 更新 Left 窗格（含 Overlay 浮层）悬停状态（状态变化时返回 `true`）。
+    pub fn set_pane_hovered(&mut self, hovered: bool) -> bool {
+        if self.pane_hovered != hovered {
+            self.pane_hovered = hovered;
             true
         } else {
             false
@@ -901,20 +928,27 @@ impl NavigationViewState {
         }
     }
 
-    /// 处理指针移动：若正在拖拽滑块则更新滚动偏移，否则更新滚动条悬停展开态。
+    /// 处理指针移动：若正在拖拽滑块则更新滚动偏移，否则同步窗格与滚动条悬停态。
     pub fn handle_pointer_move(
         &mut self,
         desc: &NavigationViewDesc,
         layout: &NavigationViewLayout,
         pos: Vec2,
     ) -> bool {
+        let active_pane_rect = layout.overlay_rect.unwrap_or(layout.pane_rect);
+        let in_pane = !layout.is_top
+            && !(layout.display_mode == NavigationViewDisplayMode::Minimal && !self.is_pane_open)
+            && active_pane_rect.contains_point(pos);
+        let pane_changed = self.set_pane_hovered(in_pane);
         if self.scrollbar_drag.is_some() {
-            return self.handle_pointer_drag(desc, layout, pos);
+            let dragged = self.handle_pointer_drag(desc, layout, pos);
+            return pane_changed || dragged;
         }
         let hovered = desc
             .menu_scrollbar_desc(layout, self, false)
             .is_some_and(|bar| bar.is_visible() && bar.track_rect().contains_point(pos));
-        self.set_scrollbar_hovered(hovered)
+        let bar_changed = self.set_scrollbar_hovered(hovered);
+        pane_changed || bar_changed
     }
 
     /// 处理指针拖拽：拖拽 Left 窗格滚动条滑块时同步更新垂直滚动偏移。
@@ -1447,12 +1481,33 @@ impl NavigationViewDesc {
         } else {
             self.z + 2
         };
+        // 对齐 WinUI 3 `MenuItemsScrollViewer` 铺满 `PaneContentGrid` 宽度：
+        // 滚动条宿主右缘直接对齐 `active_pane_rect.max().x`，不再受 `NAVIGATION_VIEW_PANE_PADDING` 二次内缩。
+        let active_pane_rect = layout.overlay_rect.unwrap_or(layout.pane_rect);
+        let scrollbar_host_rect = Rect::new(
+            active_pane_rect.origin.x,
+            layout.menu_viewport_rect.origin.y,
+            active_pane_rect.width(),
+            layout.menu_viewport_rect.height(),
+        );
         let mut bar = ScrollBarDesc::vertical(
-            layout.menu_viewport_rect,
+            scrollbar_host_rect,
             layout.menu_content_height,
             state.scroll_offset,
         );
-        bar.visibility = self.scrollbar_visibility;
+        // 紧凑折叠态（`pane_expand_progress <= 0.01`）在 `Auto` 策略下默认隐藏滚动条，
+        // 保持 48px 图标轨洁净；仅在指针悬停窗格/滚动条、正在拖拽或近期滚轮滚动时按需显现。
+        let is_compact_collapsed = layout.pane_expand_progress <= 0.01;
+        let compact_revealed = state.pane_hovered
+            || state.scrollbar_hovered
+            || state.scrollbar_drag.is_some()
+            || state.scrollbar_recent_scroll_timer > 0.0;
+        bar.visibility = match self.scrollbar_visibility {
+            ScrollBarVisibility::Auto if is_compact_collapsed && !compact_revealed => {
+                ScrollBarVisibility::Hidden
+            }
+            other => other,
+        };
         bar.z = active_z + 6;
         bar.layer = CONTROL_LAYER;
         bar.hovered = state.scrollbar_hovered;

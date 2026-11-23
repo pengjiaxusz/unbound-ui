@@ -11,8 +11,8 @@ use unbound_widgets::button::ButtonDesc;
 use unbound_widgets::scroll::{
     emit_scroll_view, emit_scrollbar, scrollbar_thumb_node, scrollbar_track_node,
     update_virtual_list, ScrollBarDesc, ScrollBarVisibility, ScrollState, ScrollViewDesc,
-    ScrollbarAxis, SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH, SCROLLBAR_THUMB_WIDTH,
-    SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_WIDTH,
+    ScrollbarAxis, SCROLLBAR_EDGE_INSET, SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH,
+    SCROLLBAR_THUMB_WIDTH, SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_WIDTH,
 };
 use unbound_widgets::text_input::TextInputDesc;
 use unbound_widgets::{ButtonWidget, ControlState, SceneCollector, TextInputWidget, WidgetDesc};
@@ -310,13 +310,21 @@ fn overlay_scrollbar_enforces_win11_auto_hidden_and_always_expanded_contracts() 
     let no_overflow = emit_scrollbar(600, &ScrollBarDesc::vertical(viewport, 200.0, 0.0));
     assert!(no_overflow.is_empty());
 
-    // 2. Auto 溢出静止态 = 轨道胶囊透明（保持稳定槽位）+ 2px 半透明细指示条 + 2 个命中区。
+    // 2. Auto 溢出静止态 = 轨道胶囊透明（保持稳定槽位）+ 贴右缘 2px 半透明细指示条 + 2 个命中区。
     let idle = emit_scrollbar(600, &ScrollBarDesc::vertical(viewport, 800.0, 0.0));
+    let idle_track = idle.track_rect.expect("idle track rect");
     assert_eq!(idle.output.primitives.len(), 2);
     assert_eq!(idle.output.primitives[0].opacity(), 0.0);
     assert_eq!(
         idle.output.primitives[1].size[0],
         SCROLLBAR_THUMB_IDLE_WIDTH
+    );
+    assert!(
+        (idle.output.primitives[1].local_pos[0]
+            - (idle_track.max().x - SCROLLBAR_EDGE_INSET - SCROLLBAR_THUMB_IDLE_WIDTH))
+            .abs()
+            < 1e-3,
+        "idle 2px vertical thumb must align to outer right edge of track"
     );
     assert!((idle.output.primitives[1].opacity() - SCROLLBAR_IDLE_OPACITY).abs() < 0.02);
     assert_eq!(idle.hits.len(), 2);

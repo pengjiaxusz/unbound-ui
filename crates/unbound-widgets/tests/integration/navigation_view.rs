@@ -7,8 +7,8 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::{GlyphCache, TextEngine};
 use unbound_widgets::scroll::{
     scrollbar_thumb_node, scrollbar_track_node, ScrollBarVisibility, ScrollbarAxis,
-    SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH, SCROLLBAR_THUMB_WIDTH,
-    SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_WIDTH,
+    SCROLLBAR_EDGE_INSET, SCROLLBAR_HOLD, SCROLLBAR_IDLE_OPACITY, SCROLLBAR_THUMB_IDLE_WIDTH,
+    SCROLLBAR_THUMB_WIDTH, SCROLLBAR_TRACK_CAPSULE_OPACITY, SCROLLBAR_WIDTH,
 };
 use unbound_widgets::{
     emit_navigation_view, ControlState, NavigationViewBackButtonVisible, NavigationViewDesc,
@@ -736,4 +736,179 @@ fn left_pane_overflow_scrollbar_supports_auto_hide_hover_track_page_and_thumb_dr
         .sub_hits
         .iter()
         .any(|h| h.node == thumb_node || h.node == track_node));
+}
+
+#[test]
+fn left_pane_scrollbar_aligns_to_pane_outer_right_edge_and_hides_when_compact_idle() {
+    let rect = Rect::new(0.0, 0.0, 900.0, 260.0);
+    let owner_node = 88_u64;
+    let thumb_node = scrollbar_thumb_node(owner_node, ScrollbarAxis::Vertical);
+    let track_node = scrollbar_track_node(owner_node, ScrollbarAxis::Vertical);
+
+    let many_items: Vec<NavigationViewMenuItem> = (1..=12_u64)
+        .map(|i| {
+            NavigationViewMenuItem::item(
+                NavigationViewItem::new(i, format!("Item {i}")).with_icon(ShellIcon::Grid),
+            )
+        })
+        .collect();
+    let desc = NavigationViewDesc::new(rect, many_items)
+        .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+        .open_pane_length(220.0)
+        .selected_item(Some(1));
+
+    let mut engine = TextEngine::new();
+    let mut cache = GlyphCache::new();
+    let mut ctx = TextCtx {
+        engine: &mut engine,
+        cache: &mut cache,
+        atlas_clock: 1,
+        raster_scale: 1.0,
+    };
+
+    // 1. 展开态：滚动条宿主右缘严格对齐 `active_pane_rect.max().x`（不再被 PANE_PADDING 二次内缩），
+    //    且静止 2px 细指示条贴紧轨道外右缘。
+    let mut state = NavigationViewState::from_desc(&desc);
+    state.set_animations_enabled(false, &desc);
+    let expanded_out =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    let active_pane = expanded_out
+        .layout
+        .overlay_rect
+        .unwrap_or(expanded_out.layout.pane_rect);
+    let track_hit = expanded_out
+        .output
+        .sub_hits
+        .iter()
+        .find(|h| h.node == track_node)
+        .cloned()
+        .expect("expanded overflowing Left pane must emit track hit");
+    assert!(
+        (track_hit.bounds.max().x - (active_pane.max().x - SCROLLBAR_EDGE_INSET)).abs() < 1e-3,
+        "scrollbar track right edge {} must align to active_pane.max().x - EDGE_INSET ({})",
+        track_hit.bounds.max().x,
+        active_pane.max().x - SCROLLBAR_EDGE_INSET
+    );
+    let exp_len = expanded_out.output.primitives.len();
+    let idle_thumb_prim = &expanded_out.output.primitives[exp_len - 2];
+    let expected_idle_x =
+        track_hit.bounds.max().x - SCROLLBAR_EDGE_INSET - SCROLLBAR_THUMB_IDLE_WIDTH;
+    assert!(
+        (idle_thumb_prim.local_pos[0] - expected_idle_x).abs() < 1e-3,
+        "idle 2px thumb x {} must hug outer right edge {expected_idle_x}",
+        idle_thumb_prim.local_pos[0]
+    );
+
+    // 展开/折叠过渡中间态（pane_expand_progress > 0.01）：仍保持溢出即显且右缘紧贴当前窗格右缘。
+    state.set_animations_enabled(true, &desc);
+    state.pane_width_spring.value = 134.0;
+    let mid_out =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    assert!(mid_out.layout.pane_expand_progress > 0.01);
+    let mid_track = mid_out
+        .output
+        .sub_hits
+        .iter()
+        .find(|h| h.node == track_node)
+        .expect("mid-transition pane must still emit scrollbar track hit");
+    assert!(
+        (mid_track.bounds.max().x - (mid_out.layout.pane_rect.max().x - SCROLLBAR_EDGE_INSET))
+            .abs()
+            < 1e-3
+    );
+
+    // 2. 紧凑折叠态（pane_expand_progress <= 0.01）：默认静止且未悬停时自动隐藏滚动条（0 命中区）。
+    state.set_animations_enabled(false, &desc);
+    state.set_pane_open(false, &desc);
+    let compact_idle =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    assert!(compact_idle.layout.pane_expand_progress <= 0.01);
+    assert!(
+        compact_idle.layout.menu_content_height > compact_idle.layout.menu_viewport_rect.height(),
+        "compact pane fixture must still overflow vertically"
+    );
+    assert!(
+        !compact_idle
+            .output
+            .sub_hits
+            .iter()
+            .any(|h| h.node == thumb_node || h.node == track_node),
+        "compact collapsed pane must hide scrollbar when idle and unhovered"
+    );
+
+    // 3. 紧凑折叠态悬停窗格：按需显现 2px 细指示条，且紧贴 48px 图标轨外右缘。
+    let pane_center = compact_idle.layout.pane_rect.center();
+    assert!(state.handle_pointer_move(&desc, &compact_idle.layout, pane_center));
+    assert!(state.pane_hovered);
+    let compact_pane_hov =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    let compact_track = compact_pane_hov
+        .output
+        .sub_hits
+        .iter()
+        .find(|h| h.node == track_node)
+        .cloned()
+        .expect("hovering compact pane must reveal scrollbar track hit");
+    assert!(
+        (compact_track.bounds.max().x
+            - (compact_pane_hov.layout.pane_rect.max().x - SCROLLBAR_EDGE_INSET))
+            .abs()
+            < 1e-3
+    );
+
+    // 悬停到紧凑折叠态滚动条热区：展开为 6px 粗滑块 + 半透明轨道胶囊。
+    assert!(state.handle_pointer_move(
+        &desc,
+        &compact_pane_hov.layout,
+        compact_track.bounds.center()
+    ));
+    assert!(state.scrollbar_hovered);
+    let compact_bar_hov =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    let bar_hov_len = compact_bar_hov.output.primitives.len();
+    assert!(
+        (compact_bar_hov.output.primitives[bar_hov_len - 2].size[0] - SCROLLBAR_THUMB_WIDTH).abs()
+            < 0.01
+    );
+
+    // 指针移出窗格：重新隐藏滚动条。
+    assert!(state.handle_pointer_move(&desc, &compact_bar_hov.layout, Vec2::new(600.0, 120.0)));
+    assert!(!state.pane_hovered);
+    assert!(!state.scrollbar_hovered);
+    let compact_left =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    assert!(!compact_left
+        .output
+        .sub_hits
+        .iter()
+        .any(|h| h.node == thumb_node || h.node == track_node));
+
+    // 4. 紧凑折叠态未悬停但近期发生滚轮滚动：按需显现滚动条；保持时长到期后自动重新隐藏。
+    state.scroll_max = (compact_left.layout.menu_content_height
+        - compact_left.layout.menu_viewport_rect.height())
+    .max(0.0);
+    assert!(state.scroll_by(48.0));
+    let compact_scrolled =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    assert!(
+        compact_scrolled
+            .output
+            .sub_hits
+            .iter()
+            .any(|h| h.node == track_node),
+        "recent wheel scroll must reveal scrollbar in compact collapsed mode"
+    );
+
+    state.set_animations_enabled(true, &desc);
+    let _ = state.tick(SCROLLBAR_HOLD + 0.1, &desc);
+    let compact_expired =
+        emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+    assert!(
+        !compact_expired
+            .output
+            .sub_hits
+            .iter()
+            .any(|h| h.node == thumb_node || h.node == track_node),
+        "compact scrollbar must hide again after recent scroll hold expires"
+    );
 }
