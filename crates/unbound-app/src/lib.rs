@@ -725,6 +725,8 @@ pub struct AppContext {
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒，由运行器逐帧同步，供自绘后景叠化继承）。
     pub theme_transition_remaining_secs: f32,
+    /// 集中式动效策略（减弱动画开关与全局速率倍率，默认同步平台 `prefers_reduced_motion()`）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
     /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
@@ -823,6 +825,8 @@ impl AppContext {
             system_accent: None,
             theme_transition: unbound_theme::ThemeTransitionConfig::default(),
             theme_transition_remaining_secs: 0.0,
+            motion_policy: unbound_anim::MotionPolicy::default()
+                .with_reduced_motion(unbound_platform::prefers_reduced_motion()),
             window_maximized: false,
             window_focused: true,
             os_scale: 1.0,
@@ -980,6 +984,27 @@ impl AppContext {
     /// 按毫秒数快捷设置框架级主题过渡时长（`0` 表示关闭过渡）。
     pub fn set_theme_transition_millis(&mut self, ms: u32) {
         self.theme_transition = unbound_theme::ThemeTransitionConfig::from_millis(ms);
+    }
+
+    /// 返回当前生效的集中式动效策略。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.motion_policy
+    }
+
+    /// 整体替换当前集中式动效策略。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        self.motion_policy = policy;
+    }
+
+    /// 切换减弱动画（`reduced_motion`）开关。
+    pub fn set_reduced_motion(&mut self, enabled: bool) {
+        self.motion_policy = self.motion_policy.with_reduced_motion(enabled);
+    }
+
+    /// 设置全局动效速率倍率（自动钳制到 `0.05..=2.0`）。
+    pub fn set_motion_speed_scale(&mut self, scale: f32) {
+        self.motion_policy = self.motion_policy.with_speed_scale(scale);
     }
 
     /// 解析当前生效的系统强调色：优先取显式覆盖，其次在默认 Win11 预设下读取平台系统强调色。
@@ -1467,6 +1492,8 @@ pub struct ViewContext {
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒），供自绘后景叠化继承。
     pub theme_transition_remaining_secs: f32,
+    /// 当前生效的集中式动效策略（与 [`AppContext::motion_policy`] 同步）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 指针下方的节点。
     pub hovered: Option<u64>,
     /// 当前按下的节点。
@@ -1700,6 +1727,8 @@ pub enum WidgetSpec {
         /// 命令面板查询与选中状态。
         state: unbound_widgets::CommandPaletteState,
     },
+    /// 跨窗停靠预览叠加层（高 Z 序纯视觉图元，旁路 `OverlayManager`，零命中、零焦点、不触发轻关闭）。
+    DockingOverlay(Box<WidgetOutput>),
 }
 
 /// 单个延迟控件及其由布局引擎求解的节点。
@@ -2462,6 +2491,7 @@ impl<'a> ViewBuilder<'a> {
                 Some(Vec2::new(desc.rect.width(), desc.rect.height()))
             }
             WidgetSpec::Dock { .. }
+            | WidgetSpec::DockingOverlay(_)
             | WidgetSpec::Text { .. }
             | WidgetSpec::TextInline { .. }
             | WidgetSpec::BoxSurface { .. }
@@ -3107,6 +3137,58 @@ impl<'a> ViewBuilder<'a> {
         self.overlay_pending_ranges
             .push((effective_key, overlay_node, pending_start, pending_end));
         overlay_node
+    }
+
+    /// 挂载跨窗停靠预览叠加层（高 Z 序纯图元路径）。
+    ///
+    /// 该路径旁路 [`OverlayManager`]，强制剥离所有命中区域（`hit` / `sub_hits`）、
+    /// 无障碍节点（`a11y`）与焦点参与（`focusable`），确保绝不抢占焦点、
+    /// 不拦截拖拽指针流且不触发 `light_dismiss`。
+    pub fn docking_overlay(&mut self, key: u64, mut output: WidgetOutput) -> NodeId {
+        output.hit = None;
+        output.sub_hits.clear();
+        output.a11y = None;
+        output.focusable = false;
+        let overlay_z = (PORTAL_Z_BASE as u16).saturating_add(500);
+        let node_desc = RawNodeDesc::container()
+            .absolute()
+            .bounds(
+                0.0,
+                0.0,
+                self.ctx.viewport.x.max(1.0),
+                self.ctx.viewport.y.max(1.0),
+            )
+            .z_index(i32::from(overlay_z));
+        let (_, node) = self.reconcile_node(key, node_desc, core::panic::Location::caller());
+        let z_base = self.z_base.max(overlay_z);
+        self.pending.push(PendingWidget {
+            key: self.scoped_key(key),
+            node,
+            spec: WidgetSpec::DockingOverlay(Box::new(output)),
+            z_base,
+        });
+        node
+    }
+
+    /// 根据 [`unbound_widgets::DockOverlayState`] 直接发射并挂载跨窗停靠预览叠加层。
+    pub fn docking_overlay_state(
+        &mut self,
+        key: u64,
+        state: &unbound_widgets::DockOverlayState,
+        overlay_bounds: Rect,
+        pointer: Vec2,
+        hint_glyphs: &[unbound_text::GlyphQuad],
+        tokens: unbound_widgets::DockOverlayTokens,
+    ) -> NodeId {
+        let out = unbound_widgets::emit_docking_overlay(
+            state,
+            overlay_bounds,
+            pointer,
+            hint_glyphs,
+            tokens,
+            0,
+        );
+        self.docking_overlay(key, out)
     }
 
     /// 声明式锚定气泡框浮层：自动交由 [`OverlayManager`] 管理关闭与锚点失效裁剪。
@@ -5263,6 +5345,30 @@ impl<A: Application> AppRuntime<A> {
         &mut self.ctx
     }
 
+    /// 返回当前运行时的集中式动效策略。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.ctx.motion_policy
+    }
+
+    /// 覆写当前运行时的集中式动效策略，并在策略变更时立即标记脏状态以驱动实时生效。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        if self.ctx.motion_policy != policy {
+            self.ctx.motion_policy = policy;
+            self.invalidate();
+        }
+    }
+
+    /// 切换运行时的减弱动画（`reduced_motion`）开关，并在变更时立即标记脏状态。
+    pub fn set_reduced_motion(&mut self, enabled: bool) {
+        self.set_motion_policy(self.ctx.motion_policy.with_reduced_motion(enabled));
+    }
+
+    /// 设置运行时的全局动效速率倍率，并在变更时立即标记脏状态。
+    pub fn set_motion_speed_scale(&mut self, scale: f32) {
+        self.set_motion_policy(self.ctx.motion_policy.with_speed_scale(scale));
+    }
+
     /// 设置指定下拉选择框的展开/收起状态。
     pub fn set_select_open(&self, key: u64, open: bool) {
         self.ctx.set_select_open(key, open);
@@ -6020,6 +6126,7 @@ impl<A: Application> AppRuntime<A> {
             theme: self.ctx.theme,
             theme_transition: self.ctx.theme_transition,
             theme_transition_remaining_secs: self.ctx.theme_transition_remaining_secs,
+            motion_policy: self.ctx.motion_policy,
             hovered: self.router.hover(),
             pressed: self.router.pointer().pressed(),
             focused: self.ctx.focused,
@@ -6604,6 +6711,7 @@ impl<A: Application> AppRuntime<A> {
                         Some(Vec2::new(desc.rect.width(), desc.rect.height()))
                     }
                     WidgetSpec::Dock { .. }
+                    | WidgetSpec::DockingOverlay(_)
                     | WidgetSpec::Text { .. }
                     | WidgetSpec::BoxSurface { .. }
                     | WidgetSpec::InteractiveHit { .. }
@@ -7684,6 +7792,14 @@ impl<A: Application> AppRuntime<A> {
                         self.collector
                             .push(mix_key(entry.key, 0x444F_434B), preview);
                     }
+                }
+                WidgetSpec::DockingOverlay(out) => {
+                    let mut out = apply_z_base(out.as_ref().clone(), entry.z_base);
+                    out.hit = None;
+                    out.sub_hits.clear();
+                    out.a11y = None;
+                    out.focusable = false;
+                    self.collector.push(entry.key, out);
                 }
                 WidgetSpec::Minimap { desc, items } => {
                     let mut desc = *desc;

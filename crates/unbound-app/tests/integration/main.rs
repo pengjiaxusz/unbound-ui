@@ -6,6 +6,7 @@
 mod appearance_ledger;
 mod asset_pipeline;
 mod declarative_ergonomics;
+mod docking_overlay_headless;
 mod event_bubbling;
 mod form_binding;
 mod form_validation;

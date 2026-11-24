@@ -319,21 +319,26 @@ impl<A: Application> WindowedRunner<A> {
     /// 纯白：图元确实绘制了，但颜色全透明。showcase 自行上传 LUT，通用运行器
     /// 必须为每个示例做同样的事，并在设备重建后重新上传。
     fn sync_theme(&mut self, window: &NativeWindow) {
-        let (key, sys_accent, transition_cfg) = {
+        let (key, sys_accent, transition_cfg, reduced_motion) = {
             let ctx = self.runtime.context();
             let sys_accent = ctx.resolved_system_accent();
             (
                 make_theme_snapshot_key(ctx.theme, ctx.preset, ctx.accent, sys_accent),
                 sys_accent,
                 ctx.theme_transition,
+                ctx.motion_policy.reduced_motion,
             )
         };
         if self.renderer.is_none() {
             return;
         }
-        let outcome =
-            self.theme_driver
-                .sync_preset(key, sys_accent, transition_cfg, self.renderer.as_mut());
+        let outcome = self.theme_driver.sync_preset_with_policy(
+            key,
+            sys_accent,
+            transition_cfg,
+            reduced_motion,
+            self.renderer.as_mut(),
+        );
         self.runtime.context_mut().theme_transition_remaining_secs = outcome.remaining_secs;
         if outcome.lut_updated {
             // 切换主题或强调色只改变 4 KiB LUT：既不重排也不重传图元，

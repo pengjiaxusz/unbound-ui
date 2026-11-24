@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeSnapshotKey, ThemeTransitionDriver};
 use rustc_hash::FxHashMap;
+use unbound_anim::MotionPolicy;
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::is_device_lost;
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -17,7 +18,7 @@ use unbound_gpu::surface::{AcquireOutcome, PresentOutcome, Surface, Swapchain};
 use unbound_gpu::swapchain::{CompositeAlphaMode, PresentConfig};
 use unbound_gpu::{Camera, ManagedExternalTextureDesc, Renderer};
 use unbound_input::PointerButton;
-use unbound_math::Vec2;
+use unbound_math::{Rect, Vec2};
 use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
@@ -29,6 +30,10 @@ use unbound_platform::{
     PopupWindowConfig, WindowId, WindowRegistry,
 };
 use unbound_theme::ThemeSet;
+use unbound_widgets::{
+    DockCandidatePane, DockCandidateWindow, DockDragProxy, DockDropKind, DockOverlayState,
+    DEFAULT_ROOT_EDGE_BAND_PX,
+};
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
@@ -250,6 +255,87 @@ impl<A: Application> WindowContext<A> {
         }
     }
 
+    /// 访问当前窗口的 [`AppRuntime`]。
+    #[must_use]
+    pub fn runtime(&self) -> &AppRuntime<A> {
+        &self.runtime
+    }
+
+    /// 可变访问当前窗口的 [`AppRuntime`]。
+    pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
+        &mut self.runtime
+    }
+
+    /// 返回窗口客户区左上角在桌面物理坐标系中的原点（像素）。
+    #[must_use]
+    pub const fn screen_origin(&self) -> (i32, i32) {
+        self.screen_origin
+    }
+
+    /// 设置窗口客户区左上角在桌面物理坐标系中的原点（供宿主同步与无头测试配置）。
+    pub fn set_screen_origin(&mut self, origin: (i32, i32)) {
+        self.screen_origin = origin;
+    }
+
+    /// 返回当前窗口生效的物理/逻辑总缩放因子（`os_scale * ui_scale`，下限 `0.01`）。
+    #[must_use]
+    pub fn effective_scale(&self) -> f32 {
+        self.runtime.context().effective_scale().max(0.01)
+    }
+
+    /// 返回窗口在统一桌面逻辑坐标系下的矩形。
+    #[must_use]
+    pub fn logical_screen_rect(&self) -> Rect {
+        let scale = self.effective_scale();
+        let origin = Vec2::new(
+            self.screen_origin.0 as f32 / scale,
+            self.screen_origin.1 as f32 / scale,
+        );
+        let vp = self.runtime.context().viewport;
+        Rect::new(origin.x, origin.y, vp.x, vp.y)
+    }
+
+    /// 返回窗口在统一桌面物理坐标系下的矩形（像素）。
+    #[must_use]
+    pub fn physical_screen_rect(&self) -> Rect {
+        let scale = self.effective_scale();
+        let origin = Vec2::new(self.screen_origin.0 as f32, self.screen_origin.1 as f32);
+        let size = self.runtime.context().viewport * scale;
+        Rect::new(origin.x, origin.y, size.x, size.y)
+    }
+
+    /// 将本窗口局部逻辑坐标转换为桌面物理坐标（像素）。
+    #[must_use]
+    pub fn local_to_screen_physical(&self, local_logical: Vec2) -> Vec2 {
+        let scale = self.effective_scale();
+        Vec2::new(
+            self.screen_origin.0 as f32 + local_logical.x * scale,
+            self.screen_origin.1 as f32 + local_logical.y * scale,
+        )
+    }
+
+    /// 将桌面物理坐标（像素）转换为本窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_local(&self, screen_phys: Vec2) -> Vec2 {
+        let scale = self.effective_scale();
+        Vec2::new(
+            (screen_phys.x - self.screen_origin.0 as f32) / scale,
+            (screen_phys.y - self.screen_origin.1 as f32) / scale,
+        )
+    }
+
+    /// 将本窗口局部逻辑坐标转换为统一桌面逻辑坐标。
+    #[must_use]
+    pub fn local_to_screen_logical(&self, local_logical: Vec2) -> Vec2 {
+        self.logical_screen_rect().origin + local_logical
+    }
+
+    /// 将统一桌面逻辑坐标转换为本窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_logical_to_local(&self, screen_logical: Vec2) -> Vec2 {
+        screen_logical - self.logical_screen_rect().origin
+    }
+
     /// 访问当前窗口渲染器持有的共享 [`Gpu`] 引用计数句柄（若已初始化）。
     #[must_use]
     pub fn shared_gpu(&self) -> Option<Arc<Gpu>> {
@@ -328,8 +414,19 @@ impl<A: Application> WindowContext<A> {
         outcome.lut_updated
     }
 
+    /// 读取当前 [`AppContext::motion_policy`] 中的 `reduced_motion` 同步本窗口主题过渡状态。
+    #[allow(dead_code)]
+    pub(crate) fn sync_theme_state_with_context_at(
+        &mut self,
+        now_secs: f64,
+        shared_trigger_secs: f64,
+    ) -> bool {
+        let reduced_motion = self.runtime.context().motion_policy.reduced_motion;
+        self.sync_theme_state_at(now_secs, shared_trigger_secs, reduced_motion)
+    }
+
     fn sync_theme_at(&mut self, window: &NativeWindow, now_secs: f64, shared_trigger_secs: f64) {
-        let reduced_motion = unbound_platform::prefers_reduced_motion();
+        let reduced_motion = self.runtime.context().motion_policy.reduced_motion;
         let needs_upload = self.sync_theme_state_at(now_secs, shared_trigger_secs, reduced_motion);
         if !needs_upload {
             return;
@@ -503,6 +600,29 @@ impl<A: Application> Drop for WindowContext<A> {
     }
 }
 
+/// 跨窗拖拽指针命中结果。
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum CrossWindowDragHit {
+    /// 指针命中目标窗口（含源窗口自身），携带目标窗口 ID、局部逻辑坐标与桌面坐标。
+    Window {
+        /// 命中的目标窗口 ID。
+        window_id: WindowId,
+        /// 目标窗口内的局部逻辑坐标。
+        local_logical: Vec2,
+        /// 桌面物理像素坐标。
+        screen_physical: Vec2,
+        /// 统一桌面逻辑坐标。
+        screen_logical: Vec2,
+    },
+    /// 指针位于所有可见窗口之外的自由空间（`TearOut`）。
+    TearOut {
+        /// 桌面物理像素坐标。
+        screen_physical: Vec2,
+        /// 统一桌面逻辑坐标。
+        screen_logical: Vec2,
+    },
+}
+
 /// 多窗口共享 `VkDevice` 与共享基础图集的运行时协调器。
 pub struct MultiWindowCoordinator<A: Application> {
     registry: WindowRegistry<WindowContext<A>>,
@@ -586,6 +706,174 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
         }
         let _ = self.registry.insert(id, ctx);
+    }
+
+    /// 配置指定窗口的桌面物理屏幕原点（像素），同步更新其 [`AppRuntime`] 原点记录。
+    pub fn set_window_screen_origin(&mut self, id: WindowId, origin: (i32, i32)) -> bool {
+        let Some(ctx) = self.registry.get_mut(id) else {
+            return false;
+        };
+        ctx.set_screen_origin(origin);
+        ctx.runtime.set_window_screen_origin(origin, id);
+        true
+    }
+
+    /// 查询指定窗口的桌面物理屏幕原点（像素）。
+    #[must_use]
+    pub fn window_screen_origin(&self, id: WindowId) -> Option<(i32, i32)> {
+        self.registry.get(id).map(WindowContext::screen_origin)
+    }
+
+    /// 将指定窗口内的局部逻辑坐标转换为桌面物理坐标（像素）。
+    #[must_use]
+    pub fn local_to_screen_physical(&self, id: WindowId, local_logical: Vec2) -> Option<Vec2> {
+        self.registry
+            .get(id)
+            .map(|ctx| ctx.local_to_screen_physical(local_logical))
+    }
+
+    /// 将指定窗口内的局部逻辑坐标转换为统一桌面逻辑坐标。
+    #[must_use]
+    pub fn local_to_screen_logical(&self, id: WindowId, local_logical: Vec2) -> Option<Vec2> {
+        self.registry
+            .get(id)
+            .map(|ctx| ctx.local_to_screen_logical(local_logical))
+    }
+
+    /// 根据桌面物理坐标命中顶层可见窗口，并换算为该目标窗口内的局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_window(&self, screen_phys: Vec2) -> Option<(WindowId, Vec2)> {
+        // 优先命中当前聚焦窗口，其次按注册逆序（后建窗口靠前）命中。
+        for slot in self.registry.iter() {
+            if slot.visible
+                && slot.context.runtime.context().window_focused
+                && slot
+                    .context
+                    .physical_screen_rect()
+                    .contains_point(screen_phys)
+            {
+                return Some((slot.id, slot.context.screen_physical_to_local(screen_phys)));
+            }
+        }
+        let mut last_hit = None;
+        for slot in self.registry.iter() {
+            if slot.visible
+                && !slot.context.runtime.context().window_focused
+                && slot
+                    .context
+                    .physical_screen_rect()
+                    .contains_point(screen_phys)
+            {
+                last_hit = Some((slot.id, slot.context.screen_physical_to_local(screen_phys)));
+            }
+        }
+        last_hit
+    }
+
+    /// 执行跨窗拖拽坐标路由：源窗局部逻辑坐标 → 桌面物理坐标 → 命中目标窗或 `TearOut`。
+    #[must_use]
+    pub fn route_cross_window_drag(
+        &self,
+        source_id: WindowId,
+        local_logical: Vec2,
+    ) -> Option<CrossWindowDragHit> {
+        let source_ctx = self.registry.get(source_id)?;
+        let screen_physical = source_ctx.local_to_screen_physical(local_logical);
+        let screen_logical = source_ctx.local_to_screen_logical(local_logical);
+        match self.screen_physical_to_window(screen_physical) {
+            Some((target_id, target_local)) => Some(CrossWindowDragHit::Window {
+                window_id: target_id,
+                local_logical: target_local,
+                screen_physical,
+                screen_logical,
+            }),
+            None => Some(CrossWindowDragHit::TearOut {
+                screen_physical,
+                screen_logical,
+            }),
+        }
+    }
+
+    /// 采集所有可见窗口的停靠候选描述符（自动将局部面板坐标偏移至统一桌面逻辑坐标系）。
+    #[must_use]
+    pub fn dock_candidate_windows<F>(&self, mut panes_fn: F) -> Vec<DockCandidateWindow>
+    where
+        F: FnMut(WindowId, &WindowContext<A>) -> Vec<DockCandidatePane>,
+    {
+        let mut windows = Vec::with_capacity(self.registry.len());
+        for (idx, slot) in self.registry.iter().enumerate() {
+            if !slot.visible {
+                continue;
+            }
+            let window_rect = slot.context.logical_screen_rect();
+            let origin = window_rect.origin;
+            let mut panes = panes_fn(slot.id, &slot.context);
+            for pane in &mut panes {
+                pane.rect = pane.rect.translate(origin);
+                for tab_rect in &mut pane.tab_rects {
+                    *tab_rect = tab_rect.translate(origin);
+                }
+            }
+            let z_order = (idx as u32)
+                + if slot.context.runtime.context().window_focused {
+                    1000
+                } else {
+                    0
+                };
+            windows.push(DockCandidateWindow {
+                window_id: slot.id.0,
+                window_rect,
+                z_order,
+                root_edge_band: DEFAULT_ROOT_EDGE_BAND_PX,
+                panes,
+            });
+        }
+        windows
+    }
+
+    /// 驱动跨窗停靠预览状态机与 `TearOut` 外部拖拽代理协同更新。
+    pub fn update_docking_overlay<F>(
+        &self,
+        state: &mut DockOverlayState,
+        proxy: &mut DockDragProxy,
+        source_id: WindowId,
+        local_logical: Vec2,
+        dt: f32,
+        panes_fn: F,
+    ) -> Option<CrossWindowDragHit>
+    where
+        F: FnMut(WindowId, &WindowContext<A>) -> Vec<DockCandidatePane>,
+    {
+        let source_ctx = self.registry.get(source_id)?;
+        let policy = source_ctx.runtime.motion_policy();
+        let hit = self.route_cross_window_drag(source_id, local_logical)?;
+        let screen_logical = match hit {
+            CrossWindowDragHit::Window { screen_logical, .. }
+            | CrossWindowDragHit::TearOut { screen_logical, .. } => screen_logical,
+        };
+        let candidates = self.dock_candidate_windows(panes_fn);
+        state.update(screen_logical, &candidates, dt, policy);
+        let is_tear_out = matches!(
+            state.active_target().map(|target| target.kind),
+            Some(DockDropKind::TearOut)
+        );
+        proxy.visible = state.is_active() && is_tear_out;
+        proxy.position = screen_logical;
+        Some(hit)
+    }
+
+    /// 向所有已注册窗口统一广播集中式 [`MotionPolicy`]。
+    pub fn set_motion_policy_all(&mut self, policy: MotionPolicy) {
+        for slot in self.registry.iter_mut() {
+            slot.context.runtime.set_motion_policy(policy);
+        }
+    }
+
+    /// 向所有已注册窗口统一广播 `reduced_motion` 开关。
+    pub fn set_reduced_motion_all(&mut self, enabled: bool) {
+        for slot in self.registry.iter_mut() {
+            slot.context.runtime.set_reduced_motion(enabled);
+        }
     }
 
     /// 按严格回收顺序关闭并移除指定窗口；若全部窗口均已关闭则释放共享图集与设备引用。

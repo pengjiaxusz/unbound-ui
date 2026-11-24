@@ -183,16 +183,16 @@ impl ThemeTransitionDriver {
         }
     }
 
-    /// 同步通用预设主题并直接上传 4 KiB LUT 至渲染器。
-    pub fn sync_preset(
+    /// 按显式 `reduced_motion` 策略同步通用预设主题并直接上传 4 KiB LUT 至渲染器。
+    pub fn sync_preset_with_policy(
         &mut self,
         key: ThemeSnapshotKey,
         system_accent: Option<Color>,
         config: ThemeTransitionConfig,
+        reduced_motion: bool,
         renderer: Option<&mut Renderer>,
     ) -> ThemeSyncOutcome {
         let now_secs = self.elapsed_secs();
-        let reduced_motion = unbound_platform::prefers_reduced_motion();
         let outcome = self.sync_preset_at(
             key,
             system_accent,
@@ -209,6 +209,23 @@ impl ThemeTransitionDriver {
             }
         }
         outcome
+    }
+
+    /// 同步通用预设主题并直接上传 4 KiB LUT 至渲染器。
+    pub fn sync_preset(
+        &mut self,
+        key: ThemeSnapshotKey,
+        system_accent: Option<Color>,
+        config: ThemeTransitionConfig,
+        renderer: Option<&mut Renderer>,
+    ) -> ThemeSyncOutcome {
+        self.sync_preset_with_policy(
+            key,
+            system_accent,
+            config,
+            unbound_platform::prefers_reduced_motion(),
+            renderer,
+        )
     }
 
     /// 同步自定义调色板（供 `apps/showcase` 等持有自有 `ThemeSet` 的宿主使用）并推进过渡。

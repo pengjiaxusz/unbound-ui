@@ -175,7 +175,7 @@ impl MicaBackdrop {
                 let transition_enabled = view
                     .ctx
                     .theme_transition
-                    .effective_duration_secs(unbound_platform::prefers_reduced_motion())
+                    .effective_duration_secs(view.ctx.motion_policy.reduced_motion)
                     > 0.0;
                 if transition_enabled && self.asset.is_some() && self.asset != Some(pending) {
                     self.previous_asset = self.asset;

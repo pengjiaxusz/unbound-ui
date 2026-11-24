@@ -9,7 +9,7 @@ pub use crate::appearance::{
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::multi_window::{
-    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
+    run_multi_window, CrossWindowDragHit, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
 };
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
@@ -32,6 +32,7 @@ pub use crate::{
 pub use accesskit::Role;
 pub use unbound_a11y::{A11yAction, SemanticIntent};
 pub use unbound_abi::{Align, Dim, Display, FlexDirection, Justify, NodeFlags, RawNodeDesc};
+pub use unbound_anim::{DurationToken, EasingToken, MotionPolicy, MotionToken, Tween};
 pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
 pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
@@ -52,6 +53,13 @@ pub use unbound_theme::{
     snap_ui_scale, step_ui_scale, typography, AccentBrand, ProductPreset, ThemeKind, ThemeState,
     ThemeTransition, ThemeTransitionConfig, Token, CANONICAL_SCALE_STEPS,
     DEFAULT_THEME_TRANSITION_DURATION_SECS,
+};
+pub use unbound_widgets::docking_overlay::{
+    compute_hint_pill_rect, compute_reorder_indicator, emit_docking_overlay, emit_drag_proxy,
+    DockCandidatePane, DockCandidateWindow, DockDragPayloadKind, DockDragProxy, DockDropKind,
+    DockDropSemantic, DockDropTarget, DockEdge, DockOverlayState, DockOverlayTokens,
+    DEFAULT_ROOT_EDGE_BAND_PX, REORDER_LINE_WIDTH_PX, SHELL_DWELL_DURATION_SECS,
+    SHELL_DWELL_THRESHOLD_PX,
 };
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::overlay::{OverlayEntry, OverlayKind, OverlayStack};
