@@ -1484,11 +1484,7 @@ impl AppContext {
     }
 
     /// 请求热切换指定浮窗的置顶状态。
-    pub fn set_window_always_on_top(
-        &mut self,
-        id: unbound_platform::WindowId,
-        topmost: bool,
-    ) {
+    pub fn set_window_always_on_top(&mut self, id: unbound_platform::WindowId, topmost: bool) {
         self.pending_window_commands
             .push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
     }
@@ -6469,11 +6465,7 @@ impl<A: Application> AppRuntime<A> {
     }
 
     /// 请求热切换指定浮窗的置顶状态。
-    pub fn set_window_always_on_top(
-        &mut self,
-        id: unbound_platform::WindowId,
-        topmost: bool,
-    ) {
+    pub fn set_window_always_on_top(&mut self, id: unbound_platform::WindowId, topmost: bool) {
         self.window_commands
             .push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
     }

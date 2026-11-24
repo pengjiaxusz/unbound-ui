@@ -572,7 +572,11 @@ pub(crate) mod win32 {
     }
 
     pub(crate) fn set_always_on_top(hwnd: isize, topmost: bool) {
-        let insert_after = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        let insert_after = if topmost {
+            HWND_TOPMOST
+        } else {
+            HWND_NOTOPMOST
+        };
         unsafe {
             let _ = SetWindowPos(
                 hwnd_from_isize(hwnd),
@@ -623,7 +627,8 @@ pub(crate) mod win32 {
     }
 
     pub(crate) fn work_area_for_window(hwnd: isize) -> Option<MonitorWorkArea> {
-        let hmonitor = unsafe { MonitorFromWindow(hwnd_from_isize(hwnd), MONITOR_DEFAULTTONEAREST) };
+        let hmonitor =
+            unsafe { MonitorFromWindow(hwnd_from_isize(hwnd), MONITOR_DEFAULTTONEAREST) };
         if hmonitor.is_invalid() {
             return None;
         }

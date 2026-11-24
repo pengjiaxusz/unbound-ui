@@ -120,9 +120,7 @@ impl FloatingHost {
             last_snap_anchor: None,
         };
         self.entries.insert(id, state);
-        self.entries
-            .get(&id)
-            .expect("刚插入的浮窗状态条目必然存在")
+        self.entries.get(&id).expect("刚插入的浮窗状态条目必然存在")
     }
 
     /// 注销并移除指定浮窗的状态记录。

@@ -11,6 +11,7 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 
+use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea};
 use crate::win32_frame::{
     clear_window_accent_tint, install_custom_frame, set_window_accent_tint, set_window_backdrop,
     set_window_dark_mode, FrameHitMetrics, WindowBackdropMaterial,
@@ -19,7 +20,6 @@ use crate::win32_window::{
     CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window as Win32Window,
     WindowId as NativeWindowId,
 };
-use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea};
 use crate::window::{PlatformError, ScreenRect};
 
 /// 跨平台原生窗口内部后端分派枚举。

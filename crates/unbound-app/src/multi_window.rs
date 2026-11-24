@@ -619,13 +619,35 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 && cy >= i64::from(b.y)
                 && cy < i64::from(b.y) + i64::from(b.height)
         }) {
-            return hit.clone();
+            return *hit;
         }
-        self.headless_work_areas
+        // 中心点越出所有显示器时，优先选择距离最近的显示器，避免辅屏越界被弹回主屏。
+        *self
+            .headless_work_areas
             .iter()
-            .find(|m| m.is_primary)
-            .cloned()
-            .unwrap_or_else(|| self.headless_work_areas[0].clone())
+            .min_by_key(|m| {
+                let b = m.monitor_bounds;
+                let min_x = i64::from(b.x);
+                let max_x = min_x + i64::from(b.width.max(1)) - 1;
+                let min_y = i64::from(b.y);
+                let max_y = min_y + i64::from(b.height.max(1)) - 1;
+                let dx = if cx < min_x {
+                    min_x - cx
+                } else if cx > max_x {
+                    cx - max_x
+                } else {
+                    0
+                };
+                let dy = if cy < min_y {
+                    min_y - cy
+                } else if cy > max_y {
+                    cy - max_y
+                } else {
+                    0
+                };
+                dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
+            })
+            .unwrap_or(&self.headless_work_areas[0])
     }
 
     fn resolve_open_floating_config(
@@ -668,9 +690,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
         if let Some(state) = self.floating_host.get(id) {
             return state.effective_policy.no_activate;
         }
-        self.registry
-            .get(id)
-            .is_some_and(|ctx| ctx.config.role != WindowRole::Standard && ctx.config.floating_policy.no_activate)
+        self.registry.get(id).is_some_and(|ctx| {
+            ctx.config.role != WindowRole::Standard && ctx.config.floating_policy.no_activate
+        })
     }
 
     /// 无头注册一个窗口上下文（主要用于无头多窗口测试与集成验证）。
@@ -698,7 +720,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
         config.decorations = false;
         config.surface_alpha = SurfaceAlpha::PreMultiplied;
         let mut outer_rect = Self::initial_rect_from_config(&config);
-        if self.floating_host.capabilities().supports_global_positioning
+        if self
+            .floating_host
+            .capabilities()
+            .supports_global_positioning
             && !self.headless_work_areas.is_empty()
         {
             let area = self.select_work_area_for_rect(outer_rect);
@@ -786,12 +811,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         self.floating_host
             .get(id)
             .map(|s| s.visible)
-            .or_else(|| {
-                self.registry
-                    .iter()
-                    .find(|s| s.id == id)
-                    .map(|s| s.visible)
-            })
+            .or_else(|| self.registry.iter().find(|s| s.id == id).map(|s| s.visible))
     }
 
     /// 查询指定浮窗的实例代次（仅销毁重建时递增，热切换保持不变）。
@@ -874,7 +894,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 }
                 if let Some(mut rem_ctx) = self.registry.remove(rem_id) {
                     for action in rem_ctx.popup_host.close_for_owner(rem_id) {
-                        if let unbound_platform::PopupSyncAction::Close { id: popup_id, .. } = action {
+                        if let unbound_platform::PopupSyncAction::Close { id: popup_id, .. } =
+                            action
+                        {
                             self.pending_popup_closes.push(popup_id);
                         }
                     }
@@ -929,7 +951,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 }
             }
             WindowCommand::SetWindowOuterRect { id, rect } => {
-                let target_rect = if self.floating_host.capabilities().supports_global_positioning
+                let target_rect = if self
+                    .floating_host
+                    .capabilities()
+                    .supports_global_positioning
                     && !self.headless_work_areas.is_empty()
                 {
                     let area = self.select_work_area_for_rect(*rect);
@@ -938,7 +963,11 @@ impl<A: Application> MultiWindowCoordinator<A> {
                     *rect
                 };
                 if let Some(applied) = self.floating_host.set_outer_rect(*id, target_rect) {
-                    if self.floating_host.capabilities().supports_global_positioning {
+                    if self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
+                    {
                         let sync = self.pending_floating_live_syncs.entry(*id).or_default();
                         sync.outer_rect = Some(applied);
                     }
@@ -954,11 +983,13 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 if self
                     .floating_host
                     .set_snap_anchor(*id, snap.rect, Some(snap.anchor))
+                    && self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
                 {
-                    if self.floating_host.capabilities().supports_global_positioning {
-                        let sync = self.pending_floating_live_syncs.entry(*id).or_default();
-                        sync.outer_rect = Some(snap.rect);
-                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.outer_rect = Some(snap.rect);
                 }
             }
             _ => {}
@@ -1244,12 +1275,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let role = config.role;
         let policy = config.floating_policy;
         let visible = config.visible;
-        let outer_rect = ScreenRect::new(
-            client_screen.x,
-            client_screen.y,
-            width,
-            height,
-        );
+        let outer_rect = ScreenRect::new(client_screen.x, client_screen.y, width, height);
         let _ = self.registry.insert(id, ctx);
         self.registry.set_visible(id, visible);
         if role != WindowRole::Standard {
@@ -1313,7 +1339,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
                         self.pending_windows.push_back(config);
                     }
                     WindowCommand::OpenFloatingWindow { config, placement } => {
-                        deferred_floating.push(WindowCommand::OpenFloatingWindow { config, placement });
+                        deferred_floating
+                            .push(WindowCommand::OpenFloatingWindow { config, placement });
                     }
                     WindowCommand::CloseWindow(target)
                     | WindowCommand::CloseFloatingWindow(target) => {
@@ -1386,7 +1413,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
                         if self
                             .floating_host
                             .set_snap_anchor(target, snap.rect, Some(snap.anchor))
-                            && self.floating_host.capabilities().supports_global_positioning
+                            && self
+                                .floating_host
+                                .capabilities()
+                                .supports_global_positioning
                         {
                             let sync = self.pending_floating_live_syncs.entry(target).or_default();
                             sync.outer_rect = Some(snap.rect);
@@ -2550,7 +2580,9 @@ mod tests {
         // Win32 全量能力。
         coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
         let win32 = coord.floating_policy(WindowId(2)).unwrap();
-        assert!(win32.no_activate && win32.always_on_top && win32.skip_taskbar && win32.click_through);
+        assert!(
+            win32.no_activate && win32.always_on_top && win32.skip_taskbar && win32.click_through
+        );
 
         // X11 默认能力。
         coord.set_headless_capabilities(FloatingWindowCapabilities::x11_default());
