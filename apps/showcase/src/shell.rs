@@ -923,6 +923,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(nav_item_id);
     }
 
@@ -946,6 +948,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(item_id);
     }
 
@@ -964,6 +968,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(item_id);
     }
 
@@ -1787,6 +1793,31 @@ impl GalleryApp {
             self.state.zoom_dropdown_open = false;
             self.state.bump();
         }
+        // 点击文本渲染页字体族或字重下拉菜单之外的区域时自动收起浮层。
+        if self.state.text_render.family_dropdown_open
+            || self.state.text_render.weight_dropdown_open
+        {
+            let keep_open = matches!(
+                target.and_then(target::decode),
+                Some(Target::Demo(page, 0, part))
+                    if page == PageId::TextRender.index() as u8
+                        && (part == pages::text_render::FONT_FAMILY_TRIGGER_PART
+                            || part == pages::text_render::FONT_WEIGHT_TRIGGER_PART
+                            || (pages::text_render::FONT_FAMILY_PART_BASE
+                                ..pages::text_render::FONT_FAMILY_PART_BASE
+                                    + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
+                                .contains(&part)
+                            || (pages::text_render::FONT_WEIGHT_PART_BASE
+                                ..pages::text_render::FONT_WEIGHT_PART_BASE
+                                    + pages::text_render::FONT_WEIGHT_OPTIONS.len() as u16)
+                                .contains(&part))
+            );
+            if !keep_open {
+                self.state.text_render.family_dropdown_open = false;
+                self.state.text_render.weight_dropdown_open = false;
+                self.state.bump();
+            }
+        }
         // 点击编辑器之外的区域时释放编辑器焦点：选区随焦点一起折叠，
         // 否则旧选区会在后续悬停时继续显示。上下文菜单项属于编辑器本身。
         let editor_related = target.and_then(target::decode).is_some_and(|item| {
@@ -2296,6 +2327,8 @@ impl GalleryApp {
                 self.state.demo.dropdown_open = false;
                 self.state.lang_dropdown_open = false;
                 self.state.zoom_dropdown_open = false;
+                self.state.text_render.family_dropdown_open = false;
+                self.state.text_render.weight_dropdown_open = false;
                 self.editor_mut(EditorId::Search)
                     .edit
                     .set_text(String::new());
@@ -3065,7 +3098,9 @@ impl GalleryApp {
                         let group_index = (part - pages::text_render::GROUP_PART_BASE) as usize;
                         self.state.text_render.toggle_group(group_index);
                         self.state.bump();
-                    } else if part == pages::text_render::STATUS_BAR_PART {
+                    } else if part == pages::text_render::STATUS_BAR_PART
+                        || part == pages::text_render::STATUS_FALLBACK_CELL_PART
+                    {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
                     } else if part == pages::text_render::PART_PRESET_WINUI {
@@ -3140,6 +3175,16 @@ impl GalleryApp {
                             self.state.text_render.report = self.labels.cache.report();
                             self.state.bump();
                         }
+                    } else if part == pages::text_render::FONT_FAMILY_TRIGGER_PART {
+                        self.state.text_render.family_dropdown_open =
+                            !self.state.text_render.family_dropdown_open;
+                        self.state.text_render.weight_dropdown_open = false;
+                        self.state.bump();
+                    } else if part == pages::text_render::FONT_WEIGHT_TRIGGER_PART {
+                        self.state.text_render.weight_dropdown_open =
+                            !self.state.text_render.weight_dropdown_open;
+                        self.state.text_render.family_dropdown_open = false;
+                        self.state.bump();
                     } else if (pages::text_render::FONT_FAMILY_PART_BASE
                         ..pages::text_render::FONT_FAMILY_PART_BASE
                             + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
@@ -3148,6 +3193,7 @@ impl GalleryApp {
                         let index = (part - pages::text_render::FONT_FAMILY_PART_BASE) as usize;
                         let (_, fam) = pages::text_render::FONT_FAMILY_OPTIONS[index];
                         self.state.text_render.set_family(fam.map(str::to_string));
+                        self.state.text_render.family_dropdown_open = false;
                         self.state.bump();
                     } else if (pages::text_render::FONT_WEIGHT_PART_BASE
                         ..pages::text_render::FONT_WEIGHT_PART_BASE
@@ -3157,6 +3203,7 @@ impl GalleryApp {
                         let index = (part - pages::text_render::FONT_WEIGHT_PART_BASE) as usize;
                         let (_, weight) = pages::text_render::FONT_WEIGHT_OPTIONS[index];
                         self.state.text_render.set_weight(weight);
+                        self.state.text_render.weight_dropdown_open = false;
                         self.state.bump();
                     } else if (pages::text_render::FONT_SIZE_PART_BASE
                         ..pages::text_render::FONT_SIZE_PART_BASE
