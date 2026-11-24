@@ -4152,13 +4152,25 @@ fn navigation_view_parity_desc(
 /// 字形、图像与曲线图元的载荷索引是相对其所属发射输出的，合并进场景时
 /// 必须整体平移到当前载荷长度之后，否则后续控件会采样到先前图元的 UV。
 fn push(scene: &mut Gallery, mut output: unbound_widgets::WidgetOutput) {
-    let base = scene.payloads.len() as u32;
+    let payload_base = scene.payloads.len() as u32;
+    let clip_base = if output.clips.is_empty() {
+        None
+    } else {
+        let base = scene.clips.len() as u32;
+        scene.clips.extend(output.clips);
+        Some(base)
+    };
     for primitive in &mut output.primitives {
         if matches!(
             primitive.prim_type(),
             PrimType::Glyph | PrimType::GlyphColor | PrimType::Image | PrimType::Curve
         ) {
-            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(base);
+            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+        }
+        if let Some(base) = clip_base {
+            if primitive.clip_idx != unbound_gpu::data::CLIP_NONE {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(base);
+            }
         }
     }
     scene.primitives.extend(output.primitives);
