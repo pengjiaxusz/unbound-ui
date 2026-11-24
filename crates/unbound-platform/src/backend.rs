@@ -154,7 +154,26 @@ impl PlatformWindow {
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
         {
-            crate::wayland_backend::run_event_loop(self.config, app)
+            let env_val = std::env::var("UNBOUND_LINUX_BACKEND").ok();
+            let pref = crate::linux_backend::parse_linux_backend_env(env_val.as_deref())?;
+            let display_env = crate::linux_backend::LinuxDisplayEnv::from_process();
+            let candidates = crate::linux_backend::select_linux_backend_order(pref, &display_env)?;
+            if candidates.len() == 1 {
+                return match candidates[0] {
+                    crate::linux_backend::LinuxBackendKind::Wayland => {
+                        crate::wayland_backend::run_event_loop(self.config, app)
+                    }
+                    crate::linux_backend::LinuxBackendKind::X11 => {
+                        crate::x11_backend::run_event_loop(self.config, app)
+                    }
+                };
+            }
+            // Auto 模式下先轻量探测 Wayland 连接可用性，失败再回退 X11，避免消耗 `app` 所有权。
+            if crate::wayland_backend::can_connect_wayland() {
+                crate::wayland_backend::run_event_loop(self.config, app)
+            } else {
+                crate::x11_backend::run_event_loop(self.config, app)
+            }
         }
         #[cfg(not(any(
             windows,

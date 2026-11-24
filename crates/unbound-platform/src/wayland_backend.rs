@@ -213,7 +213,14 @@ struct ClipboardRegistrationGuard;
 impl Drop for ClipboardRegistrationGuard {
     fn drop(&mut self) {
         register_wayland_clipboard(None);
+        crate::linux_backend::set_active_linux_backend(None);
     }
+}
+
+/// 轻量探测当前环境是否可建立 Wayland 合成器连接（供 `auto` 后端回退决策使用）。
+#[must_use]
+pub(crate) fn can_connect_wayland() -> bool {
+    Connection::connect_to_env().is_ok()
 }
 
 /// 窗口句柄与事件循环共享的状态快照。
@@ -1804,6 +1811,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
 
     // 注册全局 Wayland 剪贴板后端，使 `SystemClipboard` 在 Linux/WSLg 下透明读写。
     let _clipboard_guard = ClipboardRegistrationGuard;
+    crate::linux_backend::set_active_linux_backend(Some(
+        crate::linux_backend::LinuxBackendKind::Wayland,
+    ));
     register_wayland_clipboard(Some(Arc::new(WaylandClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
         cmd_tx: Mutex::new(cmd_tx.clone()),

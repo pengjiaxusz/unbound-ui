@@ -24,6 +24,7 @@ pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
+pub mod linux_backend;
 pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
@@ -43,6 +44,8 @@ pub mod win32_window;
 pub mod window;
 pub mod windows;
 pub mod windows_build;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod x11_backend;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
 pub use a11y_win32::Win32A11y;
@@ -55,6 +58,11 @@ pub use dialogs::{
     save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
+pub use linux_backend::{
+    active_linux_backend, parse_linux_backend_env, place_x11_popup_in_work_area,
+    select_linux_backend_order, set_active_linux_backend, LinuxBackendKind, LinuxBackendPreference,
+    LinuxDisplayEnv,
+};
 pub use native_window::NativeWindow;
 pub use ole_drag::{
     begin_outbound_file_drag, build_cf_hdrop_payload, OutboundFileDragOutcome,
