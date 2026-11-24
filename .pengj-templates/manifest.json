@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.87.0",
+  "version": "0.88.1",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -160,7 +160,7 @@
     ".agents/skills/write-a-skill/SKILL.md": "4d1b1de7937feabcc909050c34d95b149134e2b07baf1521c3f708dcb10e8ba5",
     ".agents/skills/write-docs/SKILL.md": "873c5688743b786c3f445229240d9faf562c5179f484be5b04d00b85a9dcfeca",
     ".agents/skills/write-just/SKILL.md": "ed1c59af6fda383805be4318b65008ace76b843b41ad6e91df1d7f9f1655ba43",
-    ".agents/skills/write-just/references/command-map.md": "395484ef52b095e7a6b4e593d4193423bbd0836b3fc60272ea1e7ae6b4f229fb",
+    ".agents/skills/write-just/references/command-map.md": "18df1bc8b06e21763ebc373177600fd2dd3faa877b908e6cc795afdf87db3a3c",
     ".agents/skills/write-just/scripts/check-just.sh": "3e44d53b2e0f239f56a37b7ebe6fddc3cfcd3f976e137c4364997043726d05df",
     ".agents/skills/writing-for-agents/SKILL-MECHANICS.md": "8270f0089a3f0f21ff6df51a728b1ac4fcb71405cc5cc3612fb28e028451edf0",
     ".agents/skills/writing-for-agents/SKILL.md": "97ab5dc50277c8eb78cb83cd36c7b08bd997969fcb7efebcb2cb82f2592e580e",
@@ -179,7 +179,7 @@
     ".pengj-templates/just/worktree.just": "fa028c5d36493407cb8713541259262da550e7ceb7631aa171b4cda48b11ce82",
     ".pengj-templates/scripts/doctor.cmd": "3498d22336badc2843d5b57792d58c18771d805e9fc081e20108fae53b04ee00",
     ".pengj-templates/scripts/doctor.d/README.md": "fb7a29477e7f6216cf076a4344e6f97cda4b7aa48efc1f0e00209339acceb64f",
-    ".pengj-templates/scripts/doctor.sh": "daa6ac243414673714acc2e44e8620059e6d6a1f80d4c7bd68c5d2fbb435f2e7",
+    ".pengj-templates/scripts/doctor.sh": "130f84f2957adc7fcc0c4a86a1bd639768dc0523d7a4e9bc4c73dbe9964e6637",
     ".pengj-templates/scripts/setup.cmd": "dfce2f82d354b734e52f46f0832a3ca11b59db0d2fc97e4f85a0a8a9d4a44cdd",
     ".pengj-templates/scripts/setup.sh": "2ee4595e3e63ad97ca92db78e3ef5930629ee9a6deed535c9ee9361cec938ad6",
     ".vscode/extensions.json": "c7cb87ed3321bc2a3f9d71ebf6b46e4e12b92b6c03ff22af5c08a0a86cc94dec",
@@ -187,7 +187,7 @@
     "AGENTS.md": "0fe516aa7d28f8ebb49daadfa87ec7108a56cfcafc251850f940a432bb93652c",
     "CONTRIBUTING.md": "433e060b280aba3d150db28569908c541b4068cf7a0b5aeabdcd056aadecf1f4",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
-    "justfile": "e85ea1ec1bb137b4a35e096f26da31495772aa07ee1c3100ebe5abfeb3081e00",
+    "justfile": "3b4f95ff7beca5fc56fb81aaba21f54565844266ea427d35bb8d2d9e34a6d1c8",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
   }
 }

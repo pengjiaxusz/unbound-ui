@@ -2,10 +2,13 @@
 # 框架区在下方托管块内，由模板更新原位替换；块外的项目专属区归项目所有。
 # 重型任务直接走 `bque run -- <cmd>`，性能跑分走 `bque bench -- <cmd>`（bque 层不再产出包装配方）。
 # PENGJ_TEMPLATE_START
+set minimum-version := "1.56.0"
 [unix]
 set shell := ["sh", "-uc"]
 [windows]
 set shell := ["pwsh", "-NoProfile", "-Command"]
+[unix]
+export PATH := env('XDG_DATA_HOME', env('HOME', '') + '/.local/share') + '/pengj-templates/bin:' + env('HOME', '') + '/.local/bin:' + env('PATH', '')
 # 允许项目专属区用同名 recipe 覆盖框架配方（例如 `test` 前需要先产出某个产物），避免去改受管的 import 文件。
 set allow-duplicate-recipes := true
 
@@ -228,4 +231,8 @@ test *ARGS:
 # 编译产物落在仓库外、按机器推导的共享目录，多个工作树/多份克隆复用同一份依赖产物。
 # 推导逻辑只有 CLI 一份；框架配方与 `just wt-check` 读的是同一个值，这里导出给整份
 # justfile，showcase/gallery/example 这类直连 cargo 的 recipe 同样继承。
-export CARGO_TARGET_DIR := `pengj-templates-cli worktree target-dir --dir .`
+export CARGO_TARGET_DIR := if os_family() == "windows" {
+    `$d = if (Get-Command pengj-templates-cli -ErrorAction SilentlyContinue) { pengj-templates-cli worktree target-dir --dir . 2>$null }; if ($LASTEXITCODE -eq 0 -and $d) { $d } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }`
+} else {
+    `PATH="${XDG_DATA_HOME:-$HOME/.local/share}/pengj-templates/bin:$HOME/.local/bin:$PATH"; command -v pengj-templates-cli >/dev/null 2>&1 && pengj-templates-cli worktree target-dir --dir . 2>/dev/null || printf '%s' "${CARGO_TARGET_DIR:-target}"`
+}

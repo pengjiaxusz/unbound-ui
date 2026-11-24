@@ -5,9 +5,14 @@
 set -eu
 
 PENGJ_BIN="${XDG_DATA_HOME:-$HOME/.local/share}/pengj-templates/bin"
+LOCAL_BIN="$HOME/.local/bin"
+case ":$PATH:" in
+  *":$LOCAL_BIN:"*) ;;
+  *) PATH="$LOCAL_BIN:$PATH"; export PATH ;;
+esac
 case ":$PATH:" in
   *":$PENGJ_BIN:"*) ;;
-  *) PATH="$PATH:$PENGJ_BIN"; export PATH ;;
+  *) PATH="$PENGJ_BIN:$PATH"; export PATH ;;
 esac
 
 if command -v just >/dev/null 2>&1 \
@@ -29,9 +34,10 @@ echo "      curl -fsSL https://github.com/pengjiaxusz/pengj-templates/releases/l
 
 if ! command -v just >/dev/null 2>&1; then
   echo "" >&2
-  echo "  - just（约 3–5 MB；若直接调用 CLI 可选装）" >&2
-  echo "    常见安装位置：~/.local/bin、~/.cargo/bin 或系统包管理器目录" >&2
-  echo "    安装方式：brew install just / cargo install just / https://github.com/casey/just#installation" >&2
+  echo "  - just（需 >= 1.56.0，约 3–5 MB；若直接调用 CLI 可选装）" >&2
+  echo "    常见安装位置：~/.local/bin 或 ~/.cargo/bin（Ubuntu/Debian 请勿使用旧版 apt install just）" >&2
+  echo "    推荐安装：curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | sh -s -- --to ~/.local/bin" >&2
+  echo "    其他方式：brew install just / cargo install just / https://github.com/casey/just#installation" >&2
 fi
 
 echo "" >&2
