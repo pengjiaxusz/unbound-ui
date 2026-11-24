@@ -577,6 +577,11 @@ impl AssetHub {
         self.bc7.set_capabilities(caps);
     }
 
+    /// 标记 BC7 压缩资产池是否已挂载真实 GPU 渲染器。
+    pub fn set_bc7_gpu_backed(&mut self, gpu_backed: bool) {
+        self.bc7.set_gpu_backed(gpu_backed);
+    }
+
     /// 查询当前生效的 BC7 压缩纹理能力快照。
     #[must_use]
     pub const fn bc7_capabilities(&self) -> CompressedTextureCapabilities {

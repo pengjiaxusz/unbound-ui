@@ -508,19 +508,19 @@ impl Bc7AtlasManager {
             return Ok(());
         }
 
-        // 先按顺序过滤出仍存活的目标上传任务，并计算本批次所需 Staging 字节总量。
-        let pending = core::mem::take(&mut self.pending_uploads);
+        // 先基于只读引用过滤存活目标并计算本批次所需 Staging 字节总量与偏移，
+        // 待扩容与映射校验全部成功后再消费 `self.pending_uploads`，避免失败时丢失批次。
         let copy_align = gpu
             .properties
             .limits
             .optimal_buffer_copy_offset_alignment
             .max(BC7_BLOCK_BYTES as u64);
 
-        let mut resolved: Vec<(Bc7UploadTarget, vk::Image, PendingBc7Upload, u64)> =
-            Vec::with_capacity(pending.len());
+        let mut planned: Vec<(usize, Bc7UploadTarget, vk::Image, u64)> =
+            Vec::with_capacity(self.pending_uploads.len());
         let mut cursor: u64 = 0;
 
-        for upload in pending {
+        for (idx, upload) in self.pending_uploads.iter().enumerate() {
             let vk_image = match upload.target {
                 Bc7UploadTarget::Page(id) => self.pages.get(&id).map(|p| p.image),
                 Bc7UploadTarget::External(slot) => self.external_images.get(&slot).map(|e| e.image),
@@ -533,11 +533,12 @@ impl Bc7AtlasManager {
             let next_cursor = aligned_offset.checked_add(byte_len).ok_or_else(|| {
                 GpuError::Allocation("BC7 staging upload batch size overflow".into())
             })?;
-            resolved.push((upload.target, image, upload, aligned_offset));
+            planned.push((idx, upload.target, image, aligned_offset));
             cursor = next_cursor;
         }
 
-        if resolved.is_empty() {
+        if planned.is_empty() {
+            self.pending_uploads.clear();
             return Ok(());
         }
 
@@ -545,7 +546,7 @@ impl Bc7AtlasManager {
         let slot_idx = frame_slot % self.staging_slots.len().max(1);
         let needs_alloc = self.staging_slots[slot_idx]
             .as_ref()
-            .map_or(true, |buf| buf.size < cursor);
+            .is_none_or(|buf| buf.size < cursor);
         if needs_alloc {
             let old_cap = self.staging_slots[slot_idx]
                 .as_ref()
@@ -562,6 +563,29 @@ impl Bc7AtlasManager {
             if let Some(old_buf) = self.staging_slots[slot_idx].replace(new_buf) {
                 self.deferred_staging
                     .defer(current_frame, frames_in_flight, old_buf);
+            }
+        }
+
+        // 校验 Staging 槽位及全部写入偏移均存在有效主机映射指针后，再正式取出本批次上传任务。
+        {
+            let staging = self.staging_slots[slot_idx]
+                .as_ref()
+                .ok_or_else(|| GpuError::Allocation("BC7 staging slot missing".into()))?;
+            for &(_, _, _, offset) in &planned {
+                if staging.host_ptr(offset).is_none() {
+                    return Err(GpuError::Allocation("BC7 staging buffer not mapped".into()));
+                }
+            }
+        }
+
+        let pending = core::mem::take(&mut self.pending_uploads);
+        let mut pending_slots: Vec<Option<PendingBc7Upload>> =
+            pending.into_iter().map(Some).collect();
+        let mut resolved: Vec<(Bc7UploadTarget, vk::Image, PendingBc7Upload, u64)> =
+            Vec::with_capacity(planned.len());
+        for (idx, target, image, offset) in planned {
+            if let Some(upload) = pending_slots[idx].take() {
+                resolved.push((target, image, upload, offset));
             }
         }
 

@@ -124,6 +124,8 @@ struct Bc7Entry {
 #[derive(Debug)]
 pub(crate) struct Bc7AssetPool {
     capabilities: CompressedTextureCapabilities,
+    /// 是否已挂载真实 GPU 渲染器（纯无头模式下为 `false`，保持确定性模拟槽位）。
+    gpu_backed: bool,
     vram_budget_bytes: u64,
     upload_pacing: UploadPacingBudget,
     atlas_threshold_px: u32,
@@ -162,6 +164,7 @@ impl Bc7AssetPool {
                 supports_bc7: false,
                 active_backend: CompressedTextureBackend::Rgba8Fallback,
             },
+            gpu_backed: false,
             vram_budget_bytes: DEFAULT_BC7_VRAM_BUDGET_BYTES,
             upload_pacing: UploadPacingBudget::default(),
             atlas_threshold_px: DEFAULT_COMPRESSED_ATLAS_THRESHOLD,
@@ -185,6 +188,14 @@ impl Bc7AssetPool {
     /// 同步当前设备的 BC7 压缩纹理硬件能力。
     pub(crate) fn set_capabilities(&mut self, caps: CompressedTextureCapabilities) {
         self.capabilities = caps;
+    }
+
+    /// 标记当前 BC7 资产池是否已挂载真实 GPU 渲染器。
+    ///
+    /// 挂载真实 GPU 时（含非 BC7 RGBA8 降级路径），新页与独立大图必须等待渲染器回写
+    /// 真实 Bindless 槽位前保持未就绪占位态；纯无头模式保持确定性模拟槽位。
+    pub(crate) fn set_gpu_backed(&mut self, gpu_backed: bool) {
+        self.gpu_backed = gpu_backed;
     }
 
     /// 查询当前设备的 BC7 压缩纹理能力快照。
@@ -237,12 +248,14 @@ impl Bc7AssetPool {
 
         match self.entries.get_mut(&id) {
             Some(entry) => {
-                entry.width = width;
-                entry.height = height;
+                // 若已有活跃驻留存储，保留旧尺寸直至 `poll_frame()` 真正出队替换，
+                // 避免排队期间旧 `Standalone` 纹理采样尺寸错配。
                 if !matches!(
                     entry.storage,
                     Bc7EntryStorage::Atlas(_) | Bc7EntryStorage::Standalone { .. }
                 ) {
+                    entry.width = width;
+                    entry.height = height;
                     entry.storage = Bc7EntryStorage::Queued;
                 }
             }
@@ -311,7 +324,8 @@ impl Bc7AssetPool {
                             self.pending_ops.push(Bc7GpuOp::CreateAtlasPage {
                                 page_id: alloc.page,
                             });
-                            let initial_state = if self.capabilities.supports_bc7 {
+                            let initial_state = if self.gpu_backed || self.capabilities.supports_bc7
+                            {
                                 Bc7PageSlotState::Pending
                             } else {
                                 Bc7PageSlotState::Ready(
@@ -358,7 +372,7 @@ impl Bc7AssetPool {
                     }
                 },
                 CompressedTextureRoute::ExternalStandalone => {
-                    let initial_slot = if self.capabilities.supports_bc7 {
+                    let initial_slot = if self.gpu_backed || self.capabilities.supports_bc7 {
                         None
                     } else {
                         Some(self.allocate_fallback_standalone_slot())
@@ -509,6 +523,15 @@ impl Bc7AssetPool {
             }
             Err(_) => {
                 *state = Bc7PageSlotState::Failed;
+                let _ = self.allocator.remove_page(page_id);
+                for entry in self.entries.values_mut() {
+                    if matches!(entry.storage, Bc7EntryStorage::Atlas(alloc) if alloc.page == page_id)
+                    {
+                        self.vram_bytes = self.vram_bytes.saturating_sub(entry.vram_bytes);
+                        entry.vram_bytes = 0;
+                        entry.storage = Bc7EntryStorage::Failed;
+                    }
+                }
             }
         }
         self.dirty = true;

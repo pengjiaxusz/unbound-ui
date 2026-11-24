@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeSnapshotKey, ThemeTransitionDriver};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_asset::{
     decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
     BC7_ATLAS_PAGE_SIZE,
@@ -492,6 +492,7 @@ impl<A: Application> WindowContext<A> {
         };
         let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
         let mut needs_redraw = false;
+        let mut dirty_fallback_pages: FxHashSet<AtlasPageId> = FxHashSet::default();
 
         for op in ops {
             match op {
@@ -561,7 +562,7 @@ impl<A: Application> WindowContext<A> {
                         } else {
                             needs_redraw = true;
                         }
-                    } else if let Some((slot, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                    } else if let Some((_, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
                         match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
                             Ok(payload) => {
                                 let rgba = decode_bc7_to_rgba8_fallback(&payload);
@@ -579,13 +580,7 @@ impl<A: Application> WindowContext<A> {
                                         );
                                     }
                                 }
-                                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
-                                    eprintln!(
-                                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
-                                    );
-                                } else {
-                                    needs_redraw = true;
-                                }
+                                dirty_fallback_pages.insert(page_id);
                             }
                             Err(error) => {
                                 eprintln!(
@@ -603,6 +598,7 @@ impl<A: Application> WindowContext<A> {
                             );
                         }
                     } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        dirty_fallback_pages.remove(&page_id);
                         if let Err(error) = renderer.destroy_external_texture(slot) {
                             eprintln!(
                                 "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
@@ -694,6 +690,18 @@ impl<A: Application> WindowContext<A> {
             }
         }
 
+        for page_id in dirty_fallback_pages {
+            if let Some((slot, canvas)) = self.bc7_fallback_pages.get(&page_id) {
+                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                    eprintln!(
+                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                    );
+                } else {
+                    needs_redraw = true;
+                }
+            }
+        }
+
         if needs_redraw {
             self.runtime.invalidate();
             window.request_redraw();
@@ -709,6 +717,7 @@ impl<A: Application> WindowContext<A> {
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -882,7 +891,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
         to_close
     }
 
-    fn release_shared_gpu(&mut self) {
+    /// 在共享设备丢失或释放时，同步失效所有已注册窗口的 BC7 图集与降级缓存并标记重绘。
+    fn invalidate_all_windows_bc7(&mut self) {
         for slot in self.registry.iter_mut() {
             slot.context.bc7_fallback_pages.clear();
             slot.context.bc7_fallback_standalone.clear();
@@ -890,7 +900,12 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .runtime
                 .asset_hub_mut()
                 .invalidate_all_bc7_pages();
+            slot.context.runtime.invalidate();
         }
+    }
+
+    fn release_shared_gpu(&mut self) {
+        self.invalidate_all_windows_bc7();
         if let Some(atlases) = self.shared_atlases.take() {
             if let Some(gpu) = &self.shared_gpu {
                 gpu.wait_idle();
@@ -1049,6 +1064,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         );
         let bc7_caps = renderer.compressed_texture_capabilities();
         ctx.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+        ctx.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         ctx.swapchain = Some(swapchain);
         ctx.surface = Some(surface);
         ctx.renderer = Some(renderer);
@@ -1643,6 +1659,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         ctx.process_external_texture_ops(report.external_texture_ops, window);
         ctx.process_bc7_ops(report.bc7_ops, window);
 
+        let mut device_lost = false;
         if let (Some(renderer), Some(atlases)) = (&mut ctx.renderer, &shared_atlases) {
             if !report.atlas_uploads.is_empty() {
                 if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
@@ -1695,32 +1712,42 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                                 eprintln!(
                                     "[unbound-app] Shared GPU device lost during render on {id:?}"
                                 );
-                                ctx.bc7_fallback_pages.clear();
-                                ctx.bc7_fallback_standalone.clear();
-                                ctx.runtime.asset_hub_mut().invalidate_all_bc7_pages();
-                                return Flow::Continue;
+                                device_lost = true;
+                            } else {
+                                eprintln!("[unbound-app] multi-window render failed: {err:?}");
                             }
-                            eprintln!("[unbound-app] multi-window render failed: {err:?}");
                         } else {
                             ctx.frame_dropped = false;
                         }
-                        match swapchain.present_outcome(
-                            &renderer.gpu,
-                            image.index,
-                            image.render_finished,
-                        ) {
-                            Ok(PresentOutcome::Optimal) => {}
-                            Ok(PresentOutcome::Recreate) => {
-                                ctx.swapchain_dirty = true;
-                                state.resize.mark_out_of_date(unbound_platform::Extent::new(
-                                    actual_w, actual_h,
-                                ));
+                        if !device_lost {
+                            match swapchain.present_outcome(
+                                &renderer.gpu,
+                                image.index,
+                                image.render_finished,
+                            ) {
+                                Ok(PresentOutcome::Optimal) => {}
+                                Ok(PresentOutcome::Recreate) => {
+                                    ctx.swapchain_dirty = true;
+                                    state.resize.mark_out_of_date(unbound_platform::Extent::new(
+                                        actual_w, actual_h,
+                                    ));
+                                }
+                                Err(ref err) => {
+                                    if is_device_lost(err) {
+                                        eprintln!(
+                                            "[unbound-app] Shared GPU device lost during present on {id:?}"
+                                        );
+                                        ctx.frame_dropped = true;
+                                        device_lost = true;
+                                    } else {
+                                        ctx.swapchain_dirty = true;
+                                    }
+                                }
                             }
-                            Err(_) => {
-                                ctx.swapchain_dirty = true;
+                            if !device_lost {
+                                ctx.pacer.on_present(Instant::now());
                             }
                         }
-                        ctx.pacer.on_present(Instant::now());
                     }
                     Ok(AcquireOutcome::OutOfDate) => {
                         ctx.swapchain_dirty = true;
@@ -1729,11 +1756,21 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                             .resize
                             .mark_out_of_date(unbound_platform::Extent::new(width, height));
                     }
+                    Err(ref err) if is_device_lost(err) => {
+                        eprintln!("[unbound-app] Shared GPU device lost during acquire on {id:?}");
+                        ctx.frame_dropped = true;
+                        device_lost = true;
+                    }
                     _ => {
                         ctx.frame_dropped = true;
                     }
                 }
             }
+        }
+
+        if device_lost {
+            self.invalidate_all_windows_bc7();
+            return Flow::Continue;
         }
 
         let keep_animating =

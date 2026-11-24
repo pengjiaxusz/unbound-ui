@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeTransitionDriver};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use unbound_asset::{
     decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
     BC7_ATLAS_PAGE_SIZE,
@@ -606,6 +606,7 @@ impl<A: Application> WindowedRunner<A> {
         };
         let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
         let mut needs_redraw = false;
+        let mut dirty_fallback_pages: FxHashSet<AtlasPageId> = FxHashSet::default();
 
         for op in ops {
             match op {
@@ -675,7 +676,7 @@ impl<A: Application> WindowedRunner<A> {
                         } else {
                             needs_redraw = true;
                         }
-                    } else if let Some((slot, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                    } else if let Some((_, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
                         match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
                             Ok(payload) => {
                                 let rgba = decode_bc7_to_rgba8_fallback(&payload);
@@ -693,13 +694,7 @@ impl<A: Application> WindowedRunner<A> {
                                         );
                                     }
                                 }
-                                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
-                                    eprintln!(
-                                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
-                                    );
-                                } else {
-                                    needs_redraw = true;
-                                }
+                                dirty_fallback_pages.insert(page_id);
                             }
                             Err(error) => {
                                 eprintln!(
@@ -717,6 +712,7 @@ impl<A: Application> WindowedRunner<A> {
                             );
                         }
                     } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        dirty_fallback_pages.remove(&page_id);
                         if let Err(error) = renderer.destroy_external_texture(slot) {
                             eprintln!(
                                 "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
@@ -808,6 +804,18 @@ impl<A: Application> WindowedRunner<A> {
             }
         }
 
+        for page_id in dirty_fallback_pages {
+            if let Some((slot, canvas)) = self.bc7_fallback_pages.get(&page_id) {
+                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                    eprintln!(
+                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                    );
+                } else {
+                    needs_redraw = true;
+                }
+            }
+        }
+
         if needs_redraw {
             self.runtime.invalidate();
             window.request_redraw();
@@ -822,6 +830,7 @@ impl<A: Application> WindowedRunner<A> {
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -851,6 +860,7 @@ impl<A: Application> WindowedRunner<A> {
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -942,6 +952,7 @@ impl<A: Application> WindowedRunner<A> {
                 eprintln!("[unbound-app] GPU recovered successfully after {attempts} attempt(s).");
                 let bc7_caps = renderer.compressed_texture_capabilities();
                 self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+                self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
                 self.renderer = Some(renderer);
                 self.swapchain = Some(swapchain);
                 self.surface = Some(surface);
@@ -1122,6 +1133,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         let bc7_caps = renderer.compressed_texture_capabilities();
         self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         self.atlases = Some(atlases);
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
