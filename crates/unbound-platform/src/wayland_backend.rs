@@ -570,6 +570,8 @@ struct ToplevelEntry {
     state: PlatformState,
     configured: bool,
     resizable: bool,
+    min_width: u32,
+    min_height: u32,
     throttle: WaylandFrameThrottle,
     was_suspended: bool,
     csd_edge_active: bool,
@@ -588,6 +590,20 @@ struct PopupEntry {
     pending_events: Vec<PlatformEvent>,
     configured: bool,
     dismissed: bool,
+}
+
+/// Wayland 客户端交互缩放兜底状态：优先调用 `xdg_toplevel::resize` 交由合成器接管；
+/// 若合成器（如 WSLg Weston RDP RAIL）忽略无边框窗口的交互缩放请求而继续向本客户端派发
+/// `PointerEventKind::Motion`，则客户端实时驱动 `set_window_geometry` 与 `Resized` 完成平滑缩放。
+struct WaylandActiveResize {
+    window_id: isize,
+    dir: ResizeDirection,
+    start_lx: f64,
+    start_ly: f64,
+    start_w: u32,
+    start_h: u32,
+    min_w: u32,
+    min_h: u32,
 }
 
 /// Wayland 事件循环主状态（实现所有 `sctk` Handler trait）。
@@ -633,6 +649,7 @@ struct WaylandState {
     cmd_tx: mpsc::Sender<WaylandCommand>,
     wake_signal: WakeSignal,
     display_ptr: usize,
+    active_resize: Option<WaylandActiveResize>,
     exit_requested: bool,
 }
 
@@ -725,6 +742,8 @@ impl WaylandState {
             state,
             configured: false,
             resizable: config.resizable,
+            min_width: min_w,
+            min_height: min_h,
             throttle: WaylandFrameThrottle::default(),
             was_suspended: false,
             csd_edge_active: false,
@@ -1205,6 +1224,9 @@ impl WindowHandler for WaylandState {
         _serial: u32,
     ) {
         let proto_id = window.wl_surface().id().protocol_id();
+        if configure.is_resizing() {
+            self.active_resize = None;
+        }
         if let Some(entry) = self.window_by_surface_mut(proto_id) {
             let scale = entry.native_window.scale_factor();
             let maximized = configure.is_maximized();
@@ -1433,6 +1455,17 @@ impl PointerHandler for WaylandState {
             }
             let seat_clone = self.seat.clone();
             let mut pending_cursor: Option<CursorIcon> = None;
+            let mut new_active_resize: Option<WaylandActiveResize> = None;
+            let mut clear_active_resize = false;
+            let active_resize_snap = self
+                .active_resize
+                .as_ref()
+                .filter(|r| r.window_id == win_id)
+                .map(|r| {
+                    (
+                        r.dir, r.start_lx, r.start_ly, r.start_w, r.start_h, r.min_w, r.min_h,
+                    )
+                });
             {
                 let Some(entry) = self.window_by_id_mut(win_id) else {
                     continue;
@@ -1458,6 +1491,39 @@ impl PointerHandler for WaylandState {
                     PointerEventKind::Leave { .. } => {}
                     PointerEventKind::Motion { .. } => {
                         entry.cursor_logical = (lx, ly);
+                        if let Some((dir, start_lx, start_ly, start_w, start_h, min_w, min_h)) =
+                            active_resize_snap
+                        {
+                            let dx = (lx - start_lx).round() as i32;
+                            let dy = (ly - start_ly).round() as i32;
+                            let target = crate::linux_backend::compute_interactive_resize_rect(
+                                ScreenRect::new(0, 0, start_w, start_h),
+                                dir,
+                                dx,
+                                dy,
+                                min_w,
+                                min_h,
+                            );
+                            let phys_w = (f64::from(target.width) * scale).round().max(1.0) as u32;
+                            let phys_h = (f64::from(target.height) * scale).round().max(1.0) as u32;
+                            if phys_w != size.width || phys_h != size.height {
+                                entry.sctk_window.xdg_surface().set_window_geometry(
+                                    0,
+                                    0,
+                                    target.width as i32,
+                                    target.height as i32,
+                                );
+                                if let Ok(mut sz) = entry.shared.inner_size.lock() {
+                                    *sz = PhysicalSize::new(phys_w, phys_h);
+                                }
+                                push_coalesced_event(
+                                    &mut entry.pending_events,
+                                    PlatformEvent::Resized(Extent::new(phys_w, phys_h)),
+                                );
+                                entry.shared.redraw_requested.store(true, Ordering::Release);
+                            }
+                            continue;
+                        }
                         if can_resize {
                             if let Some(dir) = csd_resize_direction_at(
                                 lx,
@@ -1498,16 +1564,32 @@ impl PointerHandler for WaylandState {
                                         to_xdg_resize_edge(dir),
                                     );
                                     let _ = conn.flush();
-                                    continue;
+                                    new_active_resize = Some(WaylandActiveResize {
+                                        window_id: win_id,
+                                        dir,
+                                        start_lx: lx,
+                                        start_ly: ly,
+                                        start_w: logical_w.round().max(1.0) as u32,
+                                        start_h: logical_h.round().max(1.0) as u32,
+                                        min_w: entry.min_width,
+                                        min_h: entry.min_height,
+                                    });
                                 }
                             }
                         }
-                        entry.pending_events.push(PlatformEvent::MouseInput {
-                            button: mb,
-                            state: ButtonState::Pressed,
-                        });
+                        if new_active_resize.is_none() {
+                            entry.pending_events.push(PlatformEvent::MouseInput {
+                                button: mb,
+                                state: ButtonState::Pressed,
+                            });
+                        }
                     }
                     PointerEventKind::Release { button, .. } => {
+                        if translate_linux_button(button) == MouseButton::Left
+                            && active_resize_snap.is_some()
+                        {
+                            clear_active_resize = true;
+                        }
                         entry.pending_events.push(PlatformEvent::MouseInput {
                             button: translate_linux_button(button),
                             state: ButtonState::Released,
@@ -1527,6 +1609,11 @@ impl PointerHandler for WaylandState {
                         }
                     }
                 }
+            }
+            if let Some(ar) = new_active_resize {
+                self.active_resize = Some(ar);
+            } else if clear_active_resize {
+                self.active_resize = None;
             }
             if let (Some(edge_cursor), Some(ptr)) = (pending_cursor, &self.themed_pointer) {
                 let _ = ptr.set_cursor(conn, to_sctk_cursor(edge_cursor));
@@ -2090,6 +2177,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         cmd_tx,
         wake_signal: wake_signal.clone(),
         display_ptr,
+        active_resize: None,
         exit_requested: false,
     };
 
