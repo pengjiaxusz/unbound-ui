@@ -20,12 +20,22 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
+pub mod compressed;
 pub mod decode;
 pub mod pipeline;
 pub mod ring;
 pub mod transfer;
 pub mod video;
 
+pub use compressed::{
+    bc7_solid_mode6_block, decode_bc7_to_rgba8_fallback, route_compressed_texture, AtlasAllocation,
+    AtlasPageId, CompressedAtlasUploadBatch, CompressedPixelFormat, CompressedTextureError,
+    CompressedTexturePayload, CompressedTextureRoute, CompressedUploadQueue,
+    PendingCompressedUpload, TieredShelfMultiPageAllocator, UploadPacingBudget,
+    BC7_ATLAS_PAGE_BYTES, BC7_ATLAS_PAGE_SIZE, BC7_BLOCK_BYTES, BC7_BLOCK_DIM,
+    BC7_MODE6_TRANSPARENT_BLACK_BLOCK, DEFAULT_COMPRESSED_ATLAS_THRESHOLD,
+    DEFAULT_SHELF_HEIGHT_TIERS,
+};
 pub use decode::{Decoder, KindDecoder, PngDecoder, RawDecoder};
 pub use pipeline::{AssetPipeline, Completed, PipelineConfig};
 pub use ring::{StagingError, StagingRef, StagingRing};

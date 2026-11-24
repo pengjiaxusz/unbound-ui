@@ -5,28 +5,30 @@
 //! `TimePicker`、`PersonPicture`、`FontIcon`、`AppBarButton`、`AppBarToggleButton`、
 //! `Pivot`、`Image` 在正常态、禁用态、聚焦态与选中态下的几何尺寸、图元类型与颜色令牌衰减。
 
-use unbound_gpu::data::PrimType;
+use unbound_gpu::data::{PrimType, SubElement, CLIP_NONE};
 use unbound_math::Rect;
 use unbound_text::{GlyphCache, TextEngine};
 use unbound_theme::Token;
 use unbound_widgets::slot_fixture::{
     emit_canonical_app_bar_button_fixture, emit_canonical_app_bar_toggle_button_fixture,
-    emit_canonical_calendar_view_fixture, emit_canonical_expander_fixture,
-    emit_canonical_flyout_fixture, emit_canonical_font_icon_fixture, emit_canonical_image_fixture,
+    emit_canonical_expander_fixture, emit_canonical_flyout_fixture,
+    emit_canonical_font_icon_fixture, emit_canonical_image_fixture,
     emit_canonical_info_bar_fixture, emit_canonical_menu_flyout_fixture,
     emit_canonical_person_picture_fixture, emit_canonical_pivot_fixture,
     emit_canonical_split_view_fixture, emit_canonical_time_picker_fixture, FixtureState,
     CANONICAL_APP_BAR_BUTTON_HEIGHT, CANONICAL_APP_BAR_BUTTON_WIDTH,
     CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT, CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH,
-    CANONICAL_CALENDAR_HEIGHT, CANONICAL_CALENDAR_WIDTH, CANONICAL_EXPANDER_HEADER_HEIGHT,
-    CANONICAL_EXPANDER_WIDTH, CANONICAL_FLYOUT_HEIGHT, CANONICAL_FLYOUT_WIDTH,
-    CANONICAL_FONT_ICON_SIZE, CANONICAL_IMAGE_SIZE, CANONICAL_INFOBAR_HEIGHT,
-    CANONICAL_INFOBAR_WIDTH, CANONICAL_MENU_FLYOUT_WIDTH, CANONICAL_PERSON_PICTURE_SIZE,
-    CANONICAL_PIVOT_HEIGHT, CANONICAL_PIVOT_WIDTH, CANONICAL_SPLIT_VIEW_HEIGHT,
-    CANONICAL_SPLIT_VIEW_PANE_WIDTH, CANONICAL_SPLIT_VIEW_WIDTH, CANONICAL_TIME_COLUMNS,
-    CANONICAL_TIME_PICKER_HEIGHT, CANONICAL_TIME_PICKER_WIDTH,
+    CANONICAL_EXPANDER_HEADER_HEIGHT, CANONICAL_EXPANDER_WIDTH, CANONICAL_FLYOUT_HEIGHT,
+    CANONICAL_FLYOUT_WIDTH, CANONICAL_FONT_ICON_SIZE, CANONICAL_IMAGE_SIZE,
+    CANONICAL_INFOBAR_HEIGHT, CANONICAL_INFOBAR_WIDTH, CANONICAL_MENU_FLYOUT_WIDTH,
+    CANONICAL_PERSON_PICTURE_SIZE, CANONICAL_PIVOT_HEIGHT, CANONICAL_PIVOT_WIDTH,
+    CANONICAL_SPLIT_VIEW_HEIGHT, CANONICAL_SPLIT_VIEW_PANE_WIDTH, CANONICAL_SPLIT_VIEW_WIDTH,
+    CANONICAL_TIME_COLUMNS, CANONICAL_TIME_PICKER_HEIGHT, CANONICAL_TIME_PICKER_WIDTH,
 };
-use unbound_widgets::TextCtx;
+use unbound_widgets::{
+    emit_calendar_view, CalendarDisplayMode, CalendarSelectionMode, CalendarState, ControlState,
+    DatePickerDesc, NaiveDate, TextCtx,
+};
 
 /// 构造供无头测试使用的测量上下文。
 fn with_test_ctx<F, R>(f: F) -> R
@@ -197,43 +199,61 @@ fn split_view_normal_and_disabled_states() {
 #[test]
 fn calendar_view_normal_and_disabled_states() {
     with_test_ctx(|text_ctx| {
-        let rect = Rect::new(
-            0.0,
-            0.0,
-            CANONICAL_CALENDAR_WIDTH,
-            CANONICAL_CALENDAR_HEIGHT,
-        );
+        let rect = Rect::new(0.0, 0.0, 300.0, 260.0);
+        let fixed_date = NaiveDate::new(2026, 1, 15).expect("valid parity calendar date");
+        let desc = DatePickerDesc::new(rect).with_z(100);
 
-        // 1. 正常态校验：包含标题、星期表头、31 日单元格与 15 日空心强调圆环
-        let fixture =
-            emit_canonical_calendar_view_fixture(rect, FixtureState::normal(), text_ctx, 100);
-        assert_eq!(fixture.total_size.x, CANONICAL_CALENDAR_WIDTH);
-        assert_eq!(fixture.total_size.y, CANONICAL_CALENDAR_HEIGHT);
+        let make_base_state = |highlight_today: bool| {
+            let mut state = CalendarState::new(fixed_date, CalendarSelectionMode::Single);
+            state.set_first_day_of_week(0);
+            state.is_today_highlighted = highlight_today;
+            state.select(fixed_date);
+            state
+        };
 
-        let has_selected_ring = fixture.output.primitives.iter().any(|p| {
-            p.prim_type() == PrimType::RoundedRect
-                && Token::new(p.fill_token_or_uv as u16) == Token::NONE
-                && Token::new(p.border_token_or_tex as u16) == Token::PRIMARY
-        });
+        // 1. normal 态校验：真实 emit_calendar_view 渲染选中空心强调环与 ADR-0042 局部裁剪节点
+        let normal_state = make_base_state(false);
+        let normal_out =
+            emit_calendar_view(1, &desc, &normal_state, ControlState::default(), text_ctx);
         assert!(
-            has_selected_ring,
-            "normal CalendarView must render hollow primary ring for selected day"
+            !normal_out.clips.is_empty(),
+            "CalendarView must register an ADR-0042 local clip node"
         );
-
-        // 2. 禁用态校验：抑制选中高亮胶囊，全量字形变灰
-        let disabled_fixture =
-            emit_canonical_calendar_view_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let has_disabled_pill = disabled_fixture.output.primitives.iter().any(|p| {
-            p.prim_type() == PrimType::RoundedRect
-                && p.fill_token_or_uv as u16 == Token::PRIMARY.raw()
-        });
         assert!(
-            !has_disabled_pill,
-            "disabled CalendarView must suppress selected day pill"
+            normal_out.primitives.iter().any(|p| p.clip_idx == 0),
+            "CalendarView internal primitives must bind to local clip node 0"
+        );
+        let normal_ring_count = normal_out
+            .primitives
+            .iter()
+            .filter(|p| {
+                p.prim_type() == PrimType::RoundedRect
+                    && Token::new(p.fill_token_or_uv as u16) == Token::NONE
+                    && Token::new(p.border_token_or_tex as u16) == Token::PRIMARY
+            })
+            .count();
+        assert_eq!(
+            normal_ring_count, 1,
+            "normal CalendarView must render exactly 1 hollow primary ring for selected day"
         );
 
-        let glyph_tokens: Vec<Token> = disabled_fixture
-            .output
+        // 2. disabled 态校验：抑制强调色填充与描边，全量字形变灰
+        let disabled_ctrl = ControlState {
+            disabled: true,
+            ..ControlState::default()
+        };
+        let disabled_desc = DatePickerDesc::new(rect).with_z(100).disabled(true);
+        let disabled_out =
+            emit_calendar_view(1, &disabled_desc, &normal_state, disabled_ctrl, text_ctx);
+        assert!(
+            !disabled_out.primitives.iter().any(|p| {
+                p.prim_type() == PrimType::RoundedRect
+                    && (Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
+                        || Token::new(p.border_token_or_tex as u16) == Token::PRIMARY)
+            }),
+            "disabled CalendarView must suppress primary fill and ring"
+        );
+        let glyph_tokens: Vec<Token> = disabled_out
             .primitives
             .iter()
             .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
@@ -245,6 +265,147 @@ fn calendar_view_normal_and_disabled_states() {
                 tok,
                 Token::TEXT_DISABLED,
                 "all CalendarView text must be TEXT_DISABLED in disabled state"
+            );
+        }
+
+        // 3. focused 态校验：外框焦点环可见（opacity == 1.0）
+        let focused_ctrl = ControlState {
+            focused: true,
+            ..ControlState::default()
+        };
+        let focused_out = emit_calendar_view(1, &desc, &normal_state, focused_ctrl, text_ctx);
+        assert!(
+            focused_out.primitives.iter().any(|p| {
+                unbound_gpu::data::PrimFlags(
+                    unbound_gpu::data::GpuPrimitiveInstance::unpack_type(p.prim_type_and_flags).2,
+                )
+                .sub_element()
+                    == SubElement::FocusRing as u8
+                    && p.opacity() > 0.9
+            }),
+            "focused CalendarView must show visible focus ring"
+        );
+
+        // 4. today_highlighted 态校验：固定 today 下渲染实心强调圆与 ON_PRIMARY 字形
+        let today_state = make_base_state(true);
+        let today_out =
+            emit_calendar_view(1, &desc, &today_state, ControlState::default(), text_ctx);
+        assert!(
+            today_out.primitives.iter().any(|p| {
+                p.prim_type() == PrimType::RoundedRect
+                    && Token::new(p.fill_token_or_uv as u16) == Token::PRIMARY
+            }),
+            "today_highlighted CalendarView must render solid primary circle for today"
+        );
+        assert!(
+            today_out.primitives.iter().any(|p| {
+                matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor)
+                    && Token::new(p.fill_token_or_uv as u16) == Token::ON_PRIMARY
+            }),
+            "today_highlighted CalendarView must render ON_PRIMARY glyphs on today pill"
+        );
+
+        // 5. multiple_selected 态校验：同时选中 3 个确定性日期并渲染 3 个空心强调环
+        let mut multi_state = CalendarState::new(fixed_date, CalendarSelectionMode::Multiple);
+        multi_state.is_today_highlighted = false;
+        for day in [10, 15, 20] {
+            multi_state.select(NaiveDate::new(2026, 1, day).expect("valid multi-select date"));
+        }
+        let multi_out =
+            emit_calendar_view(1, &desc, &multi_state, ControlState::default(), text_ctx);
+        let multi_rings = multi_out
+            .primitives
+            .iter()
+            .filter(|p| {
+                p.prim_type() == PrimType::RoundedRect
+                    && Token::new(p.fill_token_or_uv as u16) == Token::NONE
+                    && Token::new(p.border_token_or_tex as u16) == Token::PRIMARY
+            })
+            .count();
+        assert_eq!(
+            multi_rings, 3,
+            "multiple_selected CalendarView must render 3 hollow primary rings"
+        );
+
+        // 6. blackout 态校验：禁选日期（18、19）额外绘制 2 条斜线禁用曲线图元
+        let mut blackout_state = make_base_state(false);
+        blackout_state.blackout_dates = vec![
+            NaiveDate::new(2026, 1, 18).expect("valid blackout date"),
+            NaiveDate::new(2026, 1, 19).expect("valid blackout date"),
+        ];
+        let blackout_out =
+            emit_calendar_view(1, &desc, &blackout_state, ControlState::default(), text_ctx);
+        let normal_curves = normal_out
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        let blackout_curves = blackout_out
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(
+            blackout_curves,
+            normal_curves + 2,
+            "blackout CalendarView must emit 2 diagonal blackout curves for 2 blackout dates"
+        );
+
+        // 7. year_mode 态校验：展示 2026 年 12 个月（3 头部命中区 + 12 月格命中区 = 15）
+        let mut year_state = make_base_state(false);
+        year_state.display_mode = CalendarDisplayMode::Year;
+        assert_eq!(year_state.header_title(), "2026");
+        let year_out = emit_calendar_view(1, &desc, &year_state, ControlState::default(), text_ctx);
+        assert!(!year_out.clips.is_empty());
+        assert_eq!(
+            year_out.sub_hits.len(),
+            15,
+            "year_mode CalendarView must expose 3 header + 12 month sub_hits"
+        );
+
+        // 8. decade_mode 态校验：展示 2020 - 2029 十年视图（3 头部命中区 + 12 年格命中区 = 15）
+        let mut decade_state = make_base_state(false);
+        decade_state.display_mode = CalendarDisplayMode::Decade;
+        assert_eq!(decade_state.header_title(), "2020 - 2029");
+        let decade_out =
+            emit_calendar_view(1, &desc, &decade_state, ControlState::default(), text_ctx);
+        assert!(!decade_out.clips.is_empty());
+        assert_eq!(
+            decade_out.sub_hits.len(),
+            15,
+            "decade_mode CalendarView must expose 3 header + 12 year sub_hits"
+        );
+
+        // 9. 紧凑高度零底部越界校验（300×200）
+        let compact_rect = Rect::new(0.0, 0.0, 300.0, 200.0);
+        let compact_desc = DatePickerDesc::new(compact_rect).with_z(100);
+        assert!(
+            compact_desc.cell_rect(41).max().y <= compact_rect.max().y,
+            "last calendar cell bottom {} must stay within compact container {}",
+            compact_desc.cell_rect(41).max().y,
+            compact_rect.max().y
+        );
+        let compact_out = emit_calendar_view(
+            1,
+            &compact_desc,
+            &normal_state,
+            ControlState::default(),
+            text_ctx,
+        );
+        assert!(
+            !compact_out.clips.is_empty(),
+            "compact CalendarView must attach local clip node"
+        );
+        for prim in compact_out
+            .primitives
+            .iter()
+            .filter(|p| p.clip_idx != CLIP_NONE)
+        {
+            let bottom = prim.local_pos[1] + prim.size[1];
+            assert!(
+                bottom <= compact_rect.max().y + 0.5,
+                "compact CalendarView primitive bottom {bottom} overflowed container {}",
+                compact_rect.max().y
             );
         }
     });
@@ -653,20 +814,28 @@ fn slice_4_fixtures_disabled_state_keeps_full_opacity() {
             );
         }
 
-        let cal_rect = Rect::new(
-            0.0,
-            0.0,
-            CANONICAL_CALENDAR_WIDTH,
-            CANONICAL_CALENDAR_HEIGHT,
+        let cal_rect = Rect::new(0.0, 0.0, 300.0, 260.0);
+        let cal_desc = DatePickerDesc::new(cal_rect).with_z(100).disabled(true);
+        let fixed_date = NaiveDate::new(2026, 1, 15).expect("valid parity calendar date");
+        let mut cal_state = CalendarState::new(fixed_date, CalendarSelectionMode::Single);
+        cal_state.is_today_highlighted = false;
+        cal_state.select(fixed_date);
+        let disabled_cal = emit_calendar_view(
+            1,
+            &cal_desc,
+            &cal_state,
+            ControlState {
+                disabled: true,
+                ..ControlState::default()
+            },
+            text_ctx,
         );
-        let disabled_cal =
-            emit_canonical_calendar_view_fixture(cal_rect, FixtureState::disabled(), text_ctx, 100);
-        assert!(!disabled_cal.output.primitives.is_empty());
-        // CalendarView 禁用态已通过语义令牌衰减文字与箭头，不再二次衰减边框与背景透明度。
-        for p in &disabled_cal.output.primitives {
+        assert!(!disabled_cal.primitives.is_empty());
+        // CalendarView 禁用态已通过语义令牌衰减文字与箭头，可见图元（排除隐藏焦点环）不二次衰减透明度。
+        for p in disabled_cal.primitives.iter().filter(|p| p.opacity() > 0.0) {
             assert!(
                 (p.opacity() - 1.0).abs() < 0.05,
-                "CalendarView primitive opacity {} must stay opaque when disabled via semantic tokens",
+                "CalendarView visible primitive opacity {} must stay opaque when disabled via semantic tokens",
                 p.opacity()
             );
         }

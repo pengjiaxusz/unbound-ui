@@ -22,7 +22,9 @@
 #![warn(missing_debug_implementations)]
 
 pub mod atlas;
+pub mod bc7_atlas;
 pub mod curve;
+pub mod custom_pass;
 pub mod data;
 pub mod debug;
 pub mod device;
@@ -43,7 +45,16 @@ pub mod tlsf;
 pub mod video;
 
 pub use atlas::{AtlasKind, AtlasSet, AtlasTexture, AtlasUpload};
+pub use bc7_atlas::{
+    validate_bc7_subregion, BC7_BLOCK_BYTES, BC7_BLOCK_DIM, BC7_MODE6_TRANSPARENT_BLACK,
+    BC7_PAGE_SIZE,
+};
 pub use curve::{cubic_to_draws, CurveDraw};
+pub use custom_pass::{
+    clamp_render_scale, compute_viewport_physical_extent, CustomViewportPass, ViewportCamera3D,
+    ViewportCameraConstraints, ViewportDepthMode, ViewportId, ViewportMsaa, ViewportPassContext,
+    ViewportReadback, ViewportRenderPassDesc, MAX_VIEWPORT_RENDER_SCALE, MIN_VIEWPORT_RENDER_SCALE,
+};
 pub use data::{
     BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PrimFlags, PrimType,
@@ -57,8 +68,9 @@ pub use debug::{
 pub use device::{
     explain_vk_result, filter_instance_extensions, is_13_backport_device_extension,
     is_optional_device_extension, is_optional_instance_extension, last_init_diagnostics,
-    resolve_device_extensions, Buffer, DeviceExtensionResolution, Gpu, GpuConfig, GpuError,
-    GpuFeatures, GpuInitDiagnostics, InstanceExtensionResolution, MemoryKind, Timeline,
+    resolve_device_extensions, Buffer, CompressedTextureBackend, CompressedTextureCapabilities,
+    DeviceExtensionResolution, Gpu, GpuConfig, GpuError, GpuFeatures, GpuInitDiagnostics,
+    InstanceExtensionResolution, MemoryKind, Timeline,
 };
 pub use frame::{Camera, FrameStats, ManagedExternalTextureDesc, Renderer, SceneUpload};
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};
@@ -72,9 +84,9 @@ pub use timing::{FrameTiming, TimestampScope};
 pub use tlsf::{AllocError, Tlsf, TlsfStats, MIN_BLOCK};
 
 pub use inspector::{
-    ChannelMask, CustomViewportPass, ExtendedExternalSlots, ExternalImageDesc,
-    ExternalMemoryHandleKind, ExternalMemoryImporter, ImportedExternalTexture,
-    TextureInspectorParams, ViewportCamera3D, ViewportRenderPassDesc, EXTENDED_EXTERNAL_SLOTS,
+    ChannelMask, ExtendedExternalSlots, ExternalImageDesc, ExternalMemoryHandleKind,
+    ExternalMemoryImporter, ImportedExternalTexture, TextureInspectorParams,
+    EXTENDED_EXTERNAL_SLOTS,
 };
 pub use pipeline::{
     EXTERNAL_TEXTURE_BASE, EXTERNAL_TEXTURE_SLOTS, MAX_ATLAS_LAYERS, MAX_RGBA_BINDLESS_SLOTS,

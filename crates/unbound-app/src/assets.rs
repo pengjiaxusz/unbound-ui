@@ -11,16 +11,19 @@
 use rustc_hash::FxHashMap;
 
 use unbound_asset::{
-    AssetId, AssetKind, AssetPipeline, Completed, PipelineConfig, VideoFrameError,
+    AssetError, AssetId, AssetKind, AssetPipeline, AtlasPageId, Completed,
+    CompressedTexturePayload, PipelineConfig, UploadPacingBudget, VideoFrameError,
     VideoFramePayload, VideoPixelFormat,
 };
 use unbound_gpu::atlas::{AtlasKind, AtlasUpload, PAGE_SIZE};
+use unbound_gpu::device::CompressedTextureCapabilities;
 use unbound_gpu::pipeline::EXTERNAL_TEXTURE_BASE;
 use unbound_gpu::VideoUploadTier;
 use unbound_math::{Rect, Vec2};
 use unbound_text::TextEngine;
 use unbound_widgets::{ImageAssetResolver, ResolvedImage};
 
+use crate::bc7_assets::{Bc7AssetPool, Bc7GpuOp};
 use crate::video::{
     VideoSurfaceHandle, VideoSurfaceManager, VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState,
 };
@@ -210,6 +213,7 @@ pub struct AssetHub {
     next_external_id: u64,
     external_dirty: bool,
     video_surfaces: VideoSurfaceManager,
+    bc7: Bc7AssetPool,
 }
 
 impl std::fmt::Debug for AssetHub {
@@ -248,6 +252,7 @@ impl AssetHub {
             next_external_id: 1,
             external_dirty: false,
             video_surfaces: VideoSurfaceManager::new(),
+            bc7: Bc7AssetPool::new(),
         }
     }
 
@@ -300,6 +305,7 @@ impl AssetHub {
         if self.video_surfaces.take_dirty() {
             dirty = dirty.merge(DirtyFlags::PAINT);
         }
+        dirty = dirty.merge(self.bc7.poll_frame());
         dirty
     }
 
@@ -368,7 +374,10 @@ impl AssetHub {
     /// 单个资产的状态。
     #[must_use]
     pub fn residency(&self, id: AssetId) -> Option<AssetResidency> {
-        self.residency.get(&id).copied()
+        self.residency
+            .get(&id)
+            .copied()
+            .or_else(|| self.bc7.residency(id))
     }
 
     /// 仍在解码中的任务数量。
@@ -658,18 +667,174 @@ impl AssetHub {
     pub fn invalidate_all_video_surfaces(&mut self) {
         self.video_surfaces.invalidate_all();
     }
+
+    /// 同步当前 GPU 的 BC7 压缩纹理硬件能力快照。
+    pub fn set_bc7_capabilities(&mut self, caps: CompressedTextureCapabilities) {
+        self.bc7.set_capabilities(caps);
+    }
+
+    /// 标记 BC7 压缩资产池是否已挂载真实 GPU 渲染器。
+    pub fn set_bc7_gpu_backed(&mut self, gpu_backed: bool) {
+        self.bc7.set_gpu_backed(gpu_backed);
+    }
+
+    /// 查询当前生效的 BC7 压缩纹理能力快照。
+    #[must_use]
+    pub const fn bc7_capabilities(&self) -> CompressedTextureCapabilities {
+        self.bc7.capabilities()
+    }
+
+    /// 设置 BC7 压缩资产池的显存预算上限（字节，按真实 1 B/px 记账）。
+    pub fn set_vram_budget_bytes(&mut self, budget_bytes: u64) {
+        self.bc7.set_vram_budget_bytes(budget_bytes);
+    }
+
+    /// 查询当前 BC7 压缩资产池的显存预算上限（字节）。
+    #[must_use]
+    pub const fn vram_budget_bytes(&self) -> u64 {
+        self.bc7.vram_budget_bytes()
+    }
+
+    /// 设置单帧 BC7 上传节拍预算（条数与字节数双重封顶）。
+    pub fn set_bc7_upload_pacing(&mut self, budget: UploadPacingBudget) {
+        self.bc7.set_upload_pacing(budget);
+    }
+
+    /// 查询当前单帧 BC7 上传节拍预算。
+    #[must_use]
+    pub const fn bc7_upload_pacing(&self) -> UploadPacingBudget {
+        self.bc7.upload_pacing()
+    }
+
+    /// 设置 BC7 多页图集与独立外部槽的尺寸分流阈值（默认 `512` 像素）。
+    pub fn set_bc7_atlas_threshold(&mut self, threshold_px: u32) {
+        self.bc7.set_atlas_threshold(threshold_px);
+    }
+
+    /// 提交 BC7 压缩纹理载荷并分配新的 [`AssetId`]，排入帧级节拍上传队列。
+    ///
+    /// # Errors
+    /// 当待传队列达到容量上限时返回 [`AssetError::QueueFull`]。
+    pub fn submit_compressed_bc7(
+        &mut self,
+        payload: CompressedTexturePayload,
+    ) -> Result<AssetId, AssetError> {
+        let id = AssetId(self.next_id);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
+        self.bc7.submit_for(id, payload)
+    }
+
+    /// 为指定 [`AssetId`] 提交 BC7 压缩纹理载荷（用于同 ID 去重覆写或在驱逐 / `recover_gpu` 失效后无缝恢复）。
+    ///
+    /// # Errors
+    /// 当该 ID 不在队列中且待传队列达到容量上限时返回 [`AssetError::QueueFull`]。
+    pub fn submit_compressed_bc7_for(
+        &mut self,
+        id: AssetId,
+        payload: CompressedTexturePayload,
+    ) -> Result<AssetId, AssetError> {
+        if id.raw() >= self.next_id {
+            self.next_id = id.raw().saturating_add(1).max(1);
+        }
+        self.bc7.submit_for(id, payload)
+    }
+
+    /// 立即取消待传队列中尚未上传的 BC7 压缩纹理任务。
+    pub fn cancel_compressed_upload(&mut self, id: AssetId) -> bool {
+        self.bc7.cancel_upload(id)
+    }
+
+    /// 显式标记指定资产在本帧活跃，保护其不被帧末 LRU 驱逐。
+    pub fn touch(&self, id: AssetId) {
+        self.bc7.touch_explicit(id);
+    }
+
+    /// 取出并清空本帧待由窗口运行器执行的 BC7 GPU 操作队列。
+    pub fn take_bc7_ops(&mut self) -> Vec<Bc7GpuOp> {
+        self.bc7.take_ops()
+    }
+
+    /// 由窗口运行器回写动态 BC7 图集页的 Bindless 槽位分配结果。
+    pub fn commit_bc7_page_slot(&mut self, page_id: AtlasPageId, slot: Result<u32, String>) {
+        self.bc7.commit_page_slot(page_id, slot);
+    }
+
+    /// 由窗口运行器回写独立 BC7 外部纹理的 Bindless 槽位分配结果。
+    pub fn commit_bc7_standalone_slot(&mut self, asset_id: AssetId, slot: Result<u32, String>) {
+        self.bc7.commit_standalone_slot(asset_id, slot);
+    }
+
+    /// 在设备丢失恢复（`recover_gpu`）或销毁 Vulkan 上下文时失效清空全部 BC7 页与独立槽。
+    pub fn invalidate_all_bc7_pages(&mut self) {
+        self.bc7.invalidate_all_pages();
+    }
+
+    /// 当前活跃的 BC7 动态图集页数量。
+    #[must_use]
+    pub fn bc7_active_pages(&self) -> usize {
+        self.bc7.active_pages()
+    }
+
+    /// 当前已驻留 BC7 资产占用的真实显存字节数（1 B/px）。
+    #[must_use]
+    pub const fn bc7_vram_bytes(&self) -> u64 {
+        self.bc7.vram_bytes()
+    }
+
+    /// 本帧从节拍队列出队上传的 BC7 纹理数量。
+    #[must_use]
+    pub const fn bc7_uploads_this_frame(&self) -> usize {
+        self.bc7.uploads_this_frame()
+    }
+
+    /// 当前待传队列中剩余的 BC7 纹理数量。
+    #[must_use]
+    pub fn bc7_pending_uploads(&self) -> usize {
+        self.bc7.pending_uploads()
+    }
+
+    /// 累计因显存预算超限触发的 BC7 离屏 LRU 驱逐次数。
+    #[must_use]
+    pub const fn bc7_eviction_count(&self) -> u64 {
+        self.bc7.eviction_count()
+    }
+
+    /// 当前是否处于非原生 BC7 透明降级模式。
+    #[must_use]
+    pub const fn bc7_fallback_active(&self) -> bool {
+        self.bc7.fallback_active()
+    }
+
+    /// 判断指定 [`AssetId`] 当前是否驻留在独立 Bindless 外部槽（而非多页图集）。
+    #[must_use]
+    pub fn is_bc7_standalone(&self, id: AssetId) -> bool {
+        self.bc7.is_standalone(id)
+    }
+
+    /// 在视图构建开始前清空上一帧由 `resolve` 采集的 BC7 可见保护集。
+    pub(crate) fn begin_bc7_view_pass(&mut self) {
+        self.bc7.begin_view_pass();
+    }
+
+    /// 在帧末执行 BC7 显存预算检查与离屏 LRU 驱逐，返回是否发生了驱逐。
+    pub(crate) fn finish_bc7_frame_lru(&mut self) -> bool {
+        self.bc7.finish_frame_lru()
+    }
 }
 
 impl ImageAssetResolver for AssetHub {
     fn resolve(&self, id: AssetId) -> Option<ResolvedImage> {
-        match self.residency.get(&id)? {
-            AssetResidency::Ready { layer, uv, size } => Some(ResolvedImage {
-                layer: *layer,
-                uv: *uv,
-                size: *size,
-            }),
-            AssetResidency::Loading | AssetResidency::Failed => None,
+        if let Some(residency) = self.residency.get(&id) {
+            return match residency {
+                AssetResidency::Ready { layer, uv, size } => Some(ResolvedImage {
+                    layer: *layer,
+                    uv: *uv,
+                    size: *size,
+                }),
+                AssetResidency::Loading | AssetResidency::Failed => None,
+            };
         }
+        self.bc7.resolve(id)
     }
 }
 

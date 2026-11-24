@@ -9,8 +9,8 @@ pub use crate::appearance::{
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::multi_window::{
-    run_multi_window, CrossWindowDragRoute, MultiWindowCoordinator, MultiWindowFactory,
-    WindowContext,
+    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute, MultiWindowConfig,
+    MultiWindowCoordinator, MultiWindowFactory, WindowContext, WindowCreatedHook,
 };
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
@@ -19,7 +19,9 @@ pub use crate::settings::{
     SettingsCard,
 };
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
-pub use crate::window_runner::{run_windowed, run_windowed_with_hwnd, WindowedRunner};
+pub use crate::window_runner::{
+    run_windowed, run_windowed_with_hwnd, ViewportPassFactory, WindowedRunner,
+};
 pub use crate::{
     const_fnv1a_hash, global_locale, mix_key, set_global_locale, ui_key, AppContext, AppEvent,
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
@@ -28,21 +30,29 @@ pub use crate::{
     PendingWidget, Propagation, TabHitTarget, ThemeSnapshotKey, ThemeSyncOutcome,
     ThemeTransitionDriver, TitleBarSlots, VideoSurfaceDesc, VideoSurfaceHandle,
     VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState, VideoUploadTier, ViewBuilder,
-    ViewContext, WidgetSpec, WindowCommand, DEFAULT_VIDEO_VRAM_BUDGET_BYTES, ROOT,
+    ViewContext, Viewport3DFrameEntry, WidgetSpec, WindowCommand, DEFAULT_VIDEO_VRAM_BUDGET_BYTES,
+    ROOT,
 };
 
 pub use accesskit::Role;
 pub use unbound_a11y::{A11yAction, SemanticIntent};
 pub use unbound_abi::{Align, Dim, Display, FlexDirection, Justify, NodeFlags, RawNodeDesc};
+pub use unbound_gpu::{
+    CustomViewportPass, ViewportCamera3D, ViewportCameraConstraints, ViewportDepthMode, ViewportId,
+    ViewportMsaa, ViewportPassContext, ViewportReadback, ViewportRenderPassDesc,
+};
 pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
 pub use unbound_math::{Color, Rect, Vec2};
 pub use unbound_platform::{
-    open_file, open_file_async, open_files, read_system_accent_color, save_file, save_file_async,
-    set_taskbar_progress, set_tray_icon, show_tray_balloon, system_accent_color, FileDialogConfig,
-    FileDragEffect, FrameHitMetrics, OutboundFileDragOutcome, OutboundFileDragRequest,
-    PlatformError, PopupWindowConfig, RenderThrottlePolicy, RenderThrottleState, ScreenRect,
-    SurfaceAlpha, TaskbarProgressState, TrayNotificationSeverity, WindowBackdropMaterial,
-    WindowConfig, WindowId, WindowPlacement, WindowPosition,
+    active_tray_menu_items, enumerate_monitor_work_areas, is_tray_heartbeat_stalled, open_file,
+    open_file_async, open_files, poll_tray_events, read_system_accent_color, reattach_tray_icon,
+    save_file, save_file_async, set_taskbar_progress, set_tray_icon, set_tray_menu,
+    set_tray_rescue_menu, show_tray_balloon, system_accent_color, update_tray_heartbeat,
+    DisplayWorkArea, FileDialogConfig, FileDragEffect, FrameHitMetrics, MonitorWorkArea,
+    OutboundFileDragOutcome, OutboundFileDragRequest, PlatformError, PopupWindowConfig,
+    RenderThrottlePolicy, RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState,
+    TrayEvent, TrayMenuItem, TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig,
+    WindowId, WindowPlacement, WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
@@ -91,16 +101,17 @@ pub use unbound_widgets::{
     TimelineTrackState, TitleBarDesc, ToggleButtonDesc, ToggleButtonState, TooltipDesc,
     TooltipLayout, TooltipPadding, TooltipState, TourDesc, TransferDesc, TransferState,
     TreeRowIcon, TreeTableDesc, TreeTableState, TreeViewDensity, TreeViewDesc, TreeViewEvent,
-    TreeViewState, VirtualMasonryDesc, VirtualMasonryState, WatermarkDesc, WidgetCatalogId,
-    WidgetIcon, WidgetOutput, WindowCaptionButton, WindowCaptionButtonControlStates,
-    WindowCaptionButtonEntry, WindowCaptionButtons, WindowCaptionButtonsLayout,
-    WindowCaptionButtonsOutput, WindowCaptionFrameHitContract, WindowCaptionKind,
-    ADDRESS_BAR_FONT_SIZE, ADDRESS_BAR_HEIGHT, COLUMN_DEFAULT_MAX_WIDTH, COLUMN_DEFAULT_MIN_WIDTH,
-    COLUMN_DIVIDER_WIDTH, COLUMN_FILTER_BUTTON_WIDTH, COLUMN_HEADER_BAR_HEIGHT,
-    COLUMN_RESIZE_HANDLE_WIDTH, TAB_CLOSE, TAB_SHELL_ITEM_HEIGHT, TAB_STRIP_HEIGHT,
-    TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID, TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT,
-    TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID, TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH,
-    TREE_DIVIDER_HEIGHT, TREE_FONT_SIZE, TREE_ICON_GAP, TREE_ROW_COMPACT,
+    TreeViewState, Viewport3DDesc, Viewport3DGesture, Viewport3DGestureEvent, VirtualMasonryDesc,
+    VirtualMasonryState, WatermarkDesc, WidgetCatalogId, WidgetIcon, WidgetOutput,
+    WindowCaptionButton, WindowCaptionButtonControlStates, WindowCaptionButtonEntry,
+    WindowCaptionButtons, WindowCaptionButtonsLayout, WindowCaptionButtonsOutput,
+    WindowCaptionFrameHitContract, WindowCaptionKind, ADDRESS_BAR_FONT_SIZE, ADDRESS_BAR_HEIGHT,
+    COLUMN_DEFAULT_MAX_WIDTH, COLUMN_DEFAULT_MIN_WIDTH, COLUMN_DIVIDER_WIDTH,
+    COLUMN_FILTER_BUTTON_WIDTH, COLUMN_HEADER_BAR_HEIGHT, COLUMN_RESIZE_HANDLE_WIDTH, TAB_CLOSE,
+    TAB_SHELL_ITEM_HEIGHT, TAB_STRIP_HEIGHT, TITLE_BAR_CAPTION_WIDTH, TITLE_BAR_CLOSE_ID,
+    TITLE_BAR_DRAG_ID, TITLE_BAR_FUSED_HEIGHT, TITLE_BAR_HEIGHT, TITLE_BAR_MAXIMIZE_ID,
+    TITLE_BAR_MINIMIZE_ID, TITLE_BAR_MIN_DRAG_WIDTH, TREE_DIVIDER_HEIGHT, TREE_FONT_SIZE,
+    TREE_ICON_GAP, TREE_ROW_COMPACT,
 };
 pub use unbound_widgets::{
     emit_menu, emit_menu_with_rows, menu_item_node, Command, CommandPaletteDesc,

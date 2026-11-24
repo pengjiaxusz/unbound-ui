@@ -673,6 +673,23 @@ impl<'a> Canvas<'a> {
     pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
         let start = self.scene.primitives.len();
         let payload_base = self.scene.payloads.len() as u32;
+        let outer_clip_idx = self.clip_index();
+        let local_clip_base = if output.clips.is_empty() {
+            None
+        } else {
+            let base = self.scene.clips.len() as u32;
+            let outer_node = (outer_clip_idx != CLIP_NONE)
+                .then(|| self.scene.clips.get(outer_clip_idx as usize).copied())
+                .flatten();
+            for local_clip in &output.clips {
+                let merged = match outer_node {
+                    Some(ref outer) => unbound_widgets::intersect_clip_nodes(outer, local_clip),
+                    None => *local_clip,
+                };
+                self.scene.clips.push(merged);
+            }
+            Some(base)
+        };
         for mut primitive in output.primitives.iter().copied() {
             primitive.z_and_opacity =
                 GpuPrimitiveInstance::pack_z_opacity(self.next_z(), primitive.opacity());
@@ -680,11 +697,15 @@ impl<'a> Canvas<'a> {
                 primitive.extra_payload_idx =
                     primitive.extra_payload_idx.saturating_add(payload_base);
             }
+            if primitive.clip_idx == CLIP_NONE {
+                primitive.clip_idx = outer_clip_idx;
+            } else if let Some(clip_base) = local_clip_base {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
+            }
             self.scene.primitives.push(primitive);
         }
         self.scene.payloads.extend(output.payloads.iter().copied());
         self.glyphs_emitted += output.payloads.len();
-        self.apply_clip(start);
         if node != 0 {
             self.record_span(node, start);
         }
@@ -823,6 +844,129 @@ impl<'a> Canvas<'a> {
         }
         self.glyphs_emitted += quads.len();
         self.apply_clip(start);
+        ink
+    }
+
+    /// 在 `rect` 内绘制单行尾省略标签，并在内部施加矩形裁剪兜底防溢出。
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_elided(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        color: u16,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> Rect {
+        let scale = self.labels.raster_scale();
+        let style = TextStyle::sized(size * scale);
+        let max_width = (rect.size.x * scale).max(1.0);
+        let shaped = self.labels.engine.shape_elided(text, &style, max_width);
+        let width = shaped.width / scale;
+        let line_height = (shaped.ascent + shaped.descent) / scale;
+        let x = match align_x {
+            AlignX::Start => rect.origin.x,
+            AlignX::Center => rect.origin.x + (rect.size.x - width) * 0.5,
+            AlignX::End => rect.max().x - width,
+        };
+        let y = match align_y {
+            AlignY::Top => rect.origin.y,
+            AlignY::Center => rect.origin.y + (rect.size.y - line_height) * 0.5,
+            AlignY::Bottom => rect.max().y - line_height,
+        };
+        let x = self.snap_value(x);
+        let y = self.snap_value(y);
+        let labels = &mut *self.labels;
+        let mut quads = labels.cache.quads_for(
+            &mut labels.engine,
+            &shaped,
+            Vec2::new(x, y) * scale,
+            400,
+            false,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, width, size));
+        self.begin_clip(rect);
+        let z = self.next_z();
+        let start = self.scene.primitives.len();
+        for quad in &quads {
+            self.scene.glyph(quad, color, z);
+        }
+        self.glyphs_emitted += quads.len();
+        self.apply_clip(start);
+        self.end_clip();
+        ink
+    }
+
+    /// 在 `rect` 内绘制自动换行并限制最大行数的段落，超出时末行尾省略并在内部施加矩形裁剪兜底防溢出。
+    pub fn text_wrapped_clamped(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        color: u16,
+        max_lines: usize,
+    ) -> Rect {
+        let x = self.snap_value(rect.origin.x);
+        let y = self.snap_value(rect.origin.y);
+        let scale = self.labels.raster_scale();
+        let style = TextStyle::sized(size * scale);
+        let max_width = (rect.size.x * scale).max(1.0);
+        let full_line_count = self.labels.engine.wrap(text, &style, max_width).lines.len();
+        let wrapped = self
+            .labels
+            .engine
+            .wrap_clamped(text, &style, max_width, max_lines);
+        let was_clamped = max_lines > 0 && full_line_count > max_lines;
+        let line_h = wrapped.line_height.max(size * scale * 1.4);
+        let mut quads = Vec::new();
+        let labels = &mut *self.labels;
+        for (idx, line) in wrapped.lines.iter().enumerate() {
+            let start = (line.start as usize).min(text.len());
+            let end = (line.end as usize).min(text.len()).max(start);
+            let slice = text
+                .get(start..end)
+                .unwrap_or("")
+                .trim_end_matches(['\r', '\n']);
+            let is_elided_last = was_clamped && idx + 1 == wrapped.lines.len();
+            let shaped_line = if is_elided_last {
+                let elided = format!("{}\u{2026}", slice.trim_end());
+                labels.engine.shape_elided(&elided, &style, max_width)
+            } else {
+                labels.engine.shape(slice, &style)
+            };
+            let line_origin = Vec2::new(x * scale, y * scale + idx as f32 * line_h);
+            let mut line_quads =
+                labels
+                    .cache
+                    .quads_for(&mut labels.engine, &shaped_line, line_origin, 400, false);
+            if (scale - 1.0).abs() > 1e-6 {
+                for quad in &mut line_quads {
+                    quad.rect.origin.x /= scale;
+                    quad.rect.origin.y /= scale;
+                    quad.rect.size.x /= scale;
+                    quad.rect.size.y /= scale;
+                }
+            }
+            quads.extend(line_quads);
+        }
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, 0.0, 0.0));
+        self.begin_clip(rect);
+        let z = self.next_z();
+        let start = self.scene.primitives.len();
+        for quad in &quads {
+            self.scene.glyph(quad, color, z);
+        }
+        self.glyphs_emitted += quads.len();
+        self.apply_clip(start);
+        self.end_clip();
         ink
     }
 
@@ -1386,5 +1530,36 @@ mod tests {
             has_card_border,
             "tooltip shell must use CARD_BORDER and 4px radius"
         );
+    }
+
+    #[test]
+    fn control_output_intersects_local_clips_with_outer_clip_stack() {
+        let mut scene = Gallery::new();
+        let mut labels = Labels::new();
+        let palette = palette();
+        let mut canvas = canvas(&mut scene, &mut labels, &palette);
+
+        let outer = Rect::new(10.0, 10.0, 200.0, 200.0);
+        canvas.begin_clip_rounded(outer, 8.0);
+
+        let mut widget_out = WidgetOutput::default();
+        let local_idx = widget_out.push_clip(GpuClipNode::from_aabb([0.0, 40.0, 180.0, 150.0]));
+        widget_out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: local_idx,
+            ..Default::default()
+        });
+        widget_out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: CLIP_NONE,
+            ..Default::default()
+        });
+
+        canvas.control_output(0, &widget_out);
+        canvas.end_clip();
+
+        assert_eq!(canvas.scene.clips.len(), 2);
+        assert_eq!(canvas.scene.primitives[0].clip_idx, 1);
+        assert_eq!(canvas.scene.clips[1].aabb_clip, [10.0, 40.0, 180.0, 150.0]);
+        assert_eq!(radii_of(&canvas.scene.clips[1], 0), [8.0; 4]);
+        assert_eq!(canvas.scene.primitives[1].clip_idx, 0);
     }
 }

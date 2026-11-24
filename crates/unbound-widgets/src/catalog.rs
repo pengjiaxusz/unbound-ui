@@ -120,16 +120,24 @@ pub fn emit_widget(
     emit_widget_with_params(id, node, state, rect, label, 0.5, 0)
 }
 
-/// 合并子组件输出，重定位载荷索引并保留子命中区域与无障碍节点（同时去重相同节点 ID 的命中区）。
+/// 合并子组件输出，重定位载荷与局部裁剪索引并保留子命中区域与无障碍节点（同时去重相同节点 ID 的命中区）。
 fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
     let payload_base = u32::try_from(dst.payloads.len()).unwrap_or(u32::MAX);
-    if payload_base != 0 {
+    let clip_base = u32::try_from(dst.clips.len()).unwrap_or(unbound_gpu::data::CLIP_NONE - 1);
+    if payload_base != 0 || clip_base != 0 {
         for primitive in &mut src.primitives {
-            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+            if payload_base != 0 {
+                primitive.extra_payload_idx =
+                    primitive.extra_payload_idx.saturating_add(payload_base);
+            }
+            if clip_base != 0 && primitive.clip_idx != unbound_gpu::data::CLIP_NONE {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
+            }
         }
     }
     dst.primitives.extend(src.primitives);
     dst.payloads.extend(src.payloads);
+    dst.clips.extend(src.clips);
     if dst.hit.is_none() {
         dst.hit = src.hit;
     } else if let Some(hit) = src.hit {
@@ -913,44 +921,25 @@ where
             out
         }
         WidgetCatalogId::CalendarView => {
-            let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(36.0));
-            let desc = DatePickerDesc::new(cal_r);
+            let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(260.0));
+            let desc = DatePickerDesc::new(cal_r).with_label("CalendarView");
             let today = NaiveDate::new(2024, 1, 15).expect("valid probe date");
             let mut calendar = CalendarState::new(today, SelectionMode::Single);
-            let picked_day = 10 + (variant_idx % 18) as u8;
-            if let Some(sel_date) = NaiveDate::new(2024, 1, picked_day) {
+            if let Some(sel_date) = NaiveDate::new(2024, 1, 18) {
                 calendar.select(sel_date);
             }
-            let hdr_r = Rect::new(
-                cal_r.origin.x + 36.0,
-                cal_r.origin.y + 4.0,
-                (cal_r.size.x - 72.0).max(40.0),
-                26.0,
-            );
-            let mut glyphs = shape_centered(&mut shape, "January 2024", hdr_r, 13.0);
-            glyphs.extend(shape_centered(&mut shape, "<", desc.prev_rect(), 12.0));
-            glyphs.extend(shape_centered(&mut shape, ">", desc.next_rect(), 12.0));
-            let col_w = cal_r.size.x / 7.0;
-            for (wd_idx, wd) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-                .iter()
-                .enumerate()
-            {
-                let wd_r = Rect::new(
-                    cal_r.origin.x + wd_idx as f32 * col_w,
-                    cal_r.origin.y + crate::date_picker::CALENDAR_HEADER,
-                    col_w,
-                    crate::date_picker::CALENDAR_WEEKDAYS,
-                );
-                glyphs.extend(shape_centered(&mut shape, wd, wd_r, 11.0));
+            if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
+                calendar.hover(NaiveDate::new(2024, 1, 20));
             }
-            for (idx, cell) in calendar.cells().iter().enumerate() {
-                if let Some(d) = cell.date {
-                    let cr = desc.cell_rect(idx);
-                    let day_str = format!("{}", d.day);
-                    glyphs.extend(shape_centered(&mut shape, &day_str, cr, 11.5));
-                }
-            }
-            crate::date_picker::emit_calendar(node, &desc, &calendar, state, &mut glyphs)
+            let mut engine = unbound_text::TextEngine::new();
+            let mut cache = unbound_text::GlyphCache::new();
+            let mut text_ctx = crate::TextCtx {
+                engine: &mut engine,
+                cache: &mut cache,
+                atlas_clock: 1,
+                raster_scale: 1.0,
+            };
+            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
         }
         WidgetCatalogId::Divider => {
             let div_r = Rect::new(o.x, o.y + 16.0, rect.size.x, 16.0);
@@ -2195,40 +2184,34 @@ where
             crate::cascader::emit_cascader(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::DateRangePicker => {
-            let drp_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
-            let desc = crate::date_range_picker::DateRangePickerDesc::new(
-                drp_r,
-                Some(crate::date_range_picker::DateRange::ordered(
-                    NaiveDate::new(2026, 11, 1).expect("valid date"),
-                    NaiveDate::new(2026, 11, 13).expect("valid date"),
-                )),
+            // 遵循 ADR-0043：展厅 DateRangePicker 直接复用单一真源 CalendarView（Range 模式），
+            // 此处保留旧版 DateRangePickerDesc / emit_date_range_picker 符号引用以兼容外部调用方与 build.rs 校验。
+            let _ = (
+                core::any::type_name::<crate::date_range_picker::DateRangePickerDesc>,
+                crate::date_range_picker::emit_date_range_picker,
             );
-            let pad = 6.0;
-            let preset_h = 20.0_f32.min(drp_r.height() * 0.25);
-            let preset_w = ((drp_r.width() - pad * 4.0) / 3.0).max(20.0);
-            let mut glyphs = Vec::new();
-            for (idx, lbl) in ["Last 7d", "Last 30d", "Q4 2026"].iter().enumerate() {
-                let pr = Rect::new(
-                    drp_r.origin.x + pad + idx as f32 * (preset_w + pad),
-                    drp_r.origin.y + pad,
-                    preset_w,
-                    preset_h,
-                );
-                glyphs.extend(shape_centered(&mut shape, lbl, pr, 11.0));
+            let drp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(260.0));
+            let desc = DatePickerDesc::new(drp_r).with_label("DateRangePicker");
+            let today = NaiveDate::new(2026, 11, 15).expect("valid date");
+            let mut calendar = CalendarState::new(today, SelectionMode::Range);
+            if let Some(start) = NaiveDate::new(2026, 11, 5) {
+                calendar.select(start);
             }
-            let panel_y = drp_r.origin.y + preset_h + pad * 2.0;
-            let panel_w = ((drp_r.width() - pad * 3.0) * 0.5).max(24.0);
-            glyphs.extend(shape(
-                "Nov 2026  (Nov 1 – Nov 13)",
-                Vec2::new(drp_r.origin.x + pad + 10.0, panel_y + 8.0),
-                11.5,
-            ));
-            glyphs.extend(shape(
-                "Dec 2026",
-                Vec2::new(drp_r.origin.x + pad * 2.0 + panel_w + 10.0, panel_y + 8.0),
-                11.5,
-            ));
-            crate::date_range_picker::emit_date_range_picker(node, &desc, state, &glyphs)
+            if let Some(end) = NaiveDate::new(2026, 11, 13) {
+                calendar.select(end);
+            }
+            if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
+                calendar.hover(NaiveDate::new(2026, 11, 18));
+            }
+            let mut engine = unbound_text::TextEngine::new();
+            let mut cache = unbound_text::GlyphCache::new();
+            let mut text_ctx = crate::TextCtx {
+                engine: &mut engine,
+                cache: &mut cache,
+                atlas_clock: 1,
+                raster_scale: 1.0,
+            };
+            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
         }
         WidgetCatalogId::HotkeyInput => {
             let chords = ["Ctrl+K", "Ctrl+Shift+P", "Alt+Enter"];
@@ -3682,6 +3665,15 @@ where
             let desc = crate::image_cropper::ImageCropperDesc::new(ic_r);
             let mut glyphs = shape_centered(&mut shape, "Crop", desc.crop_rect(), 11.0);
             crate::image_cropper::emit_image_cropper(node, &desc, state, &mut glyphs)
+        }
+        WidgetCatalogId::Viewport3D => {
+            let vp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(120.0));
+            let desc =
+                crate::viewport_3d::Viewport3DDesc::new(crate::viewport_3d::ViewportId::new(1))
+                    .with_size(vp_r.size)
+                    .with_interactive(params.active)
+                    .with_alt("3D viewport");
+            crate::viewport_3d::emit_viewport_3d(node, vp_r, &desc, state)
         }
     };
     if out.hit.is_none() {

@@ -5,6 +5,7 @@
 
 mod appearance_ledger;
 mod asset_pipeline;
+mod bc7_atlas_pipeline;
 mod declarative_ergonomics;
 mod event_bubbling;
 mod form_binding;
@@ -19,3 +20,4 @@ mod runtime_subsystems;
 mod settings_and_select;
 mod tooltip_rich;
 mod video_surface;
+mod viewport_3d;

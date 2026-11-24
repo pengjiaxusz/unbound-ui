@@ -380,20 +380,21 @@ mod win32 {
         HWND_TOPMOST, IDC_ARROW, MA_NOACTIVATE, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
         NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
         SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-        SW_SHOW, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE, WM_DESTROY,
-        WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
-        WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN,
-        WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-        WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
-        WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-        WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-        WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
-        WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
-        WS_EX_TRANSPARENT,
+        SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR,
+        WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
+        WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SETCONTEXT,
+        WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+        WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+        WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+        WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WS_EX_LAYERED, WS_EX_TRANSPARENT,
     };
 
     use crate::pacing::PresentWaitPolicy;
     use crate::resize::Extent;
+    use crate::tray::WM_APP_TRAY;
     use crate::win32_window::{CursorIcon, WM_APP_WAKE};
     use crate::window::{
         apply, resolve_window_placement, ButtonState, ImeEvent, Modifiers, MouseButton,
@@ -924,6 +925,12 @@ mod win32 {
 
         if (0x0281..=0x0291).contains(&msg) || (0x0100..=0x0110).contains(&msg) {
             ime_trace(format!("ime msg=0x{msg:04X} wparam=0x{:X}", wparam.0));
+        }
+
+        let taskbar_created = crate::tray::taskbar_created_message();
+        if taskbar_created != 0 && msg == taskbar_created {
+            let _ = crate::tray::reattach_tray_icon(hwnd.0 as isize);
+            return LRESULT(0);
         }
 
         match msg {
@@ -1524,6 +1531,10 @@ mod win32 {
                 data.redraw_requested.store(true, Ordering::Release);
                 LRESULT(0)
             }
+            WM_APP_TRAY => {
+                crate::tray::handle_tray_callback(hwnd.0 as isize, lparam.0);
+                LRESULT(0)
+            }
             _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         }
     }
@@ -1559,26 +1570,30 @@ mod win32 {
         // - 主屏幕左上角恒为 (0, 0)；
         // - CenterActiveMonitor 先采样当前鼠标指针屏幕坐标；
         // - 自定义坐标先落到对应坐标点所在显示器。
-        let (seed_x, seed_y) = match config.position {
-            WindowPosition::CenterPrimary => (0, 0),
-            WindowPosition::CenterActiveMonitor => {
-                let mut cursor_pt = POINT::default();
-                if unsafe { GetCursorPos(&mut cursor_pt) }.is_ok() {
-                    (cursor_pt.x, cursor_pt.y)
-                } else {
-                    (0, 0)
+        let (seed_x, seed_y) = if let Some((x, y)) = config.initial_position {
+            (x, y)
+        } else {
+            match config.position {
+                WindowPosition::CenterPrimary => (0, 0),
+                WindowPosition::CenterActiveMonitor => {
+                    let mut cursor_pt = POINT::default();
+                    if unsafe { GetCursorPos(&mut cursor_pt) }.is_ok() {
+                        (cursor_pt.x, cursor_pt.y)
+                    } else {
+                        (0, 0)
+                    }
                 }
-            }
-            WindowPosition::Physical { x, y } => (x, y),
-            WindowPosition::Logical { x, y } => (
-                (f64::from(x) * init_scale).round() as i32,
-                (f64::from(y) * init_scale).round() as i32,
-            ),
-            WindowPosition::SystemDefault => {
-                if config.decorations {
-                    (CW_USEDEFAULT, CW_USEDEFAULT)
-                } else {
-                    (0, 0)
+                WindowPosition::Physical { x, y } => (x, y),
+                WindowPosition::Logical { x, y } => (
+                    (f64::from(x) * init_scale).round() as i32,
+                    (f64::from(y) * init_scale).round() as i32,
+                ),
+                WindowPosition::SystemDefault => {
+                    if config.decorations {
+                        (CW_USEDEFAULT, CW_USEDEFAULT)
+                    } else {
+                        (0, 0)
+                    }
                 }
             }
         };
@@ -1686,19 +1701,25 @@ mod win32 {
         let placement = resolve_window_placement(config, work_area, monitor_scale);
         let outer_w = placement.width + extra_w;
         let outer_h = placement.height + extra_h;
-        let (final_x, final_y) = match config.position {
-            WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
-                let work_w = (work_area.2 - work_area.0).max(1);
-                let work_h = (work_area.3 - work_area.1).max(1);
-                (
-                    work_area.0 + ((work_w - outer_w) / 2).max(0),
-                    work_area.1 + ((work_h - outer_h) / 2).max(0),
-                )
+        let (final_x, final_y) = if let Some((x, y)) = config.initial_position {
+            (x, y)
+        } else {
+            match config.position {
+                WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
+                    let work_w = (work_area.2 - work_area.0).max(1);
+                    let work_h = (work_area.3 - work_area.1).max(1);
+                    (
+                        work_area.0 + ((work_w - outer_w) / 2).max(0),
+                        work_area.1 + ((work_h - outer_h) / 2).max(0),
+                    )
+                }
+                _ => (placement.x, placement.y),
             }
-            _ => (placement.x, placement.y),
         };
 
-        if !(config.decorations && matches!(config.position, WindowPosition::SystemDefault)) {
+        if config.initial_position.is_some()
+            || !(config.decorations && matches!(config.position, WindowPosition::SystemDefault))
+        {
             unsafe {
                 let _ = SetWindowPos(
                     hwnd,
@@ -1742,6 +1763,8 @@ mod win32 {
         if config.visible {
             let show_cmd = if config.floating_policy.no_activate {
                 SW_SHOWNOACTIVATE
+            } else if config.initial_maximized {
+                SW_SHOWMAXIMIZED
             } else {
                 SW_SHOW
             };

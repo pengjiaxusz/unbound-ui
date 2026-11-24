@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 133 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 134 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -63,6 +63,14 @@ const KNOBS_INPUT: &[KnobSpec] = &[
 const KNOBS_VISUAL: &[KnobSpec] = &[
     KnobSpec::toggle("Active", true),
     KnobSpec::slider("Scale", 0.5, 2.0, 0.25, 1.0, "x"),
+];
+
+const KNOBS_CALENDAR: &[KnobSpec] = &[
+    KnobSpec::segmented("SelectionMode", &["None", "Single", "Multiple", "Range"], 1),
+    KnobSpec::segmented("DisplayMode", &["Month", "Year", "Decade"], 0),
+    KnobSpec::segmented("FirstDayOfWeek", &["Sun", "Mon"], 0),
+    KnobSpec::toggle("Today Highlight", true),
+    KnobSpec::toggle("Blackout Dates", false),
 ];
 
 /// 为任意组件目录变体获取非空的属性旋钮。
@@ -181,7 +189,6 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::AutoSuggestBox
         | WidgetCatalogId::Cascader
         | WidgetCatalogId::ComboBoxEditable
-        | WidgetCatalogId::CalendarView
         | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::HotkeyInput
@@ -208,7 +215,10 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::PersonPicture
         | WidgetCatalogId::RichTextBlock
         | WidgetCatalogId::ScrollView
-        | WidgetCatalogId::Overlay => KNOBS_VISUAL,
+        | WidgetCatalogId::Overlay
+        | WidgetCatalogId::Viewport3D => KNOBS_VISUAL,
+
+        WidgetCatalogId::CalendarView => KNOBS_CALENDAR,
     }
 }
 
@@ -349,6 +359,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::BladeView => "view.add(ui_key!(\"blv\"), BladeViewDesc::new(rect).with_blades(3));",
         WidgetCatalogId::HeaderedContentControl => "view.add(ui_key!(\"hcc\"), HeaderedContentDesc::new(rect, \"Appearance\"));",
         WidgetCatalogId::ImageCropper => "view.add(ui_key!(\"crop\"), ImageCropperDesc::new(rect));",
+        WidgetCatalogId::Viewport3D => "view.add(ui_key!(\"vp3d\"), Viewport3DDesc::new(ViewportId::new(1)));",
     }
 }
 
@@ -441,7 +452,7 @@ define_showcase_components! {
     ContextMenu => "Context menu", "Right-click placement state machine over the menu emitter.", 300.0,
     CurveEditor => "Curve editor", "Editable bezier curve with draggable handles.", 320.0,
     CalendarDatePicker => "Calendar date picker", "Collapsed date trigger with a calendar flyout affordance.", 320.0,
-    CalendarView => "CalendarView", "Month calendar with single-date selection.", 360.0,
+    CalendarView => "CalendarView", "Interactive calendar with Month/Year/Decade views and Single/Multiple/Range selection.", 420.0,
     DatePicker => "DatePicker", "Three-column month / day / year wheel selector.", 320.0,
     Divider => "Divider", "A hairline separator with an optional label.", 220.0,
     Dock => "Dock", "Tabbed panes with drag-to-dock layout.", 340.0,
@@ -491,7 +502,7 @@ define_showcase_components! {
     AutoSuggestBox => "AutoSuggestBox", "Prefix-filtered input with live suggestion badge.", 220.0,
     Banner => "Banner", "Full-width top global status and recovery banner.", 220.0,
     Cascader => "Cascader", "Multi-level hierarchical option selector.", 220.0,
-    DateRangePicker => "Date range picker", "Dual-month calendar range selector with presets.", 260.0,
+    DateRangePicker => "Date range picker", "Interactive calendar range selector with live hover preview and blackout dates.", 380.0,
     HotkeyInput => "Hotkey input", "Live KeyChord shortcut recorder with conflict status.", 220.0,
     NotificationCenter => "Notification center", "Drawer aggregating toast history and unread status.", 260.0,
     PinInput => "PIN input", "Segmented verification code input with paste splitting.", 220.0,
@@ -555,6 +566,7 @@ define_showcase_components! {
     BladeView => "Blade view", "Horizontal multi-level blade panels with active headers.", 320.0,
     HeaderedContentControl => "Headered content", "Shared header strip above a content region.", 280.0,
     ImageCropper => "Image cropper", "Crop frame with eight resize handles and corner scrim.", 340.0,
+    Viewport3D => "Viewport 3D", "Interactive 3D render viewport with orbit, pan, and zoom gestures.", 320.0,
 }
 
 /// 按激活语言返回目录组件的侧边栏与卡片标题。
@@ -701,6 +713,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::BladeView => "刀片面板 (Blade View)",
         WidgetCatalogId::HeaderedContentControl => "带标题内容容器 (Headered Content)",
         WidgetCatalogId::ImageCropper => "图像裁剪器 (Image Cropper)",
+        WidgetCatalogId::Viewport3D => "3D 视口 (Viewport 3D)",
     }
 }
 
@@ -850,6 +863,7 @@ pub const fn component_description_localized(
         WidgetCatalogId::BladeView => "带激活标题栏的水平多级刀片展开面板。",
         WidgetCatalogId::HeaderedContentControl => "内容区域上方带共享标题条的组合容器。",
         WidgetCatalogId::ImageCropper => "带八个缩放手柄与四角遮罩的图像裁剪框。",
+        WidgetCatalogId::Viewport3D => "支持轨道旋转、平移与滚轮缩放手势的交互式 3D 渲染视口。",
     }
 }
 
@@ -993,6 +1007,9 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::BladeView => "刀片面板 多级面板 blade view",
         WidgetCatalogId::HeaderedContentControl => "带标题内容容器 标题条 headered content control",
         WidgetCatalogId::ImageCropper => "图像裁剪 九宫格手柄 image cropper crop",
+        WidgetCatalogId::Viewport3D => {
+            "3D视口 三维视图 渲染视口 轨道相机 viewport 3d orbit pan zoom"
+        }
     }
 }
 
@@ -1219,6 +1236,29 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         toggled: checked,
         click_count: clicks,
     };
+    if id == WidgetCatalogId::CalendarView || id == WidgetCatalogId::DateRangePicker {
+        let cal_w = stage.size.x.clamp(260.0, 340.0);
+        let cal_h = stage.size.y.clamp(260.0, 350.0);
+        let cal_x = stage.origin.x + ((stage.size.x - cal_w) * 0.5).max(0.0);
+        let cal_y = stage.origin.y + ((stage.size.y - cal_h) * 0.5).max(0.0);
+        let cal_rect = Rect::new(cal_x, cal_y, cal_w, cal_h);
+        let cal_state = if id == WidgetCatalogId::CalendarView {
+            ctx.state.sandbox.calendar_stage_rect.set(Some(cal_rect));
+            &ctx.state.sandbox.calendar_view
+        } else {
+            ctx.state.sandbox.date_range_stage_rect.set(Some(cal_rect));
+            &ctx.state.sandbox.date_range_picker
+        };
+        let desc = unbound_widgets::DatePickerDesc::new(cal_rect)
+            .with_label(id.module_name())
+            .disabled(state.disabled);
+        let mut text_ctx = ctx.canvas.text_ctx(1);
+        let output =
+            unbound_widgets::emit_calendar_view(node, &desc, cal_state, state, &mut text_ctx);
+        ctx.canvas.widget_output(id, node, &output);
+        return;
+    }
+
     let output = emit_widget_with_shaper(id, node, state, stage, params, |text, origin, size| {
         ctx.canvas.shape(text, origin, size)
     });
@@ -1308,6 +1348,8 @@ pub fn draw_control_tile(
         palette.card_border
     };
     canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+    // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
+    canvas.begin_clip(rect);
 
     // 左侧语义图标盒（取代原先单字母圆标）
     let cat = id.category();
@@ -1354,29 +1396,26 @@ pub fn draw_control_tile(
 
     // 控件规范名 + 一句话用途
     let label = component_nav_label_localized(id, state.locale);
-    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
-    canvas.text(
+    let title_x = icon_box.max().x + 10.0;
+    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
+    canvas.text_elided(
         label,
-        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
         12.0,
         palette.text,
         AlignX::Start,
         AlignY::Center,
     );
     let desc = super::category_localized_summary(cat, state.locale);
-    canvas.text(
+    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
+    canvas.text_wrapped_clamped(
         desc,
-        Rect::new(
-            icon_box.max().x + 10.0,
-            rect.origin.y + 34.0,
-            (rect.size.x - 66.0).max(40.0),
-            30.0,
-        ),
+        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
         10.0,
         palette.text_muted,
-        AlignX::Start,
-        AlignY::Top,
+        2,
     );
+    canvas.end_clip();
 
     // 主卡片命中区排除右上角收藏星标，避免重叠误触
     let card_hit = Rect::new(
@@ -1618,6 +1657,8 @@ pub fn draw_control_tile_demo(
         palette.card_border
     };
     canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+    // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
+    canvas.begin_clip(rect);
 
     let cat = id.category();
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
@@ -1660,29 +1701,26 @@ pub fn draw_control_tile_demo(
     crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
 
     let label = component_nav_label_localized(id, state.locale);
-    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
-    canvas.text(
+    let title_x = icon_box.max().x + 10.0;
+    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
+    canvas.text_elided(
         label,
-        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
         12.0,
         palette.text,
         AlignX::Start,
         AlignY::Center,
     );
     let desc = super::category_localized_summary(cat, state.locale);
-    canvas.text(
+    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
+    canvas.text_wrapped_clamped(
         desc,
-        Rect::new(
-            icon_box.max().x + 10.0,
-            rect.origin.y + 34.0,
-            (rect.size.x - 66.0).max(40.0),
-            30.0,
-        ),
+        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
         10.0,
         palette.text_muted,
-        AlignX::Start,
-        AlignY::Top,
+        2,
     );
+    canvas.end_clip();
 
     let card_hit = Rect::new(
         rect.origin.x,

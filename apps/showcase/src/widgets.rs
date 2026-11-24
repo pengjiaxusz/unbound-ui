@@ -321,16 +321,34 @@ pub fn segmented(
     canvas.widget_output(WidgetCatalogId::SelectorBar, 0, &frame);
     for index in 0..labels.len() {
         let seg_start = canvas.span_start();
+        let slot_rect = desc.segment_rect(index);
         let state = canvas.control_state(ids[index], disabled, index == selected);
-        let (quads, _) = canvas.layout_text(
+        let output = emit_segmented_segment(ids[index], &desc, index, state, &[], tokens);
+        canvas.control_output(ids[index], &output);
+        let label_color = if disabled {
+            Token::TEXT_DISABLED.raw()
+        } else if index == selected {
+            tokens.label_selected.raw()
+        } else {
+            tokens.label.raw()
+        };
+        let text_rect = Rect::new(
+            slot_rect.origin.x + 4.0,
+            slot_rect.origin.y,
+            (slot_rect.size.x - 8.0).max(1.0),
+            slot_rect.size.y,
+        );
+        // 窄槽内强制按槽宽尾省略并施加单槽裁剪，防止相邻槽位文字溢出重叠。
+        canvas.begin_clip(slot_rect);
+        canvas.text_elided(
             labels[index],
-            desc.segment_rect(index),
+            text_rect,
             12.0,
+            label_color,
             AlignX::Center,
             AlignY::Center,
         );
-        let output = emit_segmented_segment(ids[index], &desc, index, state, &quads, tokens);
-        canvas.control_output(ids[index], &output);
+        canvas.end_clip();
         canvas.record_span(ids[index], seg_start);
     }
 }

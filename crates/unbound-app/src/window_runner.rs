@@ -4,7 +4,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeTransitionDriver};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use unbound_asset::{
+    decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
+    BC7_ATLAS_PAGE_SIZE,
+};
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -27,7 +31,7 @@ use unbound_theme::ThemeSet;
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
-    AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
+    AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind, VideoSurfaceOp,
 };
 
@@ -155,6 +159,10 @@ fn window_instance_extensions(window: &NativeWindow) -> Result<Vec<String>, Stri
 /// 每帧开始时执行的宿主钩子；在 UI 线程上拿到运行时的可变引用。
 type FrameHook<A> = Box<dyn FnMut(&mut AppRuntime<A>) + Send>;
 
+/// 3D 视口自定义渲染通道工厂（用于在首次建窗与 GPU 设备恢复后重新注册通道）。
+pub type ViewportPassFactory =
+    Box<dyn Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync>;
+
 /// 驱动 [`AppRuntime`] 的通用窗口化宿主适配器。
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
@@ -195,6 +203,10 @@ pub struct WindowedRunner<A: Application> {
     appearance: WindowAppearance,
     /// 已上传至当前渲染器的外部纹理句柄映射：`handle -> (slot, width, height, srgb)`。
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    /// 非 BC7 硬件降级路径下的 RGBA8 图集页缓冲：`page_id -> (bindless_slot, rgba_canvas)`。
+    bc7_fallback_pages: FxHashMap<AtlasPageId, (u32, Vec<u8>)>,
+    /// 非 BC7 硬件降级路径下的独立大图外部槽映射：`asset_id -> bindless_slot`。
+    bc7_fallback_standalone: FxHashMap<AssetId, u32>,
     /// 主窗口平台 ID（用于与原生弹出窗区分，避免弹出窗覆写或销毁主窗口渲染资源）。
     primary_window_id: Option<WindowId>,
     /// 主窗口客户区左上角在屏幕坐标系中的物理像素原点。
@@ -209,6 +221,8 @@ pub struct WindowedRunner<A: Application> {
     pending_popup_closes: Vec<u64>,
     /// 上一帧是否处于最小化/遮挡暂停态，用于在恢复可见后强制刷新首帧。
     was_suspended: bool,
+    /// 已注册的 3D 视口自定义渲染通道工厂集合（建窗初始化与设备恢复后自动重注册）。
+    viewport_pass_factories: Vec<ViewportPassFactory>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -261,6 +275,8 @@ impl<A: Application> WindowedRunner<A> {
             frame_metrics: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            bc7_fallback_pages: FxHashMap::default(),
+            bc7_fallback_standalone: FxHashMap::default(),
             primary_window_id: None,
             main_screen_origin: (0, 0),
             native_popup_windows: FxHashMap::default(),
@@ -268,6 +284,7 @@ impl<A: Application> WindowedRunner<A> {
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
             was_suspended: false,
+            viewport_pass_factories: Vec::new(),
         }
     }
 
@@ -301,6 +318,62 @@ impl<A: Application> WindowedRunner<A> {
     /// 可变访问底层应用运行时。
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    /// 注册 3D 视口自定义渲染通道工厂（首次建窗与 GPU 设备恢复后自动重注册到渲染器）。
+    #[must_use]
+    pub fn with_viewport_pass_factory(
+        mut self,
+        factory: impl Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync + 'static,
+    ) -> Self {
+        self.viewport_pass_factories.push(Box::new(factory));
+        self
+    }
+
+    /// 在运行期追加 3D 视口自定义渲染通道工厂；若渲染器已就绪则立即注册（首帧渲染完成前保持占位槽位 `None`）。
+    pub fn register_viewport_pass_factory(
+        &mut self,
+        factory: impl Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync + 'static,
+    ) {
+        let boxed: ViewportPassFactory = Box::new(factory);
+        if let Some(renderer) = self.renderer.as_mut() {
+            let pass = boxed();
+            let viewport_id = pass.viewport_id();
+            match renderer.register_viewport_pass(pass) {
+                Ok(_slot) => {
+                    let committed = renderer.viewport_bindless_slot(viewport_id);
+                    self.runtime.commit_viewport_3d_slot(viewport_id, committed);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
+                    );
+                }
+            }
+        }
+        self.viewport_pass_factories.push(boxed);
+    }
+
+    /// 将所有已登记的 3D 视口通道工厂重新注册到当前渲染器（首帧离屏渲染完成前不提前暴露槽位）。
+    fn register_all_viewport_passes(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        for factory in &self.viewport_pass_factories {
+            let pass = factory();
+            let viewport_id = pass.viewport_id();
+            match renderer.register_viewport_pass(pass) {
+                Ok(_slot) => {
+                    let committed = renderer.viewport_bindless_slot(viewport_id);
+                    self.runtime.commit_viewport_3d_slot(viewport_id, committed);
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// 同步窗口当前系统 DPI 缩放因子（`os_scale`）。
@@ -460,6 +533,48 @@ impl<A: Application> WindowedRunner<A> {
                     if target == WindowId(window.id().0 as u64) {
                         window.request_close();
                         return Flow::Exit;
+                    }
+                }
+                crate::WindowCommand::SetImeCursorArea {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    window.set_ime_cursor_area(
+                        unbound_platform::PhysicalPosition::new(x, y),
+                        unbound_platform::PhysicalSize::new(width, height),
+                    );
+                }
+                crate::WindowCommand::SetVisible(visible) => {
+                    window.set_visible(visible);
+                }
+                crate::WindowCommand::ActivateForeground => {
+                    window.activate_foreground();
+                }
+                crate::WindowCommand::SetOuterPosition { x, y } => {
+                    window.set_outer_position(x, y);
+                }
+                crate::WindowCommand::SetInnerSize { width, height } => {
+                    window.set_inner_size(width, height);
+                }
+                crate::WindowCommand::SetMaximized(maximized) => {
+                    window.set_maximized(maximized);
+                }
+                crate::WindowCommand::SetTaskbarProgress {
+                    completed,
+                    total,
+                    state: progress_state,
+                } => {
+                    if let Some(raw_window_handle::RawWindowHandle::Win32(handle)) =
+                        unbound_platform::backend::raw_window_handle(window)
+                    {
+                        unbound_platform::set_taskbar_progress(
+                            handle.hwnd.get(),
+                            completed,
+                            total,
+                            progress_state,
+                        );
                     }
                 }
                 crate::WindowCommand::OpenFloatingWindow { .. } => {
@@ -698,12 +813,301 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    /// 同步本帧活跃的 3D 视口离屏渲染目标、暂停未挂载/零尺寸视口，并回写 Bindless 槽位及派发计数。
+    fn sync_viewports_3d(
+        &mut self,
+        entries: &[crate::Viewport3DFrameEntry],
+        window: &NativeWindow,
+    ) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let mut active_ids = std::collections::HashSet::with_capacity(entries.len());
+        let mut slot_changed = false;
+        let mut awaiting_first_render = false;
+        for entry in entries {
+            active_ids.insert(entry.viewport_id);
+            if let Err(error) = renderer.sync_viewport_layout(
+                entry.viewport_id,
+                entry.logical_rect,
+                entry.render_scale,
+                entry.physical_size,
+            ) {
+                eprintln!(
+                    "[unbound-app] Could not sync 3D viewport target {:?}: {error:?}",
+                    entry.viewport_id
+                );
+            }
+            let committed = renderer.viewport_bindless_slot(entry.viewport_id);
+            if self.runtime.viewport_3d_slot(entry.viewport_id) != committed {
+                slot_changed = true;
+            }
+            if committed.is_none() && entry.physical_size.is_some() {
+                awaiting_first_render = true;
+            }
+            self.runtime
+                .commit_viewport_3d_slot(entry.viewport_id, committed);
+        }
+        // 本帧未挂载或退化为零尺寸的已注册视口需显式暂停，避免继续离屏渲染。
+        for id in renderer.viewport_ids() {
+            if !active_ids.contains(&id) {
+                if let Err(error) =
+                    renderer.sync_viewport_layout(id, unbound_math::Rect::ZERO, 1.0, None)
+                {
+                    eprintln!(
+                        "[unbound-app] Could not pause inactive 3D viewport target {id:?}: {error:?}"
+                    );
+                }
+            }
+        }
+        let dispatches = renderer.take_viewport_pass_dispatches();
+        if dispatches > 0 {
+            self.runtime.record_viewport_pass_dispatches(dispatches);
+        }
+        if slot_changed {
+            self.runtime.invalidate();
+            window.request_redraw();
+        } else if awaiting_first_render {
+            window.request_redraw();
+        }
+    }
+
+    fn process_bc7_ops(&mut self, ops: Vec<Bc7GpuOp>, window: &NativeWindow) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
+        let mut needs_redraw = false;
+        let mut dirty_fallback_pages: FxHashSet<AtlasPageId> = FxHashSet::default();
+
+        for op in ops {
+            match op {
+                Bc7GpuOp::CreateAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        match renderer.create_bc7_atlas_page(page_id.0) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create BC7 atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        let page_bytes =
+                            (BC7_ATLAS_PAGE_SIZE as usize) * (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                        let canvas = vec![0u8; page_bytes];
+                        let desc = ManagedExternalTextureDesc::new(
+                            BC7_ATLAS_PAGE_SIZE,
+                            BC7_ATLAS_PAGE_SIZE,
+                            false,
+                        );
+                        match renderer.upload_external_rgba8(desc, &canvas) {
+                            Ok(slot) => {
+                                self.bc7_fallback_pages.insert(page_id, (slot, canvas));
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadAtlasRegion {
+                    page_id,
+                    x,
+                    y,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer
+                            .stage_bc7_atlas_subregion(page_id.0, x, y, width, height, &bytes)
+                        {
+                            eprintln!(
+                                "[unbound-app] Could not stage BC7 atlas region on {page_id:?} ({x}, {y}, {width}x{height}): {error:?}"
+                            );
+                        } else {
+                            needs_redraw = true;
+                        }
+                    } else if let Some((_, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let page_stride = (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                                let row_bytes = (width as usize) * 4;
+                                for row in 0..(height as usize) {
+                                    let dst_offset =
+                                        ((y as usize) + row) * page_stride + (x as usize) * 4;
+                                    let src_offset = row * row_bytes;
+                                    if dst_offset + row_bytes <= canvas.len()
+                                        && src_offset + row_bytes <= rgba.len()
+                                    {
+                                        canvas[dst_offset..dst_offset + row_bytes].copy_from_slice(
+                                            &rgba[src_offset..src_offset + row_bytes],
+                                        );
+                                    }
+                                }
+                                dirty_fallback_pages.insert(page_id);
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid BC7 payload for RGBA8 fallback page {page_id:?}: {error}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_bc7_atlas_page(page_id.0) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy BC7 atlas page {page_id:?}: {error:?}"
+                            );
+                        }
+                    } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        dirty_fallback_pages.remove(&page_id);
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadStandalone {
+                    asset_id,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        match renderer.upload_external_bc7(width, height, &bytes) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not upload standalone BC7 texture {asset_id:?} ({width}x{height}): {error:?}"
+                                );
+                                self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                    asset_id,
+                                    Err(format!("{error:?}")),
+                                );
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let desc = ManagedExternalTextureDesc::new(width, height, false);
+                                match renderer.upload_external_rgba8(desc, &rgba) {
+                                    Ok(slot) => {
+                                        self.bc7_fallback_standalone.insert(asset_id, slot);
+                                        self.runtime
+                                            .asset_hub_mut()
+                                            .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                        needs_redraw = true;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[unbound-app] Could not upload standalone RGBA8 fallback texture {asset_id:?}: {error:?}"
+                                        );
+                                        self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                            asset_id,
+                                            Err(format!("{error:?}")),
+                                        );
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid standalone BC7 payload for {asset_id:?}: {error}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Err(error.to_string()));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyStandalone { asset_id, slot } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_external_bc7(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone BC7 texture {asset_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    } else {
+                        let target_slot = self
+                            .bc7_fallback_standalone
+                            .remove(&asset_id)
+                            .unwrap_or(slot);
+                        if let Err(error) = renderer.destroy_external_texture(target_slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone RGBA8 fallback texture {asset_id:?} (slot {target_slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        for page_id in dirty_fallback_pages {
+            if let Some((slot, canvas)) = self.bc7_fallback_pages.get(&page_id) {
+                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                    eprintln!(
+                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                    );
+                } else {
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.asset_hub_mut().invalidate_all_video_surfaces();
+        self.runtime.invalidate_all_viewport_3d_slots();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -727,10 +1131,15 @@ impl<A: Application> WindowedRunner<A> {
         // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
         // renderer 拆除设备本身。
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.asset_hub_mut().invalidate_all_video_surfaces();
+        self.runtime.invalidate_all_viewport_3d_slots();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -824,10 +1233,14 @@ impl<A: Application> WindowedRunner<A> {
                 self.runtime
                     .asset_hub_mut()
                     .set_video_upload_tier(video_tier);
+                let bc7_caps = renderer.compressed_texture_capabilities();
+                self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+                self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
                 self.renderer = Some(renderer);
                 self.swapchain = Some(swapchain);
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
+                self.register_all_viewport_passes();
                 self.runtime.set_premultiplied_surface(premultiplied);
                 self.swapchain_dirty = true;
                 self.frame_dropped = true;
@@ -1002,6 +1415,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             os_scale,
         );
 
+        let bc7_caps = renderer.compressed_texture_capabilities();
+        self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         self.atlases = Some(atlases);
         self.swapchain = Some(swapchain);
         let video_tier = renderer.video_upload_capabilities().active_tier;
@@ -1010,6 +1426,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             .set_video_upload_tier(video_tier);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
+        self.register_all_viewport_passes();
         #[cfg(windows)]
         if let (Some(cb), Some(hwnd)) = (&mut self.on_hwnd_created, window.win32_hwnd()) {
             cb(hwnd);
@@ -1156,6 +1573,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
+                self.runtime.set_modifiers(translate_modifiers(modifiers));
             }
             PlatformEvent::Ime(ime) => match ime {
                 ImeEvent::Preedit(text, selection) => {
@@ -1363,6 +1781,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
 
         self.process_external_texture_ops(report.external_texture_ops, window);
         self.process_video_surface_ops(report.video_surface_ops, window);
+        self.sync_viewports_3d(&report.viewports_3d, window);
+        self.process_bc7_ops(report.bc7_ops, window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
             if !report.atlas_uploads.is_empty() {
