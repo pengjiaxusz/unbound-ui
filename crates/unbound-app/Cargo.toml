@@ -14,6 +14,7 @@ unbound-input.workspace = true
 unbound-a11y.workspace = true
 unbound-theme.workspace = true
 unbound-gpu.workspace = true
+unbound-anim.workspace = true
 unbound-widgets.workspace = true
 unbound-world.workspace = true
 unbound-layout.workspace = true
@@ -35,7 +36,6 @@ unbound-text = { workspace = true, features = ["backend-swash"] }
 [dev-dependencies]
 unbound-text.workspace = true
 unbound-canvas.workspace = true
-unbound-anim.workspace = true
 unbound-vector.workspace = true
 app-guest = { path = "../app-guest" }
 png.workspace = true

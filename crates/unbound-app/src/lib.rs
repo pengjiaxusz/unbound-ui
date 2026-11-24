@@ -94,7 +94,8 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
+    run_multi_window, CrossWindowDragRoute, MultiWindowCoordinator, MultiWindowFactory,
+    WindowContext,
 };
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -723,6 +724,8 @@ pub struct AppContext {
     pub accent: unbound_theme::AccentBrand,
     /// 可选操作系统主题强调色覆盖（`None` 时在默认 Win11 蓝色预设下自动读取平台系统强调色）。
     pub system_accent: Option<unbound_math::Color>,
+    /// 全局动效治理策略（默认同步平台 `prefers_reduced_motion()`，支持宿主与无头测试覆写）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 框架级主题过渡配置（默认 240ms ease-out，设为 `0` 关闭过渡）。
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒，由运行器逐帧同步，供自绘后景叠化继承）。
@@ -823,6 +826,10 @@ impl AppContext {
             preset: unbound_theme::ProductPreset::Win11,
             accent: unbound_theme::AccentBrand::Blue,
             system_accent: None,
+            motion_policy: unbound_anim::MotionPolicy::new(
+                unbound_platform::prefers_reduced_motion(),
+                1.0,
+            ),
             theme_transition: unbound_theme::ThemeTransitionConfig::default(),
             theme_transition_remaining_secs: 0.0,
             window_maximized: false,
@@ -1293,6 +1300,35 @@ impl AppContext {
     /// 对齐 `unbound_theme::ZoomLayers::ui_scale` 与 `Showcase::effective_scale`：
     /// 布局在逻辑单位（`physical_viewport / effective_scale`）下求解，
     /// 字形光栅化与 GPU 相机再按 `effective_scale` 映射回物理像素。
+    /// 返回当前统一治理的全局 [`unbound_anim::MotionPolicy`]。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.motion_policy
+    }
+
+    /// 覆写全局 [`unbound_anim::MotionPolicy`]（自动钳制 `speed_scale` 至合法范围）。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        self.motion_policy =
+            unbound_anim::MotionPolicy::new(policy.reduced_motion, policy.speed_scale);
+    }
+
+    /// 返回当前是否开启减弱动画。
+    #[must_use]
+    pub const fn reduced_motion(&self) -> bool {
+        self.motion_policy.reduced_motion
+    }
+
+    /// 显式覆写减弱动画开关（供无头测试与宿主运行期同步）。
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.motion_policy.reduced_motion = reduced_motion;
+    }
+
+    /// 显式覆写全局动画速率倍率（钳制至 `0.05..=2.0`）。
+    pub fn set_motion_speed_scale(&mut self, speed_scale: f32) {
+        self.motion_policy =
+            unbound_anim::MotionPolicy::new(self.motion_policy.reduced_motion, speed_scale);
+    }
+
     #[must_use]
     pub fn effective_scale(&self) -> f32 {
         let os = if self.os_scale.is_finite() && self.os_scale > 0.0 {
@@ -1542,6 +1578,8 @@ pub struct ViewContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 全局动效治理策略（与 [`AppContext::motion_policy`] 同步）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 框架级主题过渡配置（与 [`AppContext::theme_transition`] 同步）。
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒），供自绘后景叠化继承。
@@ -2027,6 +2065,72 @@ impl<'a> ViewBuilder<'a> {
             output.focusable = false;
         }
         self.collector.push(key, output);
+    }
+
+    /// 挂载非交互停靠预览叠加层（ADR 0037）：
+    ///
+    /// 处于顶层视觉反馈层（`PORTAL_Z_BASE + 400`），严格不参与焦点环、
+    /// 不注册命中区域、不触发轻关闭也不拦截拖拽指针流。
+    pub fn docking_overlay(
+        &mut self,
+        key: u64,
+        state: &unbound_widgets::DockOverlayState,
+        tokens: unbound_widgets::DockOverlayTokens,
+    ) {
+        self.docking_overlay_with_glyphs(key, state, tokens, &[]);
+    }
+
+    /// 挂载带预设字形串的非交互停靠预览叠加层。
+    pub fn docking_overlay_with_glyphs(
+        &mut self,
+        key: u64,
+        state: &unbound_widgets::DockOverlayState,
+        tokens: unbound_widgets::DockOverlayTokens,
+        pill_glyphs: &[unbound_text::GlyphQuad],
+    ) {
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        let overlay_z = (PORTAL_Z_BASE as u16).saturating_add(400);
+        let bounds = Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y);
+        let mut output =
+            unbound_widgets::emit_docking_overlay(state, bounds, tokens, pill_glyphs, overlay_z);
+        // 强制保证纯视觉穿透：零命中、零焦点、零语义抢占。
+        output.hit = None;
+        output.sub_hits.clear();
+        output.focusable = false;
+        output.a11y = None;
+        if !output.primitives.is_empty() {
+            self.collector.push(effective_key, output);
+        }
+    }
+
+    /// 挂载非交互外部拖拽代理卡片（用于 `TearOut` 或跨窗拖拽跟随反馈）。
+    pub fn drag_proxy(
+        &mut self,
+        key: u64,
+        proxy: &unbound_widgets::DockDragProxy,
+        tokens: unbound_widgets::DockOverlayTokens,
+        label_glyphs: &[unbound_text::GlyphQuad],
+    ) {
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        let proxy_z = (PORTAL_Z_BASE as u16).saturating_add(420);
+        let bounds = Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y);
+        let mut output =
+            unbound_widgets::emit_drag_proxy(proxy, bounds, tokens, label_glyphs, proxy_z);
+        output.hit = None;
+        output.sub_hits.clear();
+        output.focusable = false;
+        output.a11y = None;
+        if !output.primitives.is_empty() {
+            self.collector.push(effective_key, output);
+        }
     }
 
     /// 声明某个控件的语义。
@@ -5395,6 +5499,29 @@ impl<A: Application> AppRuntime<A> {
         &mut self.ctx
     }
 
+    /// 返回运行时当前生效的全局 [`unbound_anim::MotionPolicy`]。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.ctx.motion_policy
+    }
+
+    /// 覆写运行时全局 [`unbound_anim::MotionPolicy`] 并在变化时标记场景重建。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        let clamped = unbound_anim::MotionPolicy::new(policy.reduced_motion, policy.speed_scale);
+        if self.ctx.motion_policy != clamped {
+            self.ctx.motion_policy = clamped;
+            self.force_rebuild = true;
+            self.dirty |= DirtyFlags::PAINT;
+        }
+    }
+
+    /// 显式覆写运行时减弱动画开关（供无头测试与宿主统一透传）。
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        let mut policy = self.ctx.motion_policy;
+        policy.reduced_motion = reduced_motion;
+        self.set_motion_policy(policy);
+    }
+
     /// 设置指定下拉选择框的展开/收起状态。
     pub fn set_select_open(&self, key: u64, open: bool) {
         self.ctx.set_select_open(key, open);
@@ -6150,6 +6277,7 @@ impl<A: Application> AppRuntime<A> {
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
+            motion_policy: self.ctx.motion_policy,
             theme_transition: self.ctx.theme_transition,
             theme_transition_remaining_secs: self.ctx.theme_transition_remaining_secs,
             hovered: self.router.hover(),
