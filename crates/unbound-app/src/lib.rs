@@ -2971,13 +2971,17 @@ impl<'a> ViewBuilder<'a> {
         key: impl KeyDiscriminator,
         desc: unbound_widgets::Viewport3DDesc<'_>,
     ) -> NodeId {
-        let mut node_desc = RawNodeDesc::container();
-        if desc.size.x > 0.0 {
-            node_desc = node_desc.width(Dim::px(desc.size.x));
-        }
-        if desc.size.y > 0.0 {
-            node_desc = node_desc.height(Dim::px(desc.size.y));
-        }
+        let width = if desc.size.x.is_finite() {
+            desc.size.x.max(0.0)
+        } else {
+            0.0
+        };
+        let height = if desc.size.y.is_finite() {
+            desc.size.y.max(0.0)
+        } else {
+            0.0
+        };
+        let node_desc = RawNodeDesc::container().size(width, height);
         self.viewport_3d_with_layout(key, node_desc, desc)
     }
 
