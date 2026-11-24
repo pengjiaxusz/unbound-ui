@@ -649,6 +649,9 @@ fn east_asian_family(text: &str, is_available: impl Fn(&str) -> bool) -> Option<
             NOTO_SANS_CJK_TC,
             NOTO_SANS_CJK_KR,
             "WenQuanYi Zen Hei",
+            YU_GOTHIC_UI,
+            MS_YAHEI_UI,
+            "Microsoft YaHei",
         ]
     } else if has_hangul {
         &[
@@ -657,6 +660,9 @@ fn east_asian_family(text: &str, is_available: impl Fn(&str) -> bool) -> Option<
             NOTO_SANS_CJK_TC,
             NOTO_SANS_CJK_JP,
             "WenQuanYi Zen Hei",
+            MALGUN_GOTHIC,
+            MS_YAHEI_UI,
+            "Microsoft YaHei",
         ]
     } else {
         &[
@@ -665,6 +671,10 @@ fn east_asian_family(text: &str, is_available: impl Fn(&str) -> bool) -> Option<
             NOTO_SANS_CJK_JP,
             NOTO_SANS_CJK_KR,
             "WenQuanYi Zen Hei",
+            MS_YAHEI_UI,
+            "Microsoft YaHei",
+            MS_JHENGHEI_UI,
+            "SimHei",
         ]
     };
     candidates
@@ -726,6 +736,39 @@ impl TextEngine {
         #[cfg(not(windows))]
         {
             let db = font_system.db_mut();
+            // WSL2 零配置中文字体兜底：原生 Linux 未安装 Noto/WenQuanYi CJK 字体时，
+            // 自动按需加载 WSL2 宿主挂载的 `/mnt/c/Windows/Fonts` 中文字体（微软雅黑/黑体），
+            // 避免界面中文全部退化为占位豆腐块。
+            let has_cjk = db.faces().any(|face| {
+                face.families.iter().any(|(family, _)| {
+                    matches!(
+                        family.as_str(),
+                        NOTO_SANS_CJK_SC
+                            | NOTO_SANS_CJK_TC
+                            | NOTO_SANS_CJK_JP
+                            | NOTO_SANS_CJK_KR
+                            | "WenQuanYi Zen Hei"
+                            | "WenQuanYi Micro Hei"
+                            | MS_YAHEI_UI
+                            | "Microsoft YaHei"
+                            | MS_JHENGHEI_UI
+                            | "SimHei"
+                    )
+                })
+            });
+            if !has_cjk {
+                for candidate in [
+                    "/mnt/c/Windows/Fonts/msyh.ttc",
+                    "/mnt/c/Windows/Fonts/msyhbd.ttc",
+                    "/mnt/c/Windows/Fonts/msyhl.ttc",
+                    "/mnt/c/Windows/Fonts/simhei.ttf",
+                ] {
+                    let path = std::path::Path::new(candidate);
+                    if path.is_file() {
+                        let _ = db.load_font_file(path);
+                    }
+                }
+            }
             let sans = select_linux_sans_family(|candidate| {
                 db.faces()
                     .any(|face| face.families.iter().any(|(family, _)| family == candidate))
