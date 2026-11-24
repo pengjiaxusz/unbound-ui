@@ -1229,8 +1229,8 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         click_count: clicks,
     };
     if id == WidgetCatalogId::CalendarView || id == WidgetCatalogId::DateRangePicker {
-        let cal_w = stage.size.x.min(340.0).max(260.0);
-        let cal_h = stage.size.y.min(350.0).max(260.0);
+        let cal_w = stage.size.x.clamp(260.0, 340.0);
+        let cal_h = stage.size.y.clamp(260.0, 350.0);
         let cal_x = stage.origin.x + ((stage.size.x - cal_w) * 0.5).max(0.0);
         let cal_y = stage.origin.y + ((stage.size.y - cal_h) * 0.5).max(0.0);
         let cal_rect = Rect::new(cal_x, cal_y, cal_w, cal_h);
