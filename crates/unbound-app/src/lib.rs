@@ -10948,7 +10948,10 @@ mod tests {
         let _ = rt.frame(0.0);
 
         // 验证窗口钩子命令按序入队并可被运行器完整排空。
-        let _ = rt.custom(1, String::new());
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 1,
+            payload: String::new(),
+        });
         let cmds = rt.drain_window_commands();
         assert_eq!(
             cmds,
@@ -10979,7 +10982,10 @@ mod tests {
         // 按下按钮建立指针捕获，再经 AppContext::cancel_drag 清除捕获状态。
         let _ = rt.pointer_down(Vec2::new(30.0, 24.0), PointerButton::Left);
         assert_eq!(rt.context().pressed, Some(10));
-        let _ = rt.custom(2, String::new());
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 2,
+            payload: String::new(),
+        });
         assert_eq!(rt.context().pressed, None);
         assert_eq!(rt.router().pointer().pressed(), None);
     }
