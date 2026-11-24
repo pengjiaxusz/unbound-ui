@@ -211,16 +211,16 @@ pub const fn category_shell_icon(
     cat: unbound_widgets::ControlCategory,
 ) -> unbound_widgets::ShellIcon {
     match cat {
-        unbound_widgets::ControlCategory::BasicInput => unbound_widgets::ShellIcon::Sliders,
-        unbound_widgets::ControlCategory::TextAndForm => unbound_widgets::ShellIcon::Hamburger,
+        unbound_widgets::ControlCategory::BasicInput => unbound_widgets::ShellIcon::Snap,
+        unbound_widgets::ControlCategory::TextAndForm => unbound_widgets::ShellIcon::Layers,
         unbound_widgets::ControlCategory::DateAndTime => unbound_widgets::ShellIcon::ChevronDown,
         unbound_widgets::ControlCategory::CollectionsAndData => unbound_widgets::ShellIcon::Chart,
         unbound_widgets::ControlCategory::LayoutAndContainers => unbound_widgets::ShellIcon::Grid,
         unbound_widgets::ControlCategory::Navigation => unbound_widgets::ShellIcon::Layers,
-        unbound_widgets::ControlCategory::MenusAndToolbars => unbound_widgets::ShellIcon::ChevronRight,
+        unbound_widgets::ControlCategory::MenusAndToolbars => unbound_widgets::ShellIcon::ChevronDown,
         unbound_widgets::ControlCategory::DialogsAndOverlays => unbound_widgets::ShellIcon::Dot,
-        unbound_widgets::ControlCategory::StatusMediaAndScrolling => unbound_widgets::ShellIcon::Sun,
-        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => unbound_widgets::ShellIcon::Search,
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => unbound_widgets::ShellIcon::Chart,
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => unbound_widgets::ShellIcon::Snap,
     }
 }
 

@@ -309,7 +309,7 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
         let (accent_fg, accent_bg) = category_accent(palette, idx);
         let icon_box = Rect::new(cell.origin.x + 12.0, cell.origin.y + 14.0, 36.0, 36.0);
         canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-        widgets::draw_icon(canvas, category_widget_icon(cat), icon_box, accent_fg);
+        widgets::icon(canvas, category_widget_icon(cat), icon_box, accent_fg, accent_bg);
 
         let title = category_localized_label(cat, state.locale);
         let count_text = format!("{}", cat.count());

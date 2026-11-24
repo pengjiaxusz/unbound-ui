@@ -816,8 +816,8 @@ pub use toggle_split_button::{
 };
 
 pub use canonical::{
-    ControlCategory, ControlClass, OverflowStrategy, WidgetCapabilities, BASELINE_COUNT, EXCLUSIVE_COUNT,
-    TOOLKIT_COUNT,
+    ControlCategory, ControlClass, OverflowStrategy, WidgetCapabilities, BASELINE_COUNT,
+    EXCLUSIVE_COUNT, TOOLKIT_COUNT,
 };
 
 // 扩展控件（P1 / P2）：WinUI 3 官方核心控件与 Community Toolkit 选补控件。

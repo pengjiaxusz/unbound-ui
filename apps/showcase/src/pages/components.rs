@@ -1315,7 +1315,7 @@ pub fn draw_control_tile(
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
     let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
     canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-    crate::widgets::draw_icon(canvas, super::home::category_widget_icon(cat), icon_box, accent_fg);
+    crate::widgets::icon(canvas, super::home::category_widget_icon(cat), icon_box, accent_fg, accent_bg);
 
     // 右上来源徽章（WinUI 3 / Toolkit / Unbound）与收藏星标
     let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);

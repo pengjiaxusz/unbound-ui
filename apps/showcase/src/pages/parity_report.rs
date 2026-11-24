@@ -17,7 +17,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_widgets::image::{emit_image_with_assets, ImageDesc, ObjectFit};
 use unbound_widgets::{ControlState, WidgetCatalogId};
 
-use super::{DemoCtx, DemoKind, ExampleDef, PageInfo};
+use super::{DemoCtx, DemoKind, ExampleDef, PageId, PageInfo};
 use crate::canvas::{AlignX, AlignY, Canvas};
 use crate::state::GalleryState;
 use crate::target::{self, Target};
@@ -371,7 +371,7 @@ impl ParityInspectorState {
         let Some(rect) = self.curtain_stage_rect.get() else {
             return false;
         };
-        if !rect.contains(pointer) || rect.size.x <= 1.0 {
+        if !rect.contains_point(pointer) || rect.size.x <= 1.0 {
             return false;
         }
         let ratio = ((pointer.x - rect.origin.x) / rect.size.x).clamp(0.02, 0.98);
