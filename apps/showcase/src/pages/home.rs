@@ -9,8 +9,8 @@ use unbound_math::Rect;
 use unbound_widgets::{ControlCategory, ControlClass, WidgetCatalogId};
 
 use super::{
-    category_localized_label, category_localized_summary, component_nav_label_localized,
-    control_class_badge, DemoCtx, DemoKind, ExampleDef, PageId, PageInfo,
+    category_localized_label, category_localized_summary, DemoCtx, DemoKind, ExampleDef, PageId,
+    PageInfo,
 };
 use crate::canvas::{AlignX, AlignY, Canvas};
 use crate::state::GalleryState;

@@ -1404,7 +1404,7 @@ pub fn draw_category_hub(
     let scoped: Vec<WidgetCatalogId> = WidgetCatalogId::ALL
         .iter()
         .copied()
-        .filter(|id| state.active_category.map_or(true, |c| id.category() == c))
+        .filter(|id| state.active_category.is_none_or(|c| id.category() == c))
         .collect();
     let n_all = scoped.len();
     let n_base = scoped

@@ -369,7 +369,7 @@ impl GalleryApp {
         state.text_render.report = labels.cache.report();
         let init_viewport = Rect::new(0.0, 0.0, 1280.0, 800.0);
         let init_nav_desc = build_navigation_view_desc(&state, init_viewport, None);
-        let mut nav_view = NavigationViewState::from_desc(&init_nav_desc);
+        let nav_view = NavigationViewState::from_desc(&init_nav_desc);
         // 10 个控件分类默认折叠，首屏导航树保持简洁直观（ADR 0035）。
         let nav_layout = init_nav_desc.compute_layout(&nav_view);
         let mut tree = ShellTree::new();
@@ -2153,15 +2153,15 @@ impl GalleryApp {
                     self.state.bump();
                     return;
                 }
-                PlatformKey::Character(ch) if ch == " " || ch.eq_ignore_ascii_case("l") => {
-                    if self.state.parity_inspector.view_mode
-                        == pages::parity_report::ParityViewMode::Curtain
-                    {
-                        self.state.parity_inspector.curtain_locked =
-                            !self.state.parity_inspector.curtain_locked;
-                        self.state.bump();
-                        return;
-                    }
+                PlatformKey::Character(ch)
+                    if (ch == " " || ch.eq_ignore_ascii_case("l"))
+                        && self.state.parity_inspector.view_mode
+                            == pages::parity_report::ParityViewMode::Curtain =>
+                {
+                    self.state.parity_inspector.curtain_locked =
+                        !self.state.parity_inspector.curtain_locked;
+                    self.state.bump();
+                    return;
                 }
                 _ => {}
             }
@@ -2727,7 +2727,7 @@ impl GalleryApp {
                     let split = [0.25f32, 0.50, 0.75, 1.0][(part - OVERLAY_SPLIT_BASE) as usize];
                     self.state.parity_inspector.overlay_split = split;
                     self.state.bump();
-                } else if part >= CASE_ROW_BASE && part < REFRESH_PART {
+                } else if (CASE_ROW_BASE..REFRESH_PART).contains(&part) {
                     let row_idx = (part - CASE_ROW_BASE) as usize;
                     if let Some(report) = self.state.demo.parity_report.as_ref() {
                         let filtered = pages::parity_report::filtered_case_indices(

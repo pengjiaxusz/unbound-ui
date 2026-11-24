@@ -1472,8 +1472,10 @@ mod tests {
 
     #[test]
     fn curtain_hover_scrub_respects_lock_state() {
-        let mut inspector = ParityInspectorState::default();
-        inspector.view_mode = ParityViewMode::Curtain;
+        let mut inspector = ParityInspectorState {
+            view_mode: ParityViewMode::Curtain,
+            ..Default::default()
+        };
         inspector.curtain_stage_rect.set(Some(Rect::new(100.0, 100.0, 400.0, 200.0)));
         assert!(inspector.scrub_curtain(Vec2::new(400.0, 150.0)));
         assert!((inspector.curtain_ratio - 0.75).abs() < 1e-3);
