@@ -80,9 +80,11 @@ pub use tray::{
     TrayNotificationSeverity,
 };
 pub use wayland_logic::{
-    compute_wayland_popup_placement, csd_resize_direction_at, cursor_for_resize_direction,
-    primary_output_metrics, set_primary_output_metrics, translate_evdev_key, wayland_cursor_name,
-    KeyRepeatState, PrimaryOutputMetrics, WaylandFrameThrottle, WaylandPopupPlacement,
+    compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
+    cursor_for_resize_direction, primary_output_metrics, set_primary_output_metrics,
+    translate_evdev_key, wayland_cursor_name, KeyRepeatState, PrimaryOutputMetrics,
+    WaylandFrameThrottle, WaylandImeCursorRect, WaylandImeProtocolAction, WaylandImeState,
+    WaylandPopupPlacement,
 };
 pub use win32_frame::{
     accent_policy_export_available, clear_window_accent_tint, install_custom_frame,

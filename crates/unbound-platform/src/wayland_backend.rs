@@ -53,6 +53,9 @@ use wayland_client::protocol::{
     wl_pointer, wl_seat, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::text_input::zv3::client::{
+    zwp_text_input_manager_v3, zwp_text_input_v3,
+};
 use wayland_protocols::xdg::shell::client::{xdg_positioner, xdg_toplevel};
 
 use crate::backend::{push_coalesced_event, Flow, PlatformApp};
@@ -61,12 +64,15 @@ use crate::pacing::PresentWaitPolicy;
 use crate::popup_host::PopupWindowConfig;
 use crate::resize::Extent;
 use crate::wayland_logic::{
-    compute_wayland_popup_placement, csd_resize_direction_at, cursor_for_resize_direction,
-    register_wayland_clipboard, set_primary_output_metrics, translate_evdev_key, KeyRepeatState,
-    PrimaryOutputMetrics, WaylandClipboardBackend, WaylandFrameThrottle,
+    compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
+    cursor_for_resize_direction, register_wayland_clipboard, set_primary_output_metrics,
+    translate_evdev_key, KeyRepeatState, PrimaryOutputMetrics, WaylandClipboardBackend,
+    WaylandFrameThrottle, WaylandImeProtocolAction, WaylandImeState,
 };
 use crate::win32_frame::FrameHitMetrics;
-use crate::win32_window::{CursorIcon, PhysicalSize, ResizeDirection, WindowId as NativeWindowId};
+use crate::win32_window::{
+    CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, WindowId as NativeWindowId,
+};
 use crate::window::{
     apply, ButtonState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformState,
     ScreenRect, WindowConfig,
@@ -111,6 +117,15 @@ enum WaylandCommand {
     },
     ClipboardWrite {
         text: String,
+    },
+    SetImeAllowed {
+        id: isize,
+        allowed: bool,
+    },
+    SetImeCursorArea {
+        id: isize,
+        position: PhysicalPosition,
+        size: PhysicalSize,
     },
 }
 
@@ -361,6 +376,21 @@ impl WaylandWindowHandle {
             false
         }
     }
+
+    pub(crate) fn set_ime_allowed(&self, allowed: bool) {
+        self.send(WaylandCommand::SetImeAllowed {
+            id: self.shared.id,
+            allowed,
+        });
+    }
+
+    pub(crate) fn set_ime_cursor_area(&self, position: PhysicalPosition, size: PhysicalSize) {
+        self.send(WaylandCommand::SetImeCursorArea {
+            id: self.shared.id,
+            position,
+            size,
+        });
+    }
 }
 
 impl HasWindowHandle for WaylandWindowHandle {
@@ -506,6 +536,9 @@ struct WaylandState {
     seat: Option<wl_seat::WlSeat>,
     themed_pointer: Option<ThemedPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+    ime_state: WaylandImeState,
 
     modifiers: Modifiers,
     key_repeat: KeyRepeatState,
@@ -859,6 +892,49 @@ impl WaylandState {
                     self.clipboard_source = Some(source);
                 }
             }
+            WaylandCommand::SetImeAllowed { id, allowed } => {
+                let (action, ime_ev) = self.ime_state.set_allowed(allowed);
+                self.apply_ime_protocol_action(action);
+                if let Some(ev) = ime_ev {
+                    if let Some(entry) = self.window_by_id_mut(id) {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
+                }
+            }
+            WaylandCommand::SetImeCursorArea { id, position, size } => {
+                let Some(entry) = self.windows.iter().find(|w| w.id == id) else {
+                    return;
+                };
+                let scale = entry.native_window.scale_factor();
+                let win_size = entry.native_window.inner_size();
+                let rect = compute_wayland_ime_cursor_rect(position, size, scale, win_size);
+                let action = self.ime_state.set_cursor_area(rect);
+                self.apply_ime_protocol_action(action);
+            }
+        }
+    }
+
+    fn apply_ime_protocol_action(&self, action: WaylandImeProtocolAction) {
+        let Some(ti) = &self.text_input else {
+            return;
+        };
+        match action {
+            WaylandImeProtocolAction::None => {}
+            WaylandImeProtocolAction::Enable { cursor_rect } => {
+                ti.enable();
+                if let Some(r) = cursor_rect {
+                    ti.set_cursor_rectangle(r.x, r.y, r.width, r.height);
+                }
+                ti.commit();
+            }
+            WaylandImeProtocolAction::UpdateCursorRect(r) => {
+                ti.set_cursor_rectangle(r.x, r.y, r.width, r.height);
+                ti.commit();
+            }
+            WaylandImeProtocolAction::Disable => {
+                ti.disable();
+                ti.commit();
+            }
         }
     }
 }
@@ -1072,6 +1148,9 @@ impl SeatHandler for WaylandState {
             self.seat = Some(seat.clone());
             if let Some(ddm) = &self.data_device_manager {
                 self.data_device = Some(ddm.get_data_device(qh, &seat));
+            }
+            if let Some(mgr) = &self.text_input_manager {
+                self.text_input = Some(mgr.get_text_input(&seat, qh, ()));
             }
         }
     }
@@ -1336,7 +1415,12 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                     state.focused_surface_id = None;
                 }
                 state.key_repeat.clear();
+                let (ime_action, ime_cancel) = state.ime_state.on_focus_lost();
+                state.apply_ime_protocol_action(ime_action);
                 if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                    if let Some(ev) = ime_cancel {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
                     entry.pending_events.push(PlatformEvent::Focused(false));
                 }
             }
@@ -1402,6 +1486,76 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                         },
                         repeat: false,
                     });
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_text_input_manager_v3::ZwpTextInputManagerV3, ()> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwp_text_input_manager_v3::ZwpTextInputManagerV3,
+        _event: zwp_text_input_manager_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_text_input_v3::ZwpTextInputV3,
+        event: zwp_text_input_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_text_input_v3::Event::Enter { surface } => {
+                let proto_id = surface.id().protocol_id();
+                let action = state.ime_state.on_enter(proto_id);
+                state.apply_ime_protocol_action(action);
+            }
+            zwp_text_input_v3::Event::Leave { surface } => {
+                let proto_id = surface.id().protocol_id();
+                let (action, cancel_ev) = state.ime_state.on_leave(proto_id);
+                state.apply_ime_protocol_action(action);
+                if let Some(ev) = cancel_ev {
+                    if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
+                }
+            }
+            zwp_text_input_v3::Event::PreeditString {
+                text,
+                cursor_begin,
+                cursor_end,
+            } => {
+                state.ime_state.on_preedit(text, cursor_begin, cursor_end);
+            }
+            zwp_text_input_v3::Event::CommitString { text } => {
+                state.ime_state.on_commit(text);
+            }
+            zwp_text_input_v3::Event::DeleteSurroundingText { .. } => {}
+            zwp_text_input_v3::Event::Done { .. } => {
+                let events = state.ime_state.on_done();
+                if events.is_empty() {
+                    return;
+                }
+                let target_surface = state
+                    .ime_state
+                    .focused_surface()
+                    .or(state.focused_surface_id);
+                if let Some(proto_id) = target_surface {
+                    if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                        for ev in events {
+                            entry.pending_events.push(PlatformEvent::Ime(ev));
+                        }
+                    }
                 }
             }
             _ => {}
@@ -1639,6 +1793,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
     let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
+    let text_input_manager = globals
+        .bind::<zwp_text_input_manager_v3::ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ())
+        .ok();
 
     let wake_pipe = WakePipe::new()?;
     let wake_signal = wake_pipe.signal_handle();
@@ -1668,6 +1825,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         seat: None,
         themed_pointer: None,
         keyboard: None,
+        text_input_manager,
+        text_input: None,
+        ime_state: WaylandImeState::default(),
         modifiers: Modifiers::default(),
         key_repeat: KeyRepeatState::default(),
         focused_surface_id: None,

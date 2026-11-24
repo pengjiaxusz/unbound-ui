@@ -287,9 +287,7 @@ impl NativeWindow {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_ime_allowed(allowed),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
-            NativeWindowInner::Wayland(_) => {
-                let _ = allowed;
-            }
+            NativeWindowInner::Wayland(w) => w.set_ime_allowed(allowed),
         }
     }
 
@@ -298,9 +296,7 @@ impl NativeWindow {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_ime_cursor_area(position, size),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
-            NativeWindowInner::Wayland(_) => {
-                let _ = (position, size);
-            }
+            NativeWindowInner::Wayland(w) => w.set_ime_cursor_area(position, size),
         }
     }
 
