@@ -292,7 +292,7 @@ impl<A: Application> WindowContext<A> {
         };
         self.theme_driver
             .snap_preset(key, sys_accent, self.renderer.as_mut());
-        self.runtime.context_mut().theme_driver_remaining_secs = 0.0;
+        self.runtime.context_mut().theme_transition_remaining_secs = 0.0;
     }
 
     /// 以协调器共享时钟同步本窗口主题过渡状态（无头测试与运行器共用接缝）。
@@ -313,7 +313,7 @@ impl<A: Application> WindowContext<A> {
             (
                 make_theme_snapshot_key(ctx.theme, ctx.preset, ctx.accent, sys_accent),
                 sys_accent,
-                ctx.theme_driver,
+                ctx.theme_transition,
             )
         };
         let outcome = self.theme_driver.sync_preset_at(
@@ -324,7 +324,7 @@ impl<A: Application> WindowContext<A> {
             shared_trigger_secs,
             reduced_motion,
         );
-        self.runtime.context_mut().theme_driver_remaining_secs = outcome.remaining_secs;
+        self.runtime.context_mut().theme_transition_remaining_secs = outcome.remaining_secs;
         outcome.lut_updated
     }
 
