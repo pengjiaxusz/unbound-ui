@@ -27,6 +27,7 @@ pub mod latency;
 pub mod linux_backend;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
 pub mod linux_dbus;
+pub mod linux_dnd;
 pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
@@ -65,6 +66,11 @@ pub use linux_backend::{
     active_linux_backend, parse_linux_backend_env, place_x11_popup_in_work_area,
     select_linux_backend_order, set_active_linux_backend, LinuxBackendKind, LinuxBackendPreference,
     LinuxDisplayEnv,
+};
+pub use linux_dnd::{
+    decode_uri_list, dispatch_linux_outbound_file_drag, encode_uri_list,
+    register_linux_outbound_drag, LinuxOutboundDragBackend, TabTearDragState, TabTearDropOutcome,
+    TabTearPayload, UNBOUND_TAB_TEAR_MIME, URI_LIST_MIME,
 };
 pub use native_window::NativeWindow;
 pub use ole_drag::{

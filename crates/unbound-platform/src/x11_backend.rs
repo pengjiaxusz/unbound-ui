@@ -438,6 +438,17 @@ struct X11Atoms {
     clipboard_prop: Atom,
     net_workarea: Atom,
     wm_change_state: Atom,
+    xdnd_aware: Atom,
+    xdnd_enter: Atom,
+    xdnd_position: Atom,
+    xdnd_status: Atom,
+    xdnd_leave: Atom,
+    xdnd_drop: Atom,
+    xdnd_finished: Atom,
+    xdnd_selection: Atom,
+    xdnd_action_copy: Atom,
+    uri_list: Atom,
+    xdnd_prop: Atom,
 }
 
 impl X11Atoms {
@@ -464,6 +475,17 @@ impl X11Atoms {
             clipboard_prop: intern(b"UNBOUND_CLIPBOARD_PROP")?,
             net_workarea: intern(b"_NET_WORKAREA")?,
             wm_change_state: intern(b"WM_CHANGE_STATE")?,
+            xdnd_aware: intern(b"XdndAware")?,
+            xdnd_enter: intern(b"XdndEnter")?,
+            xdnd_position: intern(b"XdndPosition")?,
+            xdnd_status: intern(b"XdndStatus")?,
+            xdnd_leave: intern(b"XdndLeave")?,
+            xdnd_drop: intern(b"XdndDrop")?,
+            xdnd_finished: intern(b"XdndFinished")?,
+            xdnd_selection: intern(b"XdndSelection")?,
+            xdnd_action_copy: intern(b"XdndActionCopy")?,
+            uri_list: intern(b"text/uri-list")?,
+            xdnd_prop: intern(b"UNBOUND_XDND_PROP")?,
         })
     }
 }
@@ -718,6 +740,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let mut windows: Vec<X11ToplevelEntry> = Vec::new();
     let mut popups: HashMap<u64, X11PopupEntry> = HashMap::new();
     let mut exit_requested = false;
+    let mut xdnd_source_window: Option<X11WindowId> = None;
 
     let create_toplevel = |cfg: &WindowConfig| -> Result<X11ToplevelEntry, PlatformError> {
         let xid = conn
@@ -770,6 +793,14 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             atoms.wm_protocols,
             AtomEnum::ATOM,
             &[atoms.wm_delete_window],
+        );
+        // 宣告支持 XDND v5 跨应用文件拖入
+        let _ = conn.change_property32(
+            PropMode::REPLACE,
+            xid,
+            atoms.xdnd_aware,
+            AtomEnum::ATOM,
+            &[5u32],
         );
         if !cfg.decorations {
             set_motif_borderless(&conn, &atoms, xid);
@@ -1029,12 +1060,50 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     }
                 }
                 X11Event::ClientMessage(ev) => {
-                    if ev.type_ == atoms.wm_protocols
-                        && ev.data.as_data32()[0] == atoms.wm_delete_window
-                    {
+                    let d = ev.data.as_data32();
+                    if ev.type_ == atoms.wm_protocols && d[0] == atoms.wm_delete_window {
                         if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.window) {
                             entry.pending_events.push(PlatformEvent::CloseRequested);
                         }
+                    } else if ev.type_ == atoms.xdnd_enter {
+                        xdnd_source_window = Some(d[0]);
+                        if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.window) {
+                            entry
+                                .pending_events
+                                .push(PlatformEvent::FileHover(std::path::PathBuf::new()));
+                        }
+                    } else if ev.type_ == atoms.xdnd_position {
+                        let source = d[0];
+                        xdnd_source_window = Some(source);
+                        let status = ClientMessageEvent {
+                            response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
+                            format: 32,
+                            sequence: 0,
+                            window: source,
+                            type_: atoms.xdnd_status,
+                            data: ClientMessageData::from([
+                                ev.window,
+                                1u32, // 接受拖放
+                                0,
+                                0,
+                                atoms.xdnd_action_copy,
+                            ]),
+                        };
+                        let _ = conn.send_event(false, source, EventMask::NO_EVENT, status);
+                    } else if ev.type_ == atoms.xdnd_leave {
+                        xdnd_source_window = None;
+                        if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.window) {
+                            entry.pending_events.push(PlatformEvent::FileHoverCancelled);
+                        }
+                    } else if ev.type_ == atoms.xdnd_drop {
+                        let ts = d[2];
+                        let _ = conn.convert_selection(
+                            ev.window,
+                            atoms.xdnd_selection,
+                            atoms.uri_list,
+                            atoms.xdnd_prop,
+                            ts,
+                        );
                     }
                 }
                 X11Event::SelectionRequest(ev) => {
@@ -1076,7 +1145,48 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     let _ = conn.send_event(false, ev.requestor, EventMask::NO_EVENT, notify);
                 }
                 X11Event::SelectionNotify(ev) => {
-                    if ev.property == atoms.clipboard_prop {
+                    if ev.property == atoms.xdnd_prop {
+                        if let Ok(cookie) = conn.get_property(
+                            true,
+                            ev.requestor,
+                            atoms.xdnd_prop,
+                            AtomEnum::ANY,
+                            0,
+                            1024 * 256,
+                        ) {
+                            if let Ok(reply) = cookie.reply() {
+                                if let Ok(raw) = String::from_utf8(reply.value) {
+                                    let paths = crate::linux_dnd::decode_uri_list(&raw);
+                                    if let Some(entry) =
+                                        windows.iter_mut().find(|w| w.xid == ev.requestor)
+                                    {
+                                        for path in paths {
+                                            entry
+                                                .pending_events
+                                                .push(PlatformEvent::FileDrop(path));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(source) = xdnd_source_window.take() {
+                            let finished = ClientMessageEvent {
+                                response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
+                                format: 32,
+                                sequence: 0,
+                                window: source,
+                                type_: atoms.xdnd_finished,
+                                data: ClientMessageData::from([
+                                    ev.requestor,
+                                    1u32,
+                                    atoms.xdnd_action_copy,
+                                    0,
+                                    0,
+                                ]),
+                            };
+                            let _ = conn.send_event(false, source, EventMask::NO_EVENT, finished);
+                        }
+                    } else if ev.property == atoms.clipboard_prop {
                         if let Ok(cookie) = conn.get_property(
                             true,
                             ev.requestor,

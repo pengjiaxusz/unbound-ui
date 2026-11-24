@@ -26,7 +26,7 @@ use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use smithay_client_toolkit::data_device_manager::data_source::{
-    CopyPasteSource, DataSourceHandler,
+    CopyPasteSource, DataSourceHandler, DragSource,
 };
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -130,6 +130,15 @@ enum WaylandCommand {
     ThemeChanged {
         dark: bool,
     },
+    FilesDropped {
+        surface_id: u32,
+        paths: Vec<std::path::PathBuf>,
+    },
+    StartOutboundFileDrag {
+        uri_list: String,
+        actions: DndAction,
+        reply: mpsc::Sender<crate::ole_drag::OutboundFileDragOutcome>,
+    },
 }
 
 /// 线程安全的管道唤醒信号句柄（持锁写入并在释放时持锁关闭，彻底消除 FD 复用竞态）。
@@ -216,7 +225,48 @@ struct ClipboardRegistrationGuard;
 impl Drop for ClipboardRegistrationGuard {
     fn drop(&mut self) {
         register_wayland_clipboard(None);
+        crate::linux_dnd::register_linux_outbound_drag(None);
         crate::linux_backend::set_active_linux_backend(None);
+    }
+}
+
+struct WaylandOutboundDragBridge {
+    cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
+    wake_signal: WakeSignal,
+}
+
+impl crate::linux_dnd::LinuxOutboundDragBackend for WaylandOutboundDragBridge {
+    fn begin_file_drag(
+        &self,
+        request: &crate::ole_drag::OutboundFileDragRequest,
+    ) -> Result<crate::ole_drag::OutboundFileDragOutcome, PlatformError> {
+        let mut actions = DndAction::empty();
+        if request.allow_copy {
+            actions |= DndAction::Copy;
+        }
+        if request.allow_move {
+            actions |= DndAction::Move;
+        }
+        if actions.is_empty() {
+            actions = DndAction::Copy;
+        }
+        let uri_list = crate::linux_dnd::encode_uri_list(&request.paths);
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let sent = self.cmd_tx.lock().ok().is_some_and(|tx| {
+            tx.send(WaylandCommand::StartOutboundFileDrag {
+                uri_list,
+                actions,
+                reply: reply_tx,
+            })
+            .is_ok()
+        });
+        if !sent {
+            return Ok(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+        }
+        self.wake_signal.signal();
+        Ok(reply_rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or(crate::ole_drag::OutboundFileDragOutcome::Cancelled))
     }
 }
 
@@ -542,6 +592,12 @@ struct WaylandState {
     clipboard_source: Option<CopyPasteSource>,
     clipboard_owned_text: String,
     clipboard_cache: Arc<Mutex<Option<String>>>,
+    dnd_source: Option<DragSource>,
+    dnd_outbound_uri_list: String,
+    dnd_outbound_reply: Option<mpsc::Sender<crate::ole_drag::OutboundFileDragOutcome>>,
+    dnd_outbound_action: DndAction,
+    dnd_enter_surface_id: Option<u32>,
+    dnd_offer_has_uri_list: bool,
 
     seat: Option<wl_seat::WlSeat>,
     themed_pointer: Option<ThemedPointer>,
@@ -926,6 +982,45 @@ impl WaylandState {
                     entry
                         .pending_events
                         .push(PlatformEvent::ThemeChanged { dark });
+                }
+            }
+            WaylandCommand::FilesDropped { surface_id, paths } => {
+                if let Some(entry) = self.window_by_surface_mut(surface_id) {
+                    for path in paths {
+                        entry.pending_events.push(PlatformEvent::FileDrop(path));
+                    }
+                }
+            }
+            WaylandCommand::StartOutboundFileDrag {
+                uri_list,
+                actions,
+                reply,
+            } => {
+                let origin_surface = self
+                    .pointer_surface_id
+                    .or(self.focused_surface_id)
+                    .and_then(|sid| {
+                        self.surface_to_window
+                            .get(&sid)
+                            .and_then(|&wid| self.windows.iter().find(|w| w.id == wid))
+                    })
+                    .or_else(|| self.windows.first())
+                    .map(|w| w.sctk_window.wl_surface().clone());
+                if let (Some(ddm), Some(dd), Some(origin)) =
+                    (&self.data_device_manager, &self.data_device, origin_surface)
+                {
+                    let source = ddm.create_drag_and_drop_source(
+                        qh,
+                        [crate::linux_dnd::URI_LIST_MIME],
+                        actions,
+                    );
+                    self.dnd_outbound_uri_list = uri_list;
+                    self.dnd_outbound_reply = Some(reply);
+                    self.dnd_outbound_action = DndAction::empty();
+                    source.start_drag(dd, &origin, None, self.last_pointer_serial);
+                    self.dnd_source = Some(source);
+                } else {
+                    let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
                 }
             }
         }
@@ -1588,8 +1683,31 @@ impl DataDeviceHandler for WaylandState {
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
         _x: f64,
         _y: f64,
-        _wl_surface: &wl_surface::WlSurface,
+        wl_surface: &wl_surface::WlSurface,
     ) {
+        let proto_id = wl_surface.id().protocol_id();
+        self.dnd_enter_surface_id = Some(proto_id);
+        self.dnd_offer_has_uri_list = false;
+        if let Some(dd) = &self.data_device {
+            if let Some(offer) = dd.data().drag_offer() {
+                let has_uri = offer.with_mime_types(|mimes| {
+                    mimes.iter().any(|m| m == crate::linux_dnd::URI_LIST_MIME)
+                });
+                if has_uri {
+                    self.dnd_offer_has_uri_list = true;
+                    offer.accept_mime_type(
+                        offer.serial,
+                        Some(crate::linux_dnd::URI_LIST_MIME.to_owned()),
+                    );
+                    offer.set_actions(DndAction::Copy | DndAction::Move, DndAction::Copy);
+                    if let Some(entry) = self.window_by_surface_mut(proto_id) {
+                        entry
+                            .pending_events
+                            .push(PlatformEvent::FileHover(std::path::PathBuf::new()));
+                    }
+                }
+            }
+        }
     }
     fn leave(
         &mut self,
@@ -1597,6 +1715,14 @@ impl DataDeviceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
     ) {
+        if let Some(proto_id) = self.dnd_enter_surface_id.take() {
+            if self.dnd_offer_has_uri_list {
+                if let Some(entry) = self.window_by_surface_mut(proto_id) {
+                    entry.pending_events.push(PlatformEvent::FileHoverCancelled);
+                }
+            }
+        }
+        self.dnd_offer_has_uri_list = false;
     }
     fn motion(
         &mut self,
@@ -1651,10 +1777,43 @@ impl DataDeviceHandler for WaylandState {
     }
     fn drop_performed(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
     ) {
+        let Some(surface_id) = self.dnd_enter_surface_id.take() else {
+            return;
+        };
+        let has_uri = self.dnd_offer_has_uri_list;
+        self.dnd_offer_has_uri_list = false;
+        if !has_uri {
+            return;
+        }
+        if let Some(dd) = &self.data_device {
+            if let Some(offer) = dd.data().drag_offer() {
+                if let Ok(mut pipe) = offer.receive(crate::linux_dnd::URI_LIST_MIME.to_owned()) {
+                    let _ = conn.flush();
+                    let tx = self.cmd_tx.clone();
+                    let wake = self.wake_signal.clone();
+                    std::thread::spawn(move || {
+                        let mut bytes = Vec::new();
+                        if pipe.read_to_end(&mut bytes).is_ok() {
+                            if let Ok(raw) = String::from_utf8(bytes) {
+                                let paths = crate::linux_dnd::decode_uri_list(&raw);
+                                if !paths.is_empty()
+                                    && tx
+                                        .send(WaylandCommand::FilesDropped { surface_id, paths })
+                                        .is_ok()
+                                {
+                                    wake.signal();
+                                }
+                            }
+                        }
+                    });
+                }
+                offer.finish();
+            }
+        }
     }
 }
 
@@ -1692,17 +1851,32 @@ impl DataSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
-        _mime: String,
+        mime: String,
         mut fd: WritePipe,
     ) {
-        let payload = self.clipboard_owned_text.as_bytes().to_vec();
+        let payload = if mime == crate::linux_dnd::URI_LIST_MIME {
+            self.dnd_outbound_uri_list.as_bytes().to_vec()
+        } else {
+            self.clipboard_owned_text.as_bytes().to_vec()
+        };
         std::thread::spawn(move || {
             let _ = fd.write_all(&payload);
         });
     }
 
-    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
-        self.clipboard_source = None;
+    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
+        if self
+            .dnd_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            self.dnd_source = None;
+            if let Some(reply) = self.dnd_outbound_reply.take() {
+                let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+            }
+        } else {
+            self.clipboard_source = None;
+        }
     }
 
     fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
@@ -1714,6 +1888,15 @@ impl DataSourceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
     ) {
+        self.dnd_source = None;
+        if let Some(reply) = self.dnd_outbound_reply.take() {
+            let effect = if self.dnd_outbound_action.contains(DndAction::Move) {
+                crate::overlay_host::FileDragEffect::Move
+            } else {
+                crate::overlay_host::FileDragEffect::Copy
+            };
+            let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Completed(effect));
+        }
     }
 
     fn action(
@@ -1721,8 +1904,9 @@ impl DataSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
-        _action: DndAction,
+        action: DndAction,
     ) {
+        self.dnd_outbound_action = action;
     }
 }
 
@@ -1829,6 +2013,10 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
+    crate::linux_dnd::register_linux_outbound_drag(Some(Arc::new(WaylandOutboundDragBridge {
+        cmd_tx: Mutex::new(cmd_tx.clone()),
+        wake_signal: wake_signal.clone(),
+    })));
 
     let mut wl = WaylandState {
         registry_state,
@@ -1842,6 +2030,12 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         clipboard_source: None,
         clipboard_owned_text: String::new(),
         clipboard_cache,
+        dnd_source: None,
+        dnd_outbound_uri_list: String::new(),
+        dnd_outbound_reply: None,
+        dnd_outbound_action: DndAction::empty(),
+        dnd_enter_surface_id: None,
+        dnd_offer_has_uri_list: false,
         seat: None,
         themed_pointer: None,
         keyboard: None,
