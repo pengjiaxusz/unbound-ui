@@ -24,6 +24,10 @@ use std::sync::Arc;
 use ash::vk;
 
 use crate::bc7_atlas::Bc7AtlasManager;
+use crate::custom_pass::{
+    clamp_render_scale, CustomViewportPass, ViewportDepthMode, ViewportId, ViewportMsaa,
+    ViewportPassContext, ViewportReadback, ViewportRenderPassDesc,
+};
 use crate::data::{
     BackdropCompositePush, BlurPush, FramePushConstants, GpuClipNode, GpuPayload,
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
@@ -43,6 +47,8 @@ const RADIX_BLOCK: u32 = 256;
 pub const MAX_DRAW_RUNS: u32 = 16;
 /// 写入命令缓冲区的阶段时间戳标记数量。
 const STAGE_MARKS: u32 = 6;
+/// 3D 视口离屏颜色附件格式（与托管外部纹理及 `uber.frag` 的 `srgb_to_linear` 路径保持一致）。
+const VIEWPORT_COLOR_FORMAT: vk::Format = vk::Format::R8G8B8A8_UNORM;
 
 /// 离屏渲染目标（颜色 + 深度）。
 #[derive(Debug)]
@@ -586,6 +592,249 @@ impl ManagedExternalTexture {
     }
 }
 
+/// 按物理设备帧缓冲采样能力解析实际生效的 3D 视口 MSAA 级别（不支持 4x 时安全回退至 1x）。
+fn resolve_viewport_msaa(gpu: &Gpu, requested: ViewportMsaa) -> ViewportMsaa {
+    match requested {
+        ViewportMsaa::X1 => ViewportMsaa::X1,
+        ViewportMsaa::X4 => {
+            let limits = gpu.properties.limits;
+            let supported =
+                limits.framebuffer_color_sample_counts & limits.framebuffer_depth_sample_counts;
+            if supported.contains(vk::SampleCountFlags::TYPE_4) {
+                ViewportMsaa::X4
+            } else {
+                ViewportMsaa::X1
+            }
+        }
+    }
+}
+
+/// 创建单个 3D 视口离屏图像、设备本地显存与 2D 图像视图（中途失败自动回滚）。
+#[allow(clippy::too_many_arguments)]
+unsafe fn create_viewport_image(
+    gpu: &Gpu,
+    width: u32,
+    height: u32,
+    format: vk::Format,
+    samples: vk::SampleCountFlags,
+    usage: vk::ImageUsageFlags,
+    is_depth: bool,
+) -> Result<(vk::Image, vk::DeviceMemory, vk::ImageView), GpuError> {
+    let device = &gpu.device;
+    let image = device
+        .create_image(
+            &vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(format)
+                .extent(vk::Extent3D {
+                    width: width.max(1),
+                    height: height.max(1),
+                    depth: 1,
+                })
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(samples)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(usage)
+                .initial_layout(vk::ImageLayout::UNDEFINED),
+            None,
+        )
+        .map_err(GpuError::from)?;
+    let requirements = device.get_image_memory_requirements(image);
+    let type_index = match gpu
+        .memory_type_index_for_bits(requirements.memory_type_bits, MemoryKind::DeviceLocal)
+    {
+        Some(index) => index,
+        None => {
+            device.destroy_image(image, None);
+            return Err(GpuError::Allocation(
+                "no device-local memory for viewport attachment".into(),
+            ));
+        }
+    };
+    let memory = match device.allocate_memory(
+        &vk::MemoryAllocateInfo::default()
+            .allocation_size(requirements.size)
+            .memory_type_index(type_index),
+        None,
+    ) {
+        Ok(memory) => memory,
+        Err(err) => {
+            device.destroy_image(image, None);
+            return Err(GpuError::from(err));
+        }
+    };
+    if let Err(err) = device.bind_image_memory(image, memory, 0) {
+        device.destroy_image(image, None);
+        device.free_memory(memory, None);
+        return Err(GpuError::from(err));
+    }
+    let aspect = if is_depth {
+        vk::ImageAspectFlags::DEPTH
+    } else {
+        vk::ImageAspectFlags::COLOR
+    };
+    let view = match device.create_image_view(
+        &vk::ImageViewCreateInfo::default()
+            .image(image)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .format(format)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(aspect)
+                    .level_count(1)
+                    .layer_count(1),
+            ),
+        None,
+    ) {
+        Ok(view) => view,
+        Err(err) => {
+            device.destroy_image(image, None);
+            device.free_memory(memory, None);
+            return Err(GpuError::from(err));
+        }
+    };
+    Ok((image, memory, view))
+}
+
+/// 单个离屏 3D 视口持有的颜色、可选 4x MSAA 与深度附件集合。
+#[derive(Debug)]
+struct ViewportAttachments {
+    width: u32,
+    height: u32,
+    sample_count: ViewportMsaa,
+    depth_mode: ViewportDepthMode,
+    /// 1x 解析后颜色图像（供 UI Bindless 采样与 CPU 回读）。
+    resolve_image: vk::Image,
+    resolve_memory: vk::DeviceMemory,
+    resolve_view: vk::ImageView,
+    resolve_layout: vk::ImageLayout,
+    /// 可选 4x MSAA 颜色附件（仅 `ViewportMsaa::X4` 时分配）。
+    msaa_color: Option<(vk::Image, vk::DeviceMemory, vk::ImageView)>,
+    /// 深度附件（采样数与 `sample_count` 一致）。
+    depth_image: vk::Image,
+    depth_memory: vk::DeviceMemory,
+    depth_view: vk::ImageView,
+}
+
+impl ViewportAttachments {
+    /// 分配指定尺寸、采样数与深度模式的离屏 3D 视口附件集合。
+    fn new(
+        gpu: &Gpu,
+        width: u32,
+        height: u32,
+        sample_count: ViewportMsaa,
+        depth_mode: ViewportDepthMode,
+    ) -> Result<Self, GpuError> {
+        // SAFETY: 顺序创建各附件图像；任意步骤失败立即销毁已创建资源防止泄漏。
+        unsafe {
+            let (resolve_image, resolve_memory, resolve_view) = create_viewport_image(
+                gpu,
+                width,
+                height,
+                VIEWPORT_COLOR_FORMAT,
+                vk::SampleCountFlags::TYPE_1,
+                vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC,
+                false,
+            )?;
+
+            let msaa_color = if sample_count == ViewportMsaa::X4 {
+                match create_viewport_image(
+                    gpu,
+                    width,
+                    height,
+                    VIEWPORT_COLOR_FORMAT,
+                    vk::SampleCountFlags::TYPE_4,
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    false,
+                ) {
+                    Ok(msaa) => Some(msaa),
+                    Err(err) => {
+                        gpu.device.destroy_image_view(resolve_view, None);
+                        gpu.device.destroy_image(resolve_image, None);
+                        gpu.device.free_memory(resolve_memory, None);
+                        return Err(err);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let (depth_image, depth_memory, depth_view) = match create_viewport_image(
+                gpu,
+                width,
+                height,
+                DEPTH_FORMAT,
+                sample_count.vk_sample_count(),
+                vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+                true,
+            ) {
+                Ok(depth) => depth,
+                Err(err) => {
+                    if let Some((img, mem, view)) = msaa_color {
+                        gpu.device.destroy_image_view(view, None);
+                        gpu.device.destroy_image(img, None);
+                        gpu.device.free_memory(mem, None);
+                    }
+                    gpu.device.destroy_image_view(resolve_view, None);
+                    gpu.device.destroy_image(resolve_image, None);
+                    gpu.device.free_memory(resolve_memory, None);
+                    return Err(err);
+                }
+            };
+
+            Ok(Self {
+                width,
+                height,
+                sample_count,
+                depth_mode,
+                resolve_image,
+                resolve_memory,
+                resolve_view,
+                resolve_layout: vk::ImageLayout::UNDEFINED,
+                msaa_color,
+                depth_image,
+                depth_memory,
+                depth_view,
+            })
+        }
+    }
+
+    /// 销毁全部视口附件图像、视图与显存。
+    ///
+    /// # Safety
+    /// 调用方须确保已无在飞命令缓冲区引用这些附件。
+    unsafe fn destroy(self, gpu: &Gpu) {
+        let device = &gpu.device;
+        if let Some((img, mem, view)) = self.msaa_color {
+            device.destroy_image_view(view, None);
+            device.destroy_image(img, None);
+            device.free_memory(mem, None);
+        }
+        device.destroy_image_view(self.depth_view, None);
+        device.destroy_image(self.depth_image, None);
+        device.free_memory(self.depth_memory, None);
+        device.destroy_image_view(self.resolve_view, None);
+        device.destroy_image(self.resolve_image, None);
+        device.free_memory(self.resolve_memory, None);
+    }
+}
+
+/// 渲染器托管的单个离屏 3D 视口实例与自定义 Pass 状态。
+#[derive(Debug)]
+struct ManagedViewport3D {
+    pass: Box<dyn CustomViewportPass>,
+    slot: u32,
+    desc: ViewportRenderPassDesc,
+    desired_extent: Option<(u32, u32)>,
+    attachments: Option<ViewportAttachments>,
+    /// 挂起等待前序在飞帧围栏退役后再切换 Bindless 绑定的新离屏附件。
+    pending_attachments: Option<ViewportAttachments>,
+    has_rendered: bool,
+}
+
 /// 按在飞帧代次对齐的通用延迟销毁队列（纯 CPU 状态机，便于无头单测）。
 #[derive(Debug)]
 pub(crate) struct DeferredDestroyQueue<T> {
@@ -941,6 +1190,12 @@ pub struct Renderer {
     managed_external: HashMap<u32, ManagedExternalTexture>,
     /// 已解绑等待在飞帧退役的托管外部纹理延迟销毁队列。
     deferred_external_destroys: DeferredDestroyQueue<ManagedExternalTexture>,
+    /// 已注册的自定义离屏 3D 视口渲染 Pass 映射表。
+    viewport_passes: HashMap<ViewportId, ManagedViewport3D>,
+    /// 视口重建或注销后等待在飞帧退役的旧附件延迟销毁队列。
+    deferred_viewport_destroys: DeferredDestroyQueue<ViewportAttachments>,
+    /// 累计录制的自定义 3D 视口 Pass 调度次数（供测试与诊断读取后清零）。
+    viewport_pass_dispatches: u32,
     /// 动态多页 BC7 图集与持久化异步 Staging 上传管理器。
     bc7_atlas: Bc7AtlasManager,
     /// 若已设置，则渲染到外部拥有的颜色附件。
@@ -1345,6 +1600,9 @@ impl Renderer {
             external_slots: ExternalTextureSlots::default(),
             managed_external: HashMap::new(),
             deferred_external_destroys: DeferredDestroyQueue::new(),
+            viewport_passes: HashMap::new(),
+            deferred_viewport_destroys: DeferredDestroyQueue::new(),
+            viewport_pass_dispatches: 0,
             bc7_atlas,
             external_color: None,
             external_color_format: COLOR_FORMAT,
@@ -1630,6 +1888,8 @@ impl Renderer {
         // 围栏等待完成后，至少 `frames_in_flight` 帧前解绑的托管外部纹理已不再被 GPU 引用。
         let completed_generation = self.frame_index.saturating_add(1);
         self.reclaim_deferred_external_textures(completed_generation);
+        self.reclaim_deferred_viewports(completed_generation);
+        self.promote_pending_viewport_attachments()?;
         self.bc7_atlas
             .reclaim_deferred(&self.gpu, &mut self.external_slots, completed_generation);
         self.sync_lut_slot(frame_slot)?;
@@ -2010,6 +2270,9 @@ impl Renderer {
         let active_graphics = self
             .pipelines
             .graphics_for_format(&self.gpu, active_format)?;
+
+        // 在 UI 主 Pass 开启前录制全部活跃的离屏 3D 视口 Pass，确保同帧 UI 可直接采样无黑帧。
+        self.record_custom_viewport_passes(cmd);
 
         let n = scene.primitives.len() as u32;
         if let Some(split_z) = backdrop_overlay_split_z(scene.backdrops) {
@@ -2746,6 +3009,554 @@ impl Renderer {
     #[must_use]
     pub const fn external_texture_count(&self) -> u32 {
         self.external_slots.used()
+    }
+
+    /// 注册自定义离屏 3D 视口渲染 Pass 并返回其分配的 Bindless 槽位。
+    ///
+    /// 若同一 [`ViewportId`] 已注册，则保留既有 Bindless 槽位与离屏附件，仅替换 Pass 实现并更新描述符。
+    ///
+    /// # Errors
+    /// 当外部 Bindless 槽位耗尽或绑定占位视图失败时返回 [`GpuError`]。
+    pub fn register_viewport_pass(
+        &mut self,
+        pass: Box<dyn CustomViewportPass>,
+    ) -> Result<u32, GpuError> {
+        let id = pass.viewport_id();
+        let mut desc = pass.render_pass_desc();
+        desc.viewport_id = id;
+        desc.render_scale = clamp_render_scale(desc.render_scale);
+
+        if let Some(existing) = self.viewport_passes.get_mut(&id) {
+            desc.bindless_slot = existing.slot;
+            existing.pass = pass;
+            existing.desc = desc;
+            return Ok(existing.slot);
+        }
+
+        let slot = self.external_slots.allocate().ok_or_else(|| {
+            GpuError::InvalidArgument(format!(
+                "all {} external bindless slots are in use",
+                crate::pipeline::EXTERNAL_TEXTURE_SLOTS
+            ))
+        })?;
+        if let Err(error) = self.pipelines.unbind_external_texture(&self.gpu, slot) {
+            self.external_slots.release(slot);
+            return Err(error);
+        }
+        desc.bindless_slot = slot;
+        self.viewport_passes.insert(
+            id,
+            ManagedViewport3D {
+                pass,
+                slot,
+                desc,
+                desired_extent: None,
+                attachments: None,
+                pending_attachments: None,
+                has_rendered: false,
+            },
+        );
+        Ok(slot)
+    }
+
+    /// 注销指定 3D 视口 Pass：解绑并归还 Bindless 槽位，旧离屏附件推入延迟销毁队列。
+    ///
+    /// # Errors
+    /// 当 `id` 未注册或解绑描述符槽位失败时返回 [`GpuError`]。
+    pub fn unregister_viewport_pass(&mut self, id: ViewportId) -> Result<(), GpuError> {
+        let Some(entry) = self.viewport_passes.remove(&id) else {
+            return Err(GpuError::InvalidArgument(format!(
+                "viewport pass {} is not registered",
+                id.raw()
+            )));
+        };
+        if let Err(error) = self
+            .pipelines
+            .unbind_external_texture(&self.gpu, entry.slot)
+        {
+            self.viewport_passes.insert(id, entry);
+            return Err(error);
+        }
+        self.external_slots.release(entry.slot);
+        if let Some(pending) = entry.pending_attachments {
+            // SAFETY: 挂起附件尚未绑定到描述符集，无在飞帧引用，可直接销毁。
+            unsafe { pending.destroy(&self.gpu) };
+        }
+        if let Some(attachments) = entry.attachments {
+            self.deferred_viewport_destroys.defer(
+                self.frame_index,
+                self.gpu.frames_in_flight(),
+                attachments,
+            );
+        }
+        Ok(())
+    }
+
+    /// 仅更新已注册 3D 视口的布局矩形、渲染缩放与物理尺寸，保留自定义 Pass 自身的
+    /// `sample_count`、`depth_mode`、`clear_color` 与 `camera` 等渲染描述符配置。
+    ///
+    /// # Errors
+    /// 当 `id` 未注册或底层附件同步失败时返回 [`GpuError`]。
+    pub fn sync_viewport_layout(
+        &mut self,
+        id: ViewportId,
+        bounds: unbound_math::Rect,
+        render_scale: f32,
+        physical_extent: Option<(u32, u32)>,
+    ) -> Result<Option<u32>, GpuError> {
+        let mut desc = {
+            let Some(entry) = self.viewport_passes.get(&id) else {
+                return Err(GpuError::InvalidArgument(format!(
+                    "viewport pass {} is not registered",
+                    id.raw()
+                )));
+            };
+            entry.pass.render_pass_desc()
+        };
+        desc.bounds = bounds;
+        desc.render_scale = clamp_render_scale(render_scale);
+        self.sync_viewport_target(id, desc, physical_extent)
+    }
+
+    /// 同步指定 3D 视口的渲染描述与目标物理尺寸，按需创建新附件并挂起等待安全绑定。
+    ///
+    /// * 当 `physical_extent` 为 `None`（或宽高含 `0`）时，仅将本帧标记为非活跃并跳过录制，
+    ///   保留视口注册与既有槽位不释放；
+    /// * 当尺寸、实际生效的 MSAA 采样数或深度模式变化时，先创建新附件暂存于 `pending_attachments`，
+    ///   待 [`Self::render`] 完成 [`Self::wait_for_previous_frame`] 后再切换 Bindless 槽位并将旧附件
+    ///   推入 [`Self::deferred_viewport_destroys`]，彻底消除在飞帧描述符更新竞态与未初始化采样风险。
+    ///
+    /// # Errors
+    /// 当 `id` 未注册或离屏附件创建失败时返回 [`GpuError`]。
+    pub fn sync_viewport_target(
+        &mut self,
+        id: ViewportId,
+        mut desc: ViewportRenderPassDesc,
+        physical_extent: Option<(u32, u32)>,
+    ) -> Result<Option<u32>, GpuError> {
+        let Some(entry) = self.viewport_passes.get_mut(&id) else {
+            return Err(GpuError::InvalidArgument(format!(
+                "viewport pass {} is not registered",
+                id.raw()
+            )));
+        };
+        desc.viewport_id = id;
+        desc.bindless_slot = entry.slot;
+        desc.render_scale = clamp_render_scale(desc.render_scale);
+        entry.desc = desc;
+
+        let sanitized_extent = physical_extent.filter(|&(w, h)| w > 0 && h > 0);
+        entry.desired_extent = sanitized_extent;
+        let Some((w, h)) = sanitized_extent else {
+            return Ok(None);
+        };
+
+        let effective_msaa = resolve_viewport_msaa(&self.gpu, desc.sample_count);
+        let target_att = entry
+            .pending_attachments
+            .as_ref()
+            .or(entry.attachments.as_ref());
+        let needs_recreate = match target_att {
+            Some(att) => {
+                att.width != w
+                    || att.height != h
+                    || att.sample_count != effective_msaa
+                    || att.depth_mode != desc.depth_mode
+            }
+            None => true,
+        };
+        if needs_recreate {
+            let new_attachments =
+                ViewportAttachments::new(&self.gpu, w, h, effective_msaa, desc.depth_mode)?;
+            if let Some(superseded) = entry.pending_attachments.replace(new_attachments) {
+                // SAFETY: 被覆盖的挂起附件从未绑定到描述符集，无在飞帧引用，可直接销毁。
+                unsafe { superseded.destroy(&self.gpu) };
+            }
+        }
+        Ok(Some(entry.slot))
+    }
+
+    /// 查询指定 3D 视口可供 UI 采样的 Bindless 槽位（仅在完成首帧渲染且附件就绪后返回 `Some`）。
+    #[must_use]
+    pub fn viewport_bindless_slot(&self, id: ViewportId) -> Option<u32> {
+        self.viewport_passes.get(&id).and_then(|entry| {
+            if entry.has_rendered && entry.attachments.is_some() {
+                Some(entry.slot)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// 取出并清零累计录制的自定义 3D 视口 Pass 调度次数。
+    #[must_use]
+    pub fn take_viewport_pass_dispatches(&mut self) -> u32 {
+        core::mem::take(&mut self.viewport_pass_dispatches)
+    }
+
+    /// 返回当前全部已注册 3D 视口标识（按 [`ViewportId`] 升序排列）。
+    #[must_use]
+    pub fn viewport_ids(&self) -> Vec<ViewportId> {
+        let mut ids: Vec<ViewportId> = self.viewport_passes.keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// 当前处于延迟销毁队列中等待在飞帧退役的 3D 视口附件数量。
+    #[must_use]
+    pub fn pending_viewport_destroys(&self) -> usize {
+        self.deferred_viewport_destroys.len()
+    }
+
+    /// 将指定 3D 视口的解析后离屏颜色图像回读为紧凑 RGBA8 像素数组。
+    ///
+    /// # Errors
+    /// 当视口未注册、尚未渲染过或底层 Vulkan 传输失败时返回 [`GpuError`]。
+    pub fn readback_viewport_rgba8(
+        &mut self,
+        id: ViewportId,
+    ) -> Result<ViewportReadback, GpuError> {
+        let (image, width, height) = {
+            let Some(entry) = self.viewport_passes.get(&id) else {
+                return Err(GpuError::InvalidArgument(format!(
+                    "viewport pass {} is not registered",
+                    id.raw()
+                )));
+            };
+            let Some(att) = entry.attachments.as_ref() else {
+                return Err(GpuError::InvalidArgument(format!(
+                    "viewport pass {} has no allocated attachments",
+                    id.raw()
+                )));
+            };
+            if !entry.has_rendered
+                || att.resolve_layout != vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL
+            {
+                return Err(GpuError::InvalidArgument(format!(
+                    "viewport pass {} has not rendered yet",
+                    id.raw()
+                )));
+            }
+            (att.resolve_image, att.width, att.height)
+        };
+
+        let stride = width.checked_mul(4).ok_or_else(|| {
+            GpuError::InvalidArgument(format!(
+                "viewport readback stride overflow for width {width}"
+            ))
+        })?;
+        let byte_len = u64::from(stride)
+            .checked_mul(u64::from(height))
+            .ok_or_else(|| {
+                GpuError::InvalidArgument(format!(
+                    "viewport readback byte size overflow for {width}x{height}"
+                ))
+            })?;
+
+        self.gpu.wait_idle();
+        let staging = self.gpu.create_buffer(
+            byte_len,
+            vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryKind::HostVisible,
+            "viewport-readback-staging",
+        )?;
+
+        let device = &self.gpu.device;
+        // SAFETY: 设备已空闲且临时宿主可见缓冲区由本次回读独占，拷贝完成后立即读取并销毁。
+        let copy_result: Result<ViewportReadback, GpuError> = (|| unsafe {
+            let cmd = self.gpu.begin_single_time()?;
+            let to_src = [image_barrier(
+                image,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                vk::PipelineStageFlags2::COPY,
+                vk::AccessFlags2::TRANSFER_READ,
+                false,
+            )];
+            device.cmd_pipeline_barrier2(
+                *cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_src),
+            );
+            device.cmd_copy_image_to_buffer(
+                *cmd,
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                staging.raw,
+                &[vk::BufferImageCopy::default()
+                    .buffer_offset(0)
+                    .buffer_row_length(width)
+                    .buffer_image_height(height)
+                    .image_subresource(
+                        vk::ImageSubresourceLayers::default()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .layer_count(1),
+                    )
+                    .image_extent(vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    })],
+            );
+            let to_shader_read = [image_barrier(
+                image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::PipelineStageFlags2::COPY,
+                vk::AccessFlags2::TRANSFER_READ,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                false,
+            )];
+            device.cmd_pipeline_barrier2(
+                *cmd,
+                &vk::DependencyInfo::default().image_memory_barriers(&to_shader_read),
+            );
+            self.gpu.end_single_time(cmd)?;
+
+            let len_usize = usize::try_from(byte_len).map_err(|_| {
+                GpuError::InvalidArgument(format!(
+                    "viewport readback size {byte_len} overflows usize"
+                ))
+            })?;
+            let mut rgba8 = vec![0u8; len_usize];
+            let Some(src_ptr) = staging.host_ptr(0) else {
+                return Err(GpuError::Allocation(
+                    "viewport readback staging buffer is not mapped".into(),
+                ));
+            };
+            core::ptr::copy_nonoverlapping(src_ptr, rgba8.as_mut_ptr(), len_usize);
+            Ok(ViewportReadback {
+                width,
+                height,
+                stride,
+                rgba8,
+            })
+        })();
+
+        // SAFETY: 单次传输命令缓冲区已同步执行完毕，可安全释放临时暂存缓冲区。
+        unsafe { self.gpu.destroy_buffer(&staging) };
+        copy_result
+    }
+
+    /// 回收已完成全部在飞帧引用的延迟销毁 3D 视口附件。
+    fn reclaim_deferred_viewports(&mut self, completed_generation: u64) {
+        let gpu = &self.gpu;
+        self.deferred_viewport_destroys
+            .drain_ready_with(completed_generation, |attachments| {
+                // SAFETY: 对应在飞帧围栏已退役，GPU 不再引用这些视口附件。
+                unsafe { attachments.destroy(gpu) };
+            });
+    }
+
+    /// 在前序帧围栏退役后，将挂起的新离屏视口附件提升为活跃附件并安全绑定至 Bindless 槽位。
+    fn promote_pending_viewport_attachments(&mut self) -> Result<(), GpuError> {
+        if self.viewport_passes.is_empty() {
+            return Ok(());
+        }
+        let mut ids: Vec<ViewportId> = self.viewport_passes.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let Some(entry) = self.viewport_passes.get_mut(&id) else {
+                continue;
+            };
+            let Some(new_attachments) = entry.pending_attachments.take() else {
+                continue;
+            };
+            if let Err(error) = self.pipelines.bind_external_texture(
+                &self.gpu,
+                entry.slot,
+                new_attachments.resolve_view,
+                self.pipelines.sampler,
+            ) {
+                entry.pending_attachments = Some(new_attachments);
+                return Err(error);
+            }
+            if let Some(old_attachments) = entry.attachments.replace(new_attachments) {
+                self.deferred_viewport_destroys.defer(
+                    self.frame_index,
+                    self.gpu.frames_in_flight(),
+                    old_attachments,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// 按 [`ViewportId`] 确定性升序录制全部活跃的离屏 3D 视口自定义 Pass。
+    fn record_custom_viewport_passes(&mut self, cmd: vk::CommandBuffer) {
+        if self.viewport_passes.is_empty() {
+            return;
+        }
+        let mut ids: Vec<ViewportId> = self.viewport_passes.keys().copied().collect();
+        ids.sort_unstable();
+
+        let device = &self.gpu.device;
+        for id in ids {
+            let Some(entry) = self.viewport_passes.get_mut(&id) else {
+                continue;
+            };
+            if entry.desired_extent.is_none() {
+                continue;
+            }
+            let Some(att) = entry.attachments.as_mut() else {
+                continue;
+            };
+
+            let (resolve_src_stage, resolve_src_access) =
+                if att.resolve_layout == vk::ImageLayout::UNDEFINED {
+                    (vk::PipelineStageFlags2::TOP_OF_PIPE, vk::AccessFlags2::NONE)
+                } else {
+                    (
+                        vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                        vk::AccessFlags2::SHADER_SAMPLED_READ,
+                    )
+                };
+
+            let mut pre_barriers = Vec::with_capacity(3);
+            pre_barriers.push(image_barrier(
+                att.resolve_image,
+                att.resolve_layout,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                resolve_src_stage,
+                resolve_src_access,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                false,
+            ));
+            if let Some((msaa_img, _, _)) = att.msaa_color {
+                pre_barriers.push(image_barrier(
+                    msaa_img,
+                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::NONE,
+                    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    false,
+                ));
+            }
+            pre_barriers.push(image_barrier(
+                att.depth_image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL,
+                vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::AccessFlags2::NONE,
+                vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
+                    | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                true,
+            ));
+
+            let clear_color = vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: entry.desc.clear_color,
+                },
+            };
+            let color_attachment = if let Some((_, _, msaa_view)) = att.msaa_color {
+                vk::RenderingAttachmentInfo::default()
+                    .image_view(msaa_view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .resolve_mode(vk::ResolveModeFlags::AVERAGE)
+                    .resolve_image_view(att.resolve_view)
+                    .resolve_image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                    .clear_value(clear_color)
+            } else {
+                vk::RenderingAttachmentInfo::default()
+                    .image_view(att.resolve_view)
+                    .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::CLEAR)
+                    .store_op(vk::AttachmentStoreOp::STORE)
+                    .clear_value(clear_color)
+            };
+            let color_attachments = [color_attachment];
+
+            let clear_depth = vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: att.depth_mode.clear_depth(),
+                    stencil: 0,
+                },
+            };
+            let depth_attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(att.depth_view)
+                .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .clear_value(clear_depth);
+
+            let render_area = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: vk::Extent2D {
+                    width: att.width,
+                    height: att.height,
+                },
+            };
+            let rendering_info = vk::RenderingInfo::default()
+                .render_area(render_area)
+                .layer_count(1)
+                .color_attachments(&color_attachments)
+                .depth_attachment(&depth_attachment);
+
+            let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: att.width as f32,
+                height: att.height as f32,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            };
+
+            // SAFETY: 命令缓冲区由当前帧独占，附件均处于有效生命周期且已完成布局转换。
+            unsafe {
+                device.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().image_memory_barriers(&pre_barriers),
+                );
+                device.cmd_begin_rendering(cmd, &rendering_info);
+                device.cmd_set_viewport(cmd, 0, &[viewport]);
+                device.cmd_set_scissor(cmd, 0, &[render_area]);
+            }
+
+            let ctx = ViewportPassContext {
+                device,
+                cmd,
+                extent: (att.width, att.height),
+                color_format: VIEWPORT_COLOR_FORMAT,
+                depth_format: DEPTH_FORMAT,
+                sample_count: att.sample_count,
+                desc: &entry.desc,
+            };
+            entry.pass.record_pass(&ctx);
+
+            let post_barriers = [image_barrier(
+                att.resolve_image,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                vk::PipelineStageFlags2::FRAGMENT_SHADER,
+                vk::AccessFlags2::SHADER_SAMPLED_READ,
+                false,
+            )];
+            // SAFETY: 结束本次动态渲染 Pass 并将解析后颜色图像转为片元着色器只读采样布局。
+            unsafe {
+                device.cmd_end_rendering(cmd);
+                device.cmd_pipeline_barrier2(
+                    cmd,
+                    &vk::DependencyInfo::default().image_memory_barriers(&post_barriers),
+                );
+            }
+
+            att.resolve_layout = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
+            entry.has_rendered = true;
+            self.viewport_pass_dispatches = self.viewport_pass_dispatches.saturating_add(1);
+        }
     }
 
     /// 返回当前设备的压缩纹理（BC7）硬件能力与生效后端快照。
@@ -3693,11 +4504,30 @@ impl Renderer {
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
         }
-        // 管线描述符集引用了图集视图，因此必须先销毁管线，再释放图集与设备。
         let mut this = self;
+        // 管线描述符集引用了外部纹理与 3D 视口视图；先销毁管线与描述符池，再释放底层图像与视图。
         // SAFETY: 设备处于空闲状态。
         unsafe {
             this.pipelines.destroy(&this.gpu);
+        }
+        // 清空全部存活、挂起及延迟销毁队列中的 3D 视口附件，避免任何显存或句柄泄漏。
+        for (_, entry) in this.viewport_passes.drain() {
+            if let Some(pending) = entry.pending_attachments {
+                // SAFETY: 设备已空闲且管线已销毁，可直接销毁挂起的 3D 视口附件。
+                unsafe { pending.destroy(&this.gpu) };
+            }
+            if let Some(attachments) = entry.attachments {
+                // SAFETY: 设备已空闲且管线已销毁，可直接销毁存活的 3D 视口附件。
+                unsafe { attachments.destroy(&this.gpu) };
+            }
+        }
+        {
+            let gpu = &this.gpu;
+            this.deferred_viewport_destroys
+                .drain_all_with(|attachments| {
+                    // SAFETY: 设备已空闲且管线已销毁，可立即排空全部延迟销毁的 3D 视口附件。
+                    unsafe { attachments.destroy(gpu) };
+                });
         }
         // 清空全部存活及延迟销毁队列中的托管外部纹理，避免任何显存或句柄泄漏。
         for (_, texture) in this.managed_external.drain() {
@@ -5238,5 +6068,301 @@ mod tests {
             },
         ];
         assert_eq!(backdrop_overlay_split_z(&mixed), Some(1100));
+    }
+
+    /// 供无头 Vulkan 单测使用的最小 3D 视口 Pass（依赖 Dynamic Rendering 清屏并计数回调次数）。
+    #[derive(Debug)]
+    struct TestClearViewportPass {
+        id: ViewportId,
+        calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl CustomViewportPass for TestClearViewportPass {
+        fn viewport_id(&self) -> ViewportId {
+            self.id
+        }
+
+        fn record_pass(&mut self, _ctx: &ViewportPassContext<'_>) {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// 构造采样指定 Bindless 槽位的全尺寸 `PrimType::Image` 图元。
+    fn image_quad(x: f32, y: f32, w: f32, h: f32, slot: u32, z: u16) -> GpuPrimitiveInstance {
+        GpuPrimitiveInstance {
+            chunk_id: [0, 0],
+            local_pos: [x, y],
+            size: [w, h],
+            corner_radii: [0, 0, 0, 0],
+            border_width: 0,
+            shadow_blur: 0,
+            transform_idx: 0,
+            clip_idx: crate::data::CLIP_NONE,
+            fill_token_or_uv: u32::from(unbound_theme::Token::NONE.raw()),
+            border_token_or_tex: slot,
+            prim_type_and_flags: GpuPrimitiveInstance::pack_type(
+                crate::data::PrimType::Image,
+                crate::data::BlendMode::Normal,
+                PrimFlags::with_sub(SubElement::Content, PrimFlags::EMPTY).bits(),
+            ),
+            z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(z, 1.0),
+            extra_payload_idx: 0,
+        }
+    }
+
+    /// 验证单采样与 4x MSAA 离屏清屏、RGBA8 回读以及 `alpha = 0.0` 透明合成叠加 UI 背景。
+    #[test]
+    fn viewport_3d_offscreen_clear_msaa_and_transparent_composite_work() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let id = ViewportId::new(10);
+        let slot = renderer
+            .register_viewport_pass(Box::new(TestClearViewportPass {
+                id,
+                calls: Arc::clone(&calls),
+            }))
+            .expect("register viewport pass");
+        assert!(ExternalTextureSlots::owns(slot));
+        assert_eq!(renderer.viewport_bindless_slot(id), None);
+
+        // 1. 单采样清屏并验证像素回读。
+        let mut desc = ViewportRenderPassDesc::new(id);
+        desc.sample_count = ViewportMsaa::X1;
+        desc.depth_mode = ViewportDepthMode::Standard;
+        desc.clear_color = [1.0, 0.25, 0.0, 1.0];
+        let synced_slot = renderer
+            .sync_viewport_target(id, desc, Some((32, 24)))
+            .expect("sync x1 viewport");
+        assert_eq!(synced_slot, Some(slot));
+        // 首帧离屏渲染完成前不得向 UI 暴露 Bindless 槽位，避免采样 UNDEFINED 图像。
+        assert_eq!(renderer.viewport_bindless_slot(id), None);
+
+        renderer
+            .render(&scene_at(&[], &[], 1, (64.0, 64.0)))
+            .expect("render x1");
+        assert_eq!(renderer.viewport_bindless_slot(id), Some(slot));
+        assert_eq!(renderer.take_viewport_pass_dispatches(), 1);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        let rb_x1 = renderer.readback_viewport_rgba8(id).expect("readback x1");
+        assert_eq!(rb_x1.width, 32);
+        assert_eq!(rb_x1.height, 24);
+        assert_eq!(rb_x1.stride, 32 * 4);
+        assert_eq!(rb_x1.rgba8.len(), (32 * 24 * 4) as usize);
+        let px1 = &rb_x1.rgba8[0..4];
+        assert!(px1[0] >= 250 && px1[1].abs_diff(64) <= 2 && px1[2] <= 2 && px1[3] >= 250);
+
+        // 2. 切换为 4x MSAA + Reverse-Z 深度并验证解析后像素。
+        desc.sample_count = ViewportMsaa::X4;
+        desc.depth_mode = ViewportDepthMode::ReverseZ;
+        desc.clear_color = [0.0, 1.0, 0.5, 1.0];
+        renderer
+            .sync_viewport_target(id, desc, Some((32, 24)))
+            .expect("sync x4 viewport");
+        renderer
+            .render(&scene_at(&[], &[], 2, (64.0, 64.0)))
+            .expect("render x4");
+        assert_eq!(renderer.take_viewport_pass_dispatches(), 1);
+
+        let rb_x4 = renderer.readback_viewport_rgba8(id).expect("readback x4");
+        let px4 = &rb_x4.rgba8[0..4];
+        assert!(px4[0] <= 2 && px4[1] >= 250 && px4[2].abs_diff(128) <= 2 && px4[3] >= 250);
+
+        // 3. 透明 `alpha = 0.0` 清屏叠加在 UI 背景矩形之上，背景颜色必须透出。
+        let bg = quad(
+            0.0,
+            0.0,
+            64.0,
+            64.0,
+            u32::from(unbound_theme::Token::ACCENT.raw()),
+        );
+        let bg_only = [bg];
+        renderer
+            .render(&scene_at(&bg_only, &[], 3, (64.0, 64.0)))
+            .expect("render ui background baseline");
+        let baseline_pixels = renderer.read_pixels().expect("read baseline");
+        let center_idx = ((32 * 64 + 32) * 4) as usize;
+        let baseline_center = baseline_pixels[center_idx..center_idx + 4].to_vec();
+
+        desc.clear_color = [0.0, 0.0, 0.0, 0.0];
+        renderer
+            .sync_viewport_target(id, desc, Some((32, 32)))
+            .expect("sync transparent viewport");
+        let img = image_quad(0.0, 0.0, 64.0, 64.0, slot, 1100);
+        let prims = [bg, img];
+        let payloads = [GpuPayload {
+            p0: [0.0, 0.0],
+            p1: [1.0, 1.0],
+            p2: [0.0, 0.0],
+            line_width: 0.0,
+            extra: 0,
+            flags: 0,
+            _reserved: [0; 3],
+        }];
+        let composite_scene = SceneUpload {
+            payloads: &payloads,
+            ..scene_at(&prims, &[], 4, (64.0, 64.0))
+        };
+        renderer
+            .render(&composite_scene)
+            .expect("render transparent composite");
+
+        let rb_alpha = renderer
+            .readback_viewport_rgba8(id)
+            .expect("readback transparent viewport");
+        assert_eq!(&rb_alpha.rgba8[0..4], &[0, 0, 0, 0]);
+
+        let composite_pixels = renderer.read_pixels().expect("read composite");
+        let composite_center = &composite_pixels[center_idx..center_idx + 4];
+        for c in 0..4 {
+            assert!(
+                composite_center[c].abs_diff(baseline_center[c]) <= 2,
+                "transparent viewport should preserve UI background at channel {c}: got {:?}, expected {:?}",
+                composite_center,
+                baseline_center
+            );
+        }
+        renderer.destroy();
+    }
+
+    /// 验证连续调整视口尺寸与 `render_scale` 时旧附件按 `frames_in_flight` 延迟回收且回读尺寸一致。
+    #[test]
+    fn viewport_3d_resize_and_render_scale_defer_old_attachments() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let frames_in_flight = gpu.frames_in_flight();
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        let id = ViewportId::new(20);
+        let calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        renderer
+            .register_viewport_pass(Box::new(TestClearViewportPass {
+                id,
+                calls: Arc::clone(&calls),
+            }))
+            .expect("register viewport");
+
+        let steps = [
+            (64.0_f32, 48.0_f32, 1.0_f32),
+            (80.0, 60.0, 0.5),
+            (60.0, 40.0, 0.75),
+        ];
+        for (idx, (lw, lh, rs)) in steps.into_iter().enumerate() {
+            let extent = crate::custom_pass::compute_viewport_physical_extent(lw, lh, 1.0, rs)
+                .expect("valid extent");
+            let mut desc = ViewportRenderPassDesc::new(id);
+            desc.render_scale = rs;
+            desc.clear_color = [0.2, 0.4, 0.8, 1.0];
+            renderer
+                .sync_viewport_target(id, desc, Some(extent))
+                .expect("sync resized viewport");
+            renderer
+                .render(&scene_at(&[], &[], (idx as u64) + 1, (64.0, 64.0)))
+                .expect("render resized step");
+            // 旧附件在 `render` 等待前帧围栏退役并切换新绑定时进入延迟销毁队列。
+            if idx > 0 {
+                assert!(renderer.pending_viewport_destroys() >= 1);
+            }
+            let rb = renderer
+                .readback_viewport_rgba8(id)
+                .expect("readback resized viewport");
+            assert_eq!((rb.width, rb.height), extent);
+            assert_eq!(rb.stride, extent.0 * 4);
+        }
+
+        // 推进足够多稳态帧后，延迟销毁队列必须自动排空。
+        for step in 0..=frames_in_flight {
+            renderer
+                .render(&scene_at(&[], &[], 10 + u64::from(step), (64.0, 64.0)))
+                .expect("steady frame");
+        }
+        assert_eq!(renderer.pending_viewport_destroys(), 0);
+
+        // 将本帧目标尺寸置为 None 时跳过录制，但保持视口注册。
+        let _ = renderer.take_viewport_pass_dispatches();
+        renderer
+            .sync_viewport_target(id, ViewportRenderPassDesc::new(id), None)
+            .expect("pause viewport");
+        renderer
+            .render(&scene_at(&[], &[], 100, (64.0, 64.0)))
+            .expect("render paused frame");
+        assert_eq!(renderer.take_viewport_pass_dispatches(), 0);
+        assert_eq!(renderer.viewport_ids(), vec![id]);
+
+        renderer
+            .unregister_viewport_pass(id)
+            .expect("unregister viewport");
+        assert!(renderer.viewport_ids().is_empty());
+        assert_eq!(renderer.pending_viewport_destroys(), 1);
+        renderer.destroy();
+    }
+
+    /// 验证多实例 3D 视口拥有独立 Bindless 槽位、独立附件尺寸与互不串扰的 RGBA8 回读结果。
+    #[test]
+    fn viewport_3d_multi_instance_have_independent_slots_and_readbacks() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        let id1 = ViewportId::new(1);
+        let id2 = ViewportId::new(2);
+        let calls1 = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let calls2 = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let slot2 = renderer
+            .register_viewport_pass(Box::new(TestClearViewportPass {
+                id: id2,
+                calls: Arc::clone(&calls2),
+            }))
+            .expect("register viewport 2");
+        let slot1 = renderer
+            .register_viewport_pass(Box::new(TestClearViewportPass {
+                id: id1,
+                calls: Arc::clone(&calls1),
+            }))
+            .expect("register viewport 1");
+        assert_ne!(slot1, slot2);
+        assert_eq!(renderer.viewport_ids(), vec![id1, id2]);
+
+        let mut desc1 = ViewportRenderPassDesc::new(id1);
+        desc1.clear_color = [1.0, 0.0, 0.0, 1.0];
+        let mut desc2 = ViewportRenderPassDesc::new(id2);
+        desc2.clear_color = [0.0, 0.0, 1.0, 1.0];
+
+        assert_eq!(
+            renderer
+                .sync_viewport_target(id1, desc1, Some((32, 32)))
+                .expect("sync id1"),
+            Some(slot1)
+        );
+        assert_eq!(
+            renderer
+                .sync_viewport_target(id2, desc2, Some((48, 24)))
+                .expect("sync id2"),
+            Some(slot2)
+        );
+
+        renderer
+            .render(&scene_at(&[], &[], 1, (64.0, 64.0)))
+            .expect("render multi viewport");
+        assert_eq!(renderer.take_viewport_pass_dispatches(), 2);
+        assert_eq!(calls1.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(calls2.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        let rb1 = renderer.readback_viewport_rgba8(id1).expect("readback id1");
+        let rb2 = renderer.readback_viewport_rgba8(id2).expect("readback id2");
+        assert_eq!((rb1.width, rb1.height), (32, 32));
+        assert_eq!((rb2.width, rb2.height), (48, 24));
+        assert!(rb1.rgba8[0] >= 250 && rb1.rgba8[2] <= 2 && rb1.rgba8[3] >= 250);
+        assert!(rb2.rgba8[0] <= 2 && rb2.rgba8[2] >= 250 && rb2.rgba8[3] >= 250);
+
+        renderer.destroy();
     }
 }

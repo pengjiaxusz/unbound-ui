@@ -7,7 +7,7 @@
 //! 2. [`WidgetCatalogId::from_winui3_name`] 按官方规范名反查目录标识；
 //! 3. [`WidgetCatalogId::class`] 区分基准对齐控件、Community Toolkit 控件与
 //!    自有独有控件，供批量差分与风格巡检筛选；
-//! 4. [`WidgetCatalogId::capabilities`] 声明全部 133 个变体的 [`WidgetCapabilities`]
+//! 4. [`WidgetCatalogId::capabilities`] 声明全部 134 个变体的 [`WidgetCapabilities`]
 //!    （含 [`OverflowStrategy`]、文本截断、浮层贴边翻转与几何动画标记，遵循 ADR-0031）。
 //!
 //! 所有映射均为无通配符穷举 `match`，新增目录变体时若不在此处归类会直接触发 `E0004` 编译失败。
@@ -306,7 +306,7 @@ pub const BASELINE_COUNT: usize = 70;
 pub const TOOLKIT_COUNT: usize = 20;
 
 /// Unbound 自有独有控件总数。
-pub const EXCLUSIVE_COUNT: usize = 43;
+pub const EXCLUSIVE_COUNT: usize = 44;
 
 impl WidgetCatalogId {
     /// 返回该控件所属的功能分类（编译期穷举，禁止通配符）。
@@ -446,7 +446,8 @@ impl WidgetCatalogId {
             | Self::TimelineTrack
             | Self::CodeBlock
             | Self::CodeEditor
-            | Self::TerminalView => ControlCategory::CanvasGraphAndDevTools,
+            | Self::TerminalView
+            | Self::Viewport3D => ControlCategory::CanvasGraphAndDevTools,
         }
     }
 
@@ -630,6 +631,7 @@ impl WidgetCatalogId {
             | Self::Ruler
             | Self::SplitPane
             | Self::TimelineTrack
+            | Self::Viewport3D
             | Self::Watermark => WidgetCapabilities::NONE,
         }
     }
@@ -711,7 +713,8 @@ impl WidgetCatalogId {
             | Self::Banner
             | Self::Callout
             | Self::Popconfirm
-            | Self::Tour => ControlClass::Exclusive,
+            | Self::Tour
+            | Self::Viewport3D => ControlClass::Exclusive,
 
             // 其余全部为 WinUI 3 基准对齐控件。
             Self::ExpanderGroup
@@ -898,6 +901,7 @@ impl WidgetCatalogId {
             Self::Tour => "Tour",
             Self::Transfer => "Transfer",
             Self::TreeTable => "TreeTable",
+            Self::Viewport3D => "Viewport3D",
             Self::Watermark => "Watermark",
 
             // P1：后续补齐的 WinUI 3 官方控件。
@@ -1048,8 +1052,8 @@ mod tests {
     }
 
     #[test]
-    fn capability_matrix_covers_all_133_variants_and_adr_0031_contracts() {
-        assert_eq!(WidgetCatalogId::COUNT, 133);
+    fn capability_matrix_covers_all_134_variants_and_adr_0031_contracts() {
+        assert_eq!(WidgetCatalogId::COUNT, 134);
 
         assert_eq!(
             WidgetCatalogId::ScrollView.capabilities().overflow,
@@ -1103,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn control_categories_partition_all_133_variants() {
+    fn control_categories_partition_all_134_variants() {
         assert_eq!(ControlCategory::ALL.len(), 10);
         let mut sum = 0usize;
         for (idx, cat) in ControlCategory::ALL.iter().copied().enumerate() {

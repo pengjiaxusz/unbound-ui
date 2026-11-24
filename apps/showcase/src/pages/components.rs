@@ -20,7 +20,7 @@ use crate::canvas::{AlignX, AlignY};
 pub const COMPONENTS_INFO: PageInfo = PageInfo {
     title: "Component gallery",
     short: "All Components",
-    description: "All 133 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
+    description: "All 134 standard components, each listed in the sidebar and painted by its genuine unbound-widgets emitter with a real hit region, semantic node, and interactive knobs.",
     crates: &["unbound-widgets"],
     keywords: "component gallery catalog emitter coverage widget showcase every control tooltip",
 };
@@ -215,7 +215,8 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::PersonPicture
         | WidgetCatalogId::RichTextBlock
         | WidgetCatalogId::ScrollView
-        | WidgetCatalogId::Overlay => KNOBS_VISUAL,
+        | WidgetCatalogId::Overlay
+        | WidgetCatalogId::Viewport3D => KNOBS_VISUAL,
 
         WidgetCatalogId::CalendarView => KNOBS_CALENDAR,
     }
@@ -358,6 +359,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::BladeView => "view.add(ui_key!(\"blv\"), BladeViewDesc::new(rect).with_blades(3));",
         WidgetCatalogId::HeaderedContentControl => "view.add(ui_key!(\"hcc\"), HeaderedContentDesc::new(rect, \"Appearance\"));",
         WidgetCatalogId::ImageCropper => "view.add(ui_key!(\"crop\"), ImageCropperDesc::new(rect));",
+        WidgetCatalogId::Viewport3D => "view.add(ui_key!(\"vp3d\"), Viewport3DDesc::new(ViewportId::new(1)));",
     }
 }
 
@@ -564,6 +566,7 @@ define_showcase_components! {
     BladeView => "Blade view", "Horizontal multi-level blade panels with active headers.", 320.0,
     HeaderedContentControl => "Headered content", "Shared header strip above a content region.", 280.0,
     ImageCropper => "Image cropper", "Crop frame with eight resize handles and corner scrim.", 340.0,
+    Viewport3D => "Viewport 3D", "Interactive 3D render viewport with orbit, pan, and zoom gestures.", 320.0,
 }
 
 /// 按激活语言返回目录组件的侧边栏与卡片标题。
@@ -710,6 +713,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::BladeView => "刀片面板 (Blade View)",
         WidgetCatalogId::HeaderedContentControl => "带标题内容容器 (Headered Content)",
         WidgetCatalogId::ImageCropper => "图像裁剪器 (Image Cropper)",
+        WidgetCatalogId::Viewport3D => "3D 视口 (Viewport 3D)",
     }
 }
 
@@ -859,6 +863,7 @@ pub const fn component_description_localized(
         WidgetCatalogId::BladeView => "带激活标题栏的水平多级刀片展开面板。",
         WidgetCatalogId::HeaderedContentControl => "内容区域上方带共享标题条的组合容器。",
         WidgetCatalogId::ImageCropper => "带八个缩放手柄与四角遮罩的图像裁剪框。",
+        WidgetCatalogId::Viewport3D => "支持轨道旋转、平移与滚轮缩放手势的交互式 3D 渲染视口。",
     }
 }
 
@@ -1002,6 +1007,9 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::BladeView => "刀片面板 多级面板 blade view",
         WidgetCatalogId::HeaderedContentControl => "带标题内容容器 标题条 headered content control",
         WidgetCatalogId::ImageCropper => "图像裁剪 九宫格手柄 image cropper crop",
+        WidgetCatalogId::Viewport3D => {
+            "3D视口 三维视图 渲染视口 轨道相机 viewport 3d orbit pan zoom"
+        }
     }
 }
 

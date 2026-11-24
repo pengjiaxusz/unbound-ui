@@ -3666,6 +3666,15 @@ where
             let mut glyphs = shape_centered(&mut shape, "Crop", desc.crop_rect(), 11.0);
             crate::image_cropper::emit_image_cropper(node, &desc, state, &mut glyphs)
         }
+        WidgetCatalogId::Viewport3D => {
+            let vp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(120.0));
+            let desc =
+                crate::viewport_3d::Viewport3DDesc::new(crate::viewport_3d::ViewportId::new(1))
+                    .with_size(vp_r.size)
+                    .with_interactive(params.active)
+                    .with_alt("3D viewport");
+            crate::viewport_3d::emit_viewport_3d(node, vp_r, &desc, state)
+        }
     };
     if out.hit.is_none() {
         out.hit = Some(unbound_input::HitRegion::new(node, 0, 0, rect));

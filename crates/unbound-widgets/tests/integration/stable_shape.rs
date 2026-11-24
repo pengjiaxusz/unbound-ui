@@ -254,6 +254,7 @@ fn component_name(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::BladeView => "blade_view",
         WidgetCatalogId::HeaderedContentControl => "headered_content",
         WidgetCatalogId::ImageCropper => "image_cropper",
+        WidgetCatalogId::Viewport3D => "viewport_3d",
     }
 }
 
@@ -332,7 +333,7 @@ fn the_probe_covers_every_component() {
     );
     // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
     // 否则「每个控件都被探针覆盖」这句话就不再成立。
-    assert_eq!(WidgetCatalogId::COUNT, 133);
+    assert_eq!(WidgetCatalogId::COUNT, 134);
 }
 
 #[test]

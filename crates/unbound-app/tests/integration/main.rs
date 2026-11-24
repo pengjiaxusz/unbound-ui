@@ -19,3 +19,4 @@ mod runtime_headless;
 mod runtime_subsystems;
 mod settings_and_select;
 mod tooltip_rich;
+mod viewport_3d;

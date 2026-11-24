@@ -7,7 +7,10 @@
 //! * **下游资产应用（纯 Rust 资产管理器）**：需要同时驻留上百张缩略图纹理（256 槽扩展 Bindless
 //!   分配器），并在 UI 矩形内嵌入自定义 3D 网格/材质球预览 Pass。
 
-use unbound_math::{Rect, Vec2};
+pub use crate::custom_pass::{
+    CustomViewportPass, ViewportCamera3D, ViewportCameraConstraints, ViewportDepthMode, ViewportId,
+    ViewportMsaa, ViewportPassContext, ViewportReadback, ViewportRenderPassDesc,
+};
 
 /// 扩展外部纹理槽位容量（支持下游资产应用的大规模缩略图与下游渲染工具的多 Pass RT 检视）。
 pub const EXTENDED_EXTERNAL_SLOTS: u32 = 256;
@@ -271,83 +274,6 @@ impl TextureInspectorParams {
     }
 }
 
-/// 3D 视口轨道相机参数（用于下游资产应用的 3D 模型/材质球预览与下游渲染工具网格检视）。
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ViewportCamera3D {
-    /// 水平旋转角（弧度）。
-    pub orbit_yaw: f32,
-    /// 俯仰角（弧度，钳制在 `[-1.5, 1.5]`）。
-    pub orbit_pitch: f32,
-    /// 相机到目标点的距离。
-    pub distance: f32,
-    /// 观察目标中心点。
-    pub target: [f32; 3],
-    /// 垂直视场角（弧度）。
-    pub fov_y_rad: f32,
-    /// 近裁剪面。
-    pub near: f32,
-    /// 远裁剪面。
-    pub far: f32,
-}
-
-impl Default for ViewportCamera3D {
-    fn default() -> Self {
-        Self {
-            orbit_yaw: 0.6,
-            orbit_pitch: 0.35,
-            distance: 3.5,
-            target: [0.0, 0.0, 0.0],
-            fov_y_rad: core::f32::consts::FRAC_PI_4,
-            near: 0.05,
-            far: 1000.0,
-        }
-    }
-}
-
-impl ViewportCamera3D {
-    /// 根据鼠标拖拽增量旋转轨道相机。
-    pub fn orbit(&mut self, delta: Vec2, sensitivity: f32) {
-        self.orbit_yaw += delta.x * sensitivity;
-        self.orbit_pitch = (self.orbit_pitch + delta.y * sensitivity).clamp(-1.5, 1.5);
-    }
-
-    /// 根据滚轮增量缩放观察距离。
-    pub fn dolly(&mut self, zoom_factor: f32) {
-        self.distance = (self.distance * zoom_factor).clamp(0.1, 500.0);
-    }
-
-    /// 计算相机在世界空间中的眼睛坐标。
-    #[must_use]
-    pub fn eye_position(&self) -> [f32; 3] {
-        let cp = self.orbit_pitch.cos();
-        let sp = self.orbit_pitch.sin();
-        let cy = self.orbit_yaw.cos();
-        let sy = self.orbit_yaw.sin();
-        [
-            self.target[0] + self.distance * cp * sy,
-            self.target[1] + self.distance * sp,
-            self.target[2] + self.distance * cp * cy,
-        ]
-    }
-}
-
-/// 嵌入 UI 布局矩形中的自定义 3D 视口渲染 Pass 描述符。
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct ViewportRenderPassDesc {
-    /// 视口唯一标识。
-    pub viewport_id: u64,
-    /// UI 布局分配的屏幕矩形。
-    pub bounds: Rect,
-    /// 绑定的外部颜色纹理槽位。
-    pub bindless_slot: u32,
-    /// 3D 轨道相机参数。
-    pub camera: ViewportCamera3D,
-    /// 是否显示线框叠加。
-    pub wireframe_overlay: bool,
-    /// 是否显示世界坐标网格。
-    pub show_grid: bool,
-}
-
 /// 已导入的外部共享纹理句柄包（持有 `VkImage`、`VkDeviceMemory`、`VkImageView` 与分配的 Bindless 槽位）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct ImportedExternalTexture {
@@ -404,23 +330,6 @@ impl ExternalMemoryImporter {
         let handle_type = Self::vk_handle_type(desc.handle_kind);
         Ok((format, handle_type))
     }
-}
-
-/// 嵌入 `unbound-ui` 帧管线的自定义 2D/3D 视口渲染钩子（供下游渲染工具零拷贝注入）。
-pub trait CustomViewportPass: Send + Sync + core::fmt::Debug {
-    /// 视口唯一标识。
-    fn viewport_id(&self) -> u64;
-
-    /// 视口在 UI 窗口中的裁剪矩形（物理像素）。
-    fn viewport_bounds(&self) -> Rect;
-
-    /// 在 UI 主 Pass 合成阶段录制自定义命令（如 2D 纹理通道检视器全屏 Quad 或 3D 网格/线框预览）。
-    fn record_pass(
-        &mut self,
-        device: &ash::Device,
-        cmd: ash::vk::CommandBuffer,
-        target_extent: (u32, u32),
-    );
 }
 
 #[cfg(test)]
@@ -491,8 +400,8 @@ mod tests {
     #[test]
     fn viewport_camera_orbit_clamps_pitch_and_computes_eye() {
         let mut cam = ViewportCamera3D::default();
-        cam.orbit(Vec2::new(1.0, 100.0), 0.1);
-        assert!(cam.orbit_pitch <= 1.5);
+        cam.orbit(unbound_math::Vec2::new(1.0, 100.0), 0.1);
+        assert!(cam.orbit_pitch <= cam.constraints.max_pitch_rad + 1e-6);
         let eye = cam.eye_position();
         assert!(eye.iter().all(|v| v.is_finite()));
     }
