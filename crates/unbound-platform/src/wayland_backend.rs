@@ -1302,21 +1302,32 @@ impl PopupHandler for WaylandState {
     }
 }
 
+impl WaylandState {
+    /// 确保主 `wl_seat` 及其依赖的 `wl_data_device` / `zwp_text_input_v3` 已完成绑定。
+    ///
+    /// `sctk` 的 `SeatState::new` 会在首轮 `roundtrip` 前同步绑定已有座席，因此不会对初始座席
+    /// 回调 `SeatHandler::new_seat`；必须在 `new_capability` 与首轮 `roundtrip` 后兜底绑定，
+    /// 否则 `self.seat` 恒为 `None`，导致拖拽移动、边缘缩放、剪贴板、DnD 与 IME 全部失效。
+    fn ensure_seat_bound(&mut self, qh: &QueueHandle<Self>, seat: &wl_seat::WlSeat) {
+        if self.seat.is_none() {
+            self.seat = Some(seat.clone());
+            if let Some(ddm) = &self.data_device_manager {
+                self.data_device = Some(ddm.get_data_device(qh, seat));
+            }
+            if let Some(mgr) = &self.text_input_manager {
+                self.text_input = Some(mgr.get_text_input(seat, qh, ()));
+            }
+        }
+    }
+}
+
 impl SeatHandler for WaylandState {
     fn seat_state(&mut self) -> &mut SeatState {
         &mut self.seat_state
     }
 
     fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
-        if self.seat.is_none() {
-            self.seat = Some(seat.clone());
-            if let Some(ddm) = &self.data_device_manager {
-                self.data_device = Some(ddm.get_data_device(qh, &seat));
-            }
-            if let Some(mgr) = &self.text_input_manager {
-                self.text_input = Some(mgr.get_text_input(&seat, qh, ()));
-            }
-        }
+        self.ensure_seat_bound(qh, &seat);
     }
 
     fn new_capability(
@@ -1326,6 +1337,7 @@ impl SeatHandler for WaylandState {
         seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
+        self.ensure_seat_bound(qh, &seat);
         if capability == Capability::Pointer && self.themed_pointer.is_none() {
             let surface = self.compositor_state.create_surface(qh);
             if let Ok(pointer) = self.seat_state.get_pointer_with_theme(
@@ -2183,6 +2195,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
 
     // 首轮往返以采集 `wl_output`、Seat 与初始全局对象。
     let _ = event_queue.roundtrip(&mut wl);
+    if let Some(initial_seat) = wl.seat_state.seats().next() {
+        wl.ensure_seat_bound(&qh, &initial_seat);
+    }
     wl.refresh_primary_output();
 
     // 安装跨线程事件循环唤醒回调。
