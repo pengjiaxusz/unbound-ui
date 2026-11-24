@@ -2350,9 +2350,8 @@ impl GalleryApp {
                             unbound_widgets::CalendarDisplayMode::Year => 1.0,
                             unbound_widgets::CalendarDisplayMode::Decade => 2.0,
                         };
-                        let card = pages::components::component_card_index(
-                            WidgetCatalogId::CalendarView,
-                        );
+                        let card =
+                            pages::components::component_card_index(WidgetCatalogId::CalendarView);
                         self.state.set_knob(PageId::Components, card, 1, dm);
                     }
                     self.state.bump();
