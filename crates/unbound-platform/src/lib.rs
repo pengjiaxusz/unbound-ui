@@ -25,11 +25,14 @@ pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
 pub mod linux_backend;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod linux_dbus;
 pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
 pub mod pacing;
 pub mod popup_host;
+pub mod portal_logic;
 pub mod resize;
 pub mod screen_capture;
 pub mod system_accent;
@@ -74,6 +77,10 @@ pub use pacing::{
 };
 pub use popup_host::{
     clamp_popup_to_work_area, PopupHostEntry, PopupHostRegistry, PopupSyncAction, PopupWindowConfig,
+};
+pub use portal_logic::{
+    convert_dialog_filters, decode_file_uri, parse_portal_accent_color, parse_portal_color_scheme,
+    percent_decode_bytes, LinuxAppearanceSnapshot, PortalColorScheme, PortalFileFilter,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{

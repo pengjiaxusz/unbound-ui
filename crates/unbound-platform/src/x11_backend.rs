@@ -93,6 +93,9 @@ enum X11Command {
     ClipboardWrite {
         text: String,
     },
+    ThemeChanged {
+        dark: bool,
+    },
 }
 
 /// 跨线程管道唤醒信号句柄（持锁写入并在释放时持锁关闭，避免 FD 复用竞态）。
@@ -702,6 +705,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let waker_sig = wake_signal.clone();
     app.attach_waker(Arc::new(move || waker_sig.signal()));
 
+    let theme_tx = Mutex::new(cmd_tx.clone());
+    let theme_wake = wake_signal.clone();
+    crate::linux_dbus::register_theme_change_listener(Arc::new(move |dark| {
+        if let Ok(tx) = theme_tx.lock() {
+            if tx.send(X11Command::ThemeChanged { dark }).is_ok() {
+                theme_wake.signal();
+            }
+        }
+    }));
+
     let mut windows: Vec<X11ToplevelEntry> = Vec::new();
     let mut popups: HashMap<u64, X11PopupEntry> = HashMap::new();
     let mut exit_requested = false;
@@ -1195,6 +1208,13 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             atoms.clipboard,
                             x11rb::CURRENT_TIME,
                         );
+                    }
+                }
+                X11Command::ThemeChanged { dark } => {
+                    for entry in &mut windows {
+                        entry
+                            .pending_events
+                            .push(PlatformEvent::ThemeChanged { dark });
                     }
                 }
             }

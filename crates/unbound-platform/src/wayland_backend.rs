@@ -127,6 +127,9 @@ enum WaylandCommand {
         position: PhysicalPosition,
         size: PhysicalSize,
     },
+    ThemeChanged {
+        dark: bool,
+    },
 }
 
 /// 线程安全的管道唤醒信号句柄（持锁写入并在释放时持锁关闭，彻底消除 FD 复用竞态）。
@@ -917,6 +920,13 @@ impl WaylandState {
                 let rect = compute_wayland_ime_cursor_rect(position, size, scale, win_size);
                 let action = self.ime_state.set_cursor_area(rect);
                 self.apply_ime_protocol_action(action);
+            }
+            WaylandCommand::ThemeChanged { dark } => {
+                for entry in &mut self.windows {
+                    entry
+                        .pending_events
+                        .push(PlatformEvent::ThemeChanged { dark });
+                }
             }
         }
     }
@@ -1862,6 +1872,17 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     // 安装跨线程事件循环唤醒回调。
     let waker_sig = wake_signal.clone();
     app.attach_waker(Arc::new(move || waker_sig.signal()));
+
+    // 订阅桌面门户深色模式变更，异步通过命令通道与唤醒管道通知事件循环
+    let theme_tx = Mutex::new(wl.cmd_tx.clone());
+    let theme_wake = wake_signal.clone();
+    crate::linux_dbus::register_theme_change_listener(Arc::new(move |dark| {
+        if let Ok(tx) = theme_tx.lock() {
+            if tx.send(WaylandCommand::ThemeChanged { dark }).is_ok() {
+                theme_wake.signal();
+            }
+        }
+    }));
 
     // 创建主顶层窗口并等待首次 configure。
     wl.create_toplevel(&qh, &config)?;
