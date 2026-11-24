@@ -272,6 +272,7 @@ define_widget_catalog! {
         preset_number_input,
         kbd,
         virtual_grid,
+        viewport_3d,
     ],
     catalog: [
         ExpanderGroup => accordion,
@@ -407,6 +408,7 @@ define_widget_catalog! {
         RichEditBox => rich_edit_box,
         SwipeControl => swipe_control,
         TeachingTip => teaching_tip,
+        Viewport3D => viewport_3d,
     ],
 }
 
@@ -843,6 +845,12 @@ pub use rich_edit_box::{
 };
 pub use swipe_control::{emit_swipe_control, SwipeControlDesc, SwipeSide};
 pub use teaching_tip::{emit_teaching_tip, TeachingTipDesc, TeachingTipTail};
+pub use viewport_3d::{
+    clamp_render_scale, compute_viewport_physical_extent, emit_viewport_3d, Viewport3DDesc,
+    Viewport3DDragMode, Viewport3DGesture, Viewport3DGestureEvent, Viewport3DPointerTracker,
+    ViewportCamera3D, ViewportCameraConstraints, ViewportId, VIEWPORT_3D_DEFAULT_Z,
+    VIEWPORT_3D_RADIUS,
+};
 
 // ---------------------------------------------------------------------------
 // WinUI 3 规范名类型别名（扩展期）

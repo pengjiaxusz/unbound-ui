@@ -1,9 +1,9 @@
 //! 自有独有控件的 Fluent 设计规范合规巡检。
 //!
-//! 三合一清单第五节列出的 43 个自有独有控件没有 WinUI 3 一对一参考图，因此不能
+//! 三合一清单第五节列出的 44 个自有独有控件没有 WinUI 3 一对一参考图，因此不能
 //! 走像素差分；它们依靠本测试守住三条可机械验证的底线：
 //!
-//! 1. 分类与数量稳定（43 个，全部为 [`ControlClass::Exclusive`]）；
+//! 1. 分类与数量稳定（44 个，全部为 [`ControlClass::Exclusive`]）；
 //! 2. 生产代码不出现硬编码颜色构造，所有颜色必须经主题令牌解析；
 //! 3. 圆角字面量只允许 `0`、`4`、`8` 三档（胶囊圆角由高度计算，不写死字面量）。
 //!
@@ -48,7 +48,7 @@ fn exactly_forty_three_exclusive_controls_are_registered() {
     let ids: Vec<WidgetCatalogId> =
         WidgetCatalogId::ids_in_class(ControlClass::Exclusive).collect();
     assert_eq!(ids.len(), EXCLUSIVE_COUNT);
-    assert_eq!(EXCLUSIVE_COUNT, 43);
+    assert_eq!(EXCLUSIVE_COUNT, 44);
     for id in ids {
         assert!(id.is_exclusive());
         assert!(!id.is_baseline_aligned());

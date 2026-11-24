@@ -932,7 +932,7 @@ impl GalleryState {
         }
     }
 
-    /// 导航到指定功能分类索引页（`None` 表示全部 133 个控件总览页）。
+    /// 导航到指定功能分类索引页（`None` 表示全部 134 个控件总览页）。
     pub fn navigate_to_category(&mut self, category: Option<ControlCategory>) {
         self.active_page = PageId::Components;
         self.active_component = None;
@@ -1456,7 +1456,8 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::AnnotatedScrollBar
         | WidgetCatalogId::RangeSelector
         | WidgetCatalogId::RadialGauge
-        | WidgetCatalogId::ImageCropper => {
+        | WidgetCatalogId::ImageCropper
+        | WidgetCatalogId::Viewport3D => {
             let val = sandbox.slider_values.entry(key).or_insert(50.0);
             *val = (*val + 10.0) % 100.0;
             true
