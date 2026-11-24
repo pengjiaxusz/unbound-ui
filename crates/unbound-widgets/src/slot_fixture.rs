@@ -1405,7 +1405,7 @@ pub fn emit_canonical_pips_pager_fixture(
 pub fn emit_canonical_command_bar_fixture(
     rect: Rect,
     state: FixtureState,
-    _text_ctx: &mut TextCtx<'_>,
+    text_ctx: &mut TextCtx<'_>,
     z: u16,
 ) -> CommandBarFixtureOutput {
     let mut out = WidgetOutput::default();
@@ -1450,20 +1450,25 @@ pub fn emit_canonical_command_bar_fixture(
             ));
         }
 
-        let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
-            crate::shell::ShellIcon::Package
+        // 优先通过平台感知符号字体塑形发射原生字形；无可用符号字体时回退校准矢量。
+        if let Some(quads) = text_ctx.shape_symbol_glyph(glyph, btn_r, 16.0) {
+            primitive::glyphs(&quads, icon_ink, z + 2, &mut out.primitives, &mut out.payloads);
         } else {
-            crate::shell::ShellIcon::Folder
-        };
-        crate::shell::emit_shell_icon_primitives(
-            shell_icon,
-            btn_r,
-            icon_ink,
-            Token::SURFACE,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
+            let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
+                crate::shell::ShellIcon::Save
+            } else {
+                crate::shell::ShellIcon::FolderOpen
+            };
+            crate::shell::emit_shell_icon_primitives(
+                shell_icon,
+                btn_r,
+                icon_ink,
+                Token::SURFACE,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+        }
 
         cur_x += btn_w;
     }
@@ -1493,15 +1498,19 @@ pub fn emit_canonical_command_bar_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Ellipsis,
-        more_r,
-        more_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_COMMAND_MORE_GLYPH, more_r, 16.0) {
+        primitive::glyphs(&quads, more_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Ellipsis,
+            more_r,
+            more_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     CommandBarFixtureOutput {
         output: out,
@@ -3675,15 +3684,19 @@ pub fn emit_canonical_app_bar_button_fixture(
     // 在控件高度内垂直居中；参考截图的图标顶端因此在 y=33（64px 高时为 17）。
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
     let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Package,
-        icon_r,
-        text_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_BUTTON_GLYPH, icon_r, 16.0) {
+        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Save,
+            icon_r,
+            text_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 3. 底部文字
     let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);
@@ -3779,15 +3792,21 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     // 2. 顶部图标（与 AppBarButton 相同的 30px 内容栈居中）
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
     let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Sliders,
-        icon_r,
-        text_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    if let Some(quads) =
+        text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH, icon_r, 16.0)
+    {
+        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Bold,
+            icon_r,
+            text_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 3. 底部文字
     let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);

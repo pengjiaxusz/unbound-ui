@@ -2047,42 +2047,40 @@ fn emit_case(
                 let w = if rect.width() > 0.0 {
                     rect.width()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_WIDTH
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH
                 };
                 let h = if rect.height() > 0.0 {
                     rect.height()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_HEIGHT
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT
                 };
-                // 剥离线性混合字形，改用 sRGB 预混纹理绘制强调色底板上的图标与文字。
-                fixture.output.primitives.retain(|p| {
-                    let pt = p.prim_type_and_flags & 0xFF;
-                    pt != PrimType::Glyph as u32 && pt != PrimType::GlyphColor as u32
-                });
-                fixture.output.payloads.clear();
                 let stack_top = rect.origin.y + ((h - 30.0) * 0.5).round();
                 let icon_r = Rect::new(rect.origin.x, stack_top - 3.0, w, 16.0);
-                let icon_quads = text_ctx.shape_line_styled(
+                // 存在平台符号字体时，剥离线性混合字形并改用 sRGB 预混纹理绘制强调色底板上的图标与文字；
+                // 无符号字体时保留 fixture 内的 ShellIcon::Bold 矢量与标签图元，避免清空曲线载荷。
+                if let Some(icon_quads) = text_ctx.shape_symbol_glyph(
                     unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
                     icon_r,
                     16.0,
-                    400,
-                    Some("Segoe Fluent Icons"),
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
-                let label_r = Rect::new(rect.origin.x, stack_top + 18.0, w, 12.0);
-                let label_quads = text_ctx.shape_line_styled(
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
-                    label_r,
-                    12.0,
-                    400,
-                    None,
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
-                texture_quads.extend(icon_quads);
-                texture_quads.extend(label_quads);
+                ) {
+                    fixture.output.primitives.retain(|p| {
+                        let pt = p.prim_type_and_flags & 0xFF;
+                        pt != PrimType::Glyph as u32 && pt != PrimType::GlyphColor as u32
+                    });
+                    fixture.output.payloads.clear();
+                    let label_r = Rect::new(rect.origin.x, stack_top + 18.0, w, 12.0);
+                    let label_quads = text_ctx.shape_line_styled(
+                        unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
+                        label_r,
+                        12.0,
+                        400,
+                        None,
+                        unbound_widgets::AlignX::Center,
+                        unbound_widgets::AlignY::Middle,
+                    );
+                    texture_quads.extend(icon_quads);
+                    texture_quads.extend(label_quads);
+                }
                 let visual_r = Rect::new(
                     rect.origin.x + 2.0,
                     rect.origin.y + 6.0,
@@ -4008,7 +4006,7 @@ fn shape_at(
     shape_at_styled(text_ctx, text, origin, size, 400, None)
 }
 
-/// 与 [`shape_at`] 相同，但允许指定字重与字体族（用于 Segoe Fluent Icons 字形）。
+/// 与 [`shape_at`] 相同，但允许指定字重与字体族（用于平台符号字体字形）。
 fn shape_at_styled(
     text_ctx: &mut TextCtx<'_>,
     text: &str,
@@ -4116,7 +4114,7 @@ fn emit_text_left_middle(
     emit_quads(scene, &quads, color, z);
 }
 
-/// 把一枚 Segoe Fluent Icons 字形居中绘制到给定方框。
+/// 把一枚平台符号字体字形居中绘制到给定方框。
 #[allow(clippy::too_many_arguments)]
 fn emit_icon_centered(
     text_ctx: &mut TextCtx<'_>,
@@ -4132,15 +4130,21 @@ fn emit_icon_centered(
 }
 
 /// 在 `rect` 内居中的单个图标字形四边形（不发射图元）。
+///
+/// 通过 [`TextCtx::symbol_font_family`] 获取平台可用符号字体族；
+/// 当平台无可用符号字体或策略禁用时返回空集合。
 fn icon_quads(
     text_ctx: &mut TextCtx<'_>,
     glyph: &str,
     rect: Rect,
     size: f32,
 ) -> Vec<unbound_text::GlyphQuad> {
+    let Some(family) = text_ctx.symbol_font_family().map(str::to_owned) else {
+        return Vec::new();
+    };
     let scale = text_ctx.effective_raster_scale();
     let mut style = unbound_text::TextStyle::sized(size * scale);
-    style.family = Some("Segoe Fluent Icons".to_owned());
+    style.family = Some(family.clone());
     let measured = text_ctx.engine.measure(glyph, &style);
     let width = measured.x / scale;
     let height = measured.y / scale;
@@ -4148,14 +4152,7 @@ fn icon_quads(
         rect.center().x - width * 0.5,
         rect.center().y - height * 0.5,
     );
-    shape_at_styled(
-        text_ctx,
-        glyph,
-        origin,
-        size,
-        400,
-        Some("Segoe Fluent Icons"),
-    )
+    shape_at_styled(text_ctx, glyph, origin, size, 400, Some(family.as_str()))
 }
 
 /// 把一次发射的图元与载荷追加到场景。
