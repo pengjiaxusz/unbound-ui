@@ -213,7 +213,8 @@ fn calendar_view_normal_and_disabled_states() {
 
         // 1. normal 态校验：真实 emit_calendar_view 渲染选中空心强调环与 ADR-0042 局部裁剪节点
         let normal_state = make_base_state(false);
-        let normal_out = emit_calendar_view(1, &desc, &normal_state, ControlState::default(), text_ctx);
+        let normal_out =
+            emit_calendar_view(1, &desc, &normal_state, ControlState::default(), text_ctx);
         assert!(
             !normal_out.clips.is_empty(),
             "CalendarView must register an ADR-0042 local clip node"
@@ -242,7 +243,8 @@ fn calendar_view_normal_and_disabled_states() {
             ..ControlState::default()
         };
         let disabled_desc = DatePickerDesc::new(rect).with_z(100).disabled(true);
-        let disabled_out = emit_calendar_view(1, &disabled_desc, &normal_state, disabled_ctrl, text_ctx);
+        let disabled_out =
+            emit_calendar_view(1, &disabled_desc, &normal_state, disabled_ctrl, text_ctx);
         assert!(
             !disabled_out.primitives.iter().any(|p| {
                 p.prim_type() == PrimType::RoundedRect
@@ -282,7 +284,8 @@ fn calendar_view_normal_and_disabled_states() {
 
         // 4. today_highlighted 态校验：固定 today 下渲染实心强调圆与 ON_PRIMARY 字形
         let today_state = make_base_state(true);
-        let today_out = emit_calendar_view(1, &desc, &today_state, ControlState::default(), text_ctx);
+        let today_out =
+            emit_calendar_view(1, &desc, &today_state, ControlState::default(), text_ctx);
         assert!(
             today_out.primitives.iter().any(|p| {
                 p.prim_type() == PrimType::RoundedRect
@@ -304,7 +307,8 @@ fn calendar_view_normal_and_disabled_states() {
         for day in [10, 15, 20] {
             multi_state.select(NaiveDate::new(2026, 1, day).expect("valid multi-select date"));
         }
-        let multi_out = emit_calendar_view(1, &desc, &multi_state, ControlState::default(), text_ctx);
+        let multi_out =
+            emit_calendar_view(1, &desc, &multi_state, ControlState::default(), text_ctx);
         let multi_rings = multi_out
             .primitives
             .iter()
@@ -377,8 +381,13 @@ fn calendar_view_normal_and_disabled_states() {
             compact_desc.cell_rect(41).max().y,
             compact_rect.max().y
         );
-        let compact_out =
-            emit_calendar_view(1, &compact_desc, &normal_state, ControlState::default(), text_ctx);
+        let compact_out = emit_calendar_view(
+            1,
+            &compact_desc,
+            &normal_state,
+            ControlState::default(),
+            text_ctx,
+        );
         assert!(
             !compact_out.clips.is_empty(),
             "compact CalendarView must attach local clip node"

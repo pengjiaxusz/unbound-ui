@@ -21,7 +21,10 @@ use unbound_math::{Rect, Vec2};
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
 use unbound_widgets::text_input::TextEditState;
-use unbound_widgets::{CalendarSelectionMode, CalendarState, ControlCategory, ControlClass, DatePickerDesc, NaiveDate, WidgetCatalogId};
+use unbound_widgets::{
+    CalendarSelectionMode, CalendarState, ControlCategory, ControlClass, DatePickerDesc, NaiveDate,
+    WidgetCatalogId,
+};
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
 use crate::pages::parity_report::ParityInspectorState;

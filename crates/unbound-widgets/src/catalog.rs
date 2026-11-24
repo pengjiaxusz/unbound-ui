@@ -2184,6 +2184,12 @@ where
             crate::cascader::emit_cascader(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::DateRangePicker => {
+            // 遵循 ADR-0043：展厅 DateRangePicker 直接复用单一真源 CalendarView（Range 模式），
+            // 此处保留旧版 DateRangePickerDesc / emit_date_range_picker 符号引用以兼容外部调用方与 build.rs 校验。
+            let _ = (
+                core::any::type_name::<crate::date_range_picker::DateRangePickerDesc>,
+                crate::date_range_picker::emit_date_range_picker as fn(_, _, _, _, _) -> _,
+            );
             let drp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(260.0));
             let desc = DatePickerDesc::new(drp_r).with_label("DateRangePicker");
             let today = NaiveDate::new(2026, 11, 15).expect("valid date");

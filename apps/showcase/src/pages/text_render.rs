@@ -1093,11 +1093,7 @@ pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
                 .map(|(i, (lbl, _))| {
                     (
                         *lbl,
-                        crate::target::Target::Demo(
-                            page_idx,
-                            0,
-                            FONT_FAMILY_PART_BASE + i as u16,
-                        ),
+                        crate::target::Target::Demo(page_idx, 0, FONT_FAMILY_PART_BASE + i as u16),
                     )
                 })
                 .collect();
@@ -1114,11 +1110,7 @@ pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
                 .map(|(i, (lbl, _))| {
                     (
                         *lbl,
-                        crate::target::Target::Demo(
-                            page_idx,
-                            0,
-                            FONT_WEIGHT_PART_BASE + i as u16,
-                        ),
+                        crate::target::Target::Demo(page_idx, 0, FONT_WEIGHT_PART_BASE + i as u16),
                     )
                 })
                 .collect();

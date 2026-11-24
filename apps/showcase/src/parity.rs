@@ -4557,9 +4557,8 @@ mod tests {
             let case = ParityCase::new("CalendarView", state, "light");
             let mut scene = Gallery::new();
             let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
-            let size = res.unwrap_or_else(|err| {
-                panic!("CalendarView state '{state}' emit failed: {err}")
-            });
+            let size =
+                res.unwrap_or_else(|err| panic!("CalendarView state '{state}' emit failed: {err}"));
             assert_eq!(size, Vec2::new(300.0, 260.0));
             assert!(
                 !scene.primitives.is_empty(),

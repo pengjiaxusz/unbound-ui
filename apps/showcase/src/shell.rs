@@ -1646,7 +1646,12 @@ impl GalleryApp {
                 Some(WidgetCatalogId::CalendarView) => {
                     if let Some(rect) = self.state.sandbox.calendar_stage_rect.get() {
                         let desc = unbound_widgets::DatePickerDesc::new(rect);
-                        if self.state.sandbox.calendar_view.handle_hover(&desc, position) {
+                        if self
+                            .state
+                            .sandbox
+                            .calendar_view
+                            .handle_hover(&desc, position)
+                        {
                             self.state.bump();
                         }
                     }
@@ -2291,21 +2296,41 @@ impl GalleryApp {
         if self.state.active_page == PageId::Components && !modifiers.control {
             let chord = match key {
                 PlatformKey::Named(name) => match name.as_str() {
-                    "ArrowLeft" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowLeft"))),
-                    "ArrowRight" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowRight"))),
-                    "ArrowUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowUp"))),
-                    "ArrowDown" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowDown"))),
-                    "PageUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("PageUp"))),
-                    "PageDown" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("PageDown"))),
-                    "Home" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Home"))),
-                    "End" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("End"))),
-                    "Enter" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Enter"))),
-                    "Escape" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Escape"))),
+                    "ArrowLeft" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowLeft"),
+                    )),
+                    "ArrowRight" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowRight"),
+                    )),
+                    "ArrowUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "ArrowUp",
+                    ))),
+                    "ArrowDown" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowDown"),
+                    )),
+                    "PageUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "PageUp",
+                    ))),
+                    "PageDown" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("PageDown"),
+                    )),
+                    "Home" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Home",
+                    ))),
+                    "End" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "End",
+                    ))),
+                    "Enter" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Enter",
+                    ))),
+                    "Escape" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Escape",
+                    ))),
                     _ => None,
                 },
-                PlatformKey::Character(text) if text == " " => {
-                    Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Space")))
-                }
+                PlatformKey::Character(text) if text == " " => Some(unbound_input::KeyChord::new(
+                    unbound_input::KeyName::Named("Space"),
+                )),
                 _ => None,
             };
             if let Some(chord) = chord {
@@ -2752,12 +2777,8 @@ impl GalleryApp {
                             .state
                             .knob(page_id, card as usize, knob as usize, &spec);
                         let next_val = if current > 0.5 { 0.0 } else { 1.0 };
-                        self.state.set_knob(
-                            page_id,
-                            card as usize,
-                            knob as usize,
-                            next_val,
-                        );
+                        self.state
+                            .set_knob(page_id, card as usize, knob as usize, next_val);
                         if page_id == PageId::Components
                             && card as usize
                                 == pages::components::component_card_index(
@@ -3180,7 +3201,8 @@ impl GalleryApp {
                                     unbound_widgets::CalendarDisplayMode::Year => 1.0,
                                     unbound_widgets::CalendarDisplayMode::Decade => 2.0,
                                 };
-                                self.state.set_knob(PageId::Components, card as usize, 1, dm);
+                                self.state
+                                    .set_knob(PageId::Components, card as usize, 1, dm);
                             }
                             self.state.bump();
                         }

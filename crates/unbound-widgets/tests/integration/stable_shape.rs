@@ -350,7 +350,10 @@ fn calendar_view_and_date_range_picker_respond_to_hover_and_press_with_stable_sh
         ..ControlState::default()
     };
 
-    for id in [WidgetCatalogId::CalendarView, WidgetCatalogId::DateRangePicker] {
+    for id in [
+        WidgetCatalogId::CalendarView,
+        WidgetCatalogId::DateRangePicker,
+    ] {
         assert!(
             !INERT_BY_DESIGN.contains(&id),
             "{id:?} must not be listed in INERT_BY_DESIGN"
