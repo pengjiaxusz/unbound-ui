@@ -135,7 +135,7 @@ impl CategoryId {
     }
 }
 
-/// 展台页面顶层布局模板（ADR 0035）。
+/// 展台页面顶层布局模板（ADR 0036）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PageTemplate {
     /// 首页落地页：无 `ExampleCard` 外框、无旋钮与代码折叠条。

@@ -901,7 +901,7 @@ impl GalleryState {
         self.fps_input.blur();
     }
 
-    /// 返回当前激活页面应使用的顶层布局模板（ADR 0035）。
+    /// 返回当前激活页面应使用的顶层布局模板（ADR 0036）。
     #[must_use]
     pub const fn page_template(&self) -> PageTemplate {
         match self.active_page {

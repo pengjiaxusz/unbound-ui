@@ -1,4 +1,4 @@
-//! WinUI 3 像素对照检视台（Parity Inspector，ADR 0035）：
+//! WinUI 3 像素对照检视台（Parity Inspector，ADR 0036）：
 //! lang-allow: bilingual page metadata; Chinese is the zh-CN half
 //!
 //! 采用左列表 + 右舞台的主从式（Master-Detail）布局：

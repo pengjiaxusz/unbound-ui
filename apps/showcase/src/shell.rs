@@ -374,7 +374,7 @@ impl GalleryApp {
         let init_viewport = Rect::new(0.0, 0.0, 1280.0, 800.0);
         let init_nav_desc = build_navigation_view_desc(&state, init_viewport, None);
         let nav_view = NavigationViewState::from_desc(&init_nav_desc);
-        // 10 个控件分类默认折叠，首屏导航树保持简洁直观（ADR 0035）。
+        // 10 个控件分类默认折叠，首屏导航树保持简洁直观（ADR 0036）。
         let nav_layout = init_nav_desc.compute_layout(&nav_view);
         let mut tree = ShellTree::new();
         let layout = tree.solve(&state, init_viewport, nav_layout.pane_rect.width());

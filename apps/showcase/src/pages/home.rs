@@ -1,5 +1,5 @@
 //! 首页落地页（Landing）：无示例外框、无旋钮与代码折叠条，专注品牌首屏、引擎核心能力、
-//! 最近访问/收藏快捷区与 10 大功能分类导览网格（ADR 0035）。
+//! 最近访问/收藏快捷区与 10 大功能分类导览网格（ADR 0036）。
 //! lang-allow: bilingual home landing copy; Chinese is the zh-CN half
 
 use accesskit::Role;
