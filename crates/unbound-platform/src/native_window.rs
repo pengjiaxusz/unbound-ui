@@ -11,6 +11,7 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
 };
 
+use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea};
 use crate::win32_frame::{
     clear_window_accent_tint, install_custom_frame, set_window_accent_tint, set_window_backdrop,
     set_window_dark_mode, FrameHitMetrics, WindowBackdropMaterial,
@@ -227,6 +228,74 @@ impl NativeWindow {
             NativeWindowInner::Wayland(w) => w.set_visible(visible),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
             NativeWindowInner::X11(w) => w.set_visible(visible),
+        }
+    }
+
+    /// 设置窗口可见性且不抢占前台焦点。
+    pub fn set_visible_no_activate(&self, visible: bool) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_visible_no_activate(visible),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_visible_no_activate(visible),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_visible_no_activate(visible),
+        }
+    }
+
+    /// 运行时无闪烁切换窗口是否全局置顶。
+    pub fn set_always_on_top(&self, topmost: bool) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_always_on_top(topmost),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_always_on_top(topmost),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_always_on_top(topmost),
+        }
+    }
+
+    /// 运行时无闪烁切换窗口鼠标穿透状态。
+    pub fn set_click_through(&self, click_through: bool) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_click_through(click_through),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_click_through(click_through),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_click_through(click_through),
+        }
+    }
+
+    /// 运行时设置窗口外框在屏幕坐标系中的物理矩形（不激活窗口）。
+    pub fn set_outer_rect(&self, rect: ScreenRect) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_outer_rect(rect),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_outer_rect(rect),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_outer_rect(rect),
+        }
+    }
+
+    /// 查询当前窗口后端的浮窗能力描述。
+    #[must_use]
+    pub fn capabilities(&self) -> FloatingWindowCapabilities {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.capabilities(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.capabilities(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.capabilities(),
+        }
+    }
+
+    /// 查询当前窗口所在显示器的工作区与 DPI 信息。
+    #[must_use]
+    pub fn work_area(&self) -> Option<MonitorWorkArea> {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.work_area(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.work_area(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.work_area(),
         }
     }
 
