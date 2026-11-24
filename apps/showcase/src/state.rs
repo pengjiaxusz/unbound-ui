@@ -5,6 +5,7 @@
 //! 这使得整个外壳无需窗口即可进行测试。
 //!
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
@@ -16,11 +17,11 @@ use unbound_backdrop::{
     MaterialKind, DEFAULT_ACRYLIC_TINT_ARGB,
 };
 use unbound_canvas::{TransactionKind, UndoStack};
-use unbound_math::Vec2;
+use unbound_math::{Rect, Vec2};
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
 use unbound_widgets::text_input::TextEditState;
-use unbound_widgets::{ControlCategory, ControlClass, WidgetCatalogId};
+use unbound_widgets::{CalendarSelectionMode, CalendarState, ControlCategory, ControlClass, DatePickerDesc, NaiveDate, WidgetCatalogId};
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
 use crate::pages::parity_report::ParityInspectorState;
@@ -1273,14 +1274,53 @@ pub enum SearchHit {
     Component(WidgetCatalogId),
 }
 
-/// 99 个组件展示沙盒的实时交互状态。
-#[derive(Clone, Debug, Default)]
+/// 组件展示沙盒的实时交互状态。
+#[derive(Clone, Debug)]
 pub struct ComponentSandboxState {
     pub click_counts: HashMap<u8, u32>,
     pub toggles: HashMap<u8, bool>,
     pub selected_indices: HashMap<u8, usize>,
     pub text_buffers: HashMap<u8, String>,
     pub slider_values: HashMap<u8, f32>,
+    /// `CalendarView` 详情页的真实交互状态。
+    pub calendar_view: CalendarState,
+    /// `DateRangePicker` 详情页的真实 Range 交互状态。
+    pub date_range_picker: CalendarState,
+    /// 最近一帧 `CalendarView` 舞台实际渲染矩形（供指针命中与悬停路由）。
+    pub calendar_stage_rect: Cell<Option<Rect>>,
+    /// 最近一帧 `DateRangePicker` 舞台实际渲染矩形。
+    pub date_range_stage_rect: Cell<Option<Rect>>,
+}
+
+impl Default for ComponentSandboxState {
+    fn default() -> Self {
+        let today = NaiveDate::new(2026, 11, 24).expect("valid showcase date");
+        let mut calendar_view = CalendarState::new(today, CalendarSelectionMode::Single);
+        calendar_view.select(today);
+
+        let mut date_range_picker = CalendarState::new(today, CalendarSelectionMode::Range);
+        if let Some(start) = NaiveDate::new(2026, 11, 10) {
+            date_range_picker.select(start);
+        }
+        if let Some(end) = NaiveDate::new(2026, 11, 18) {
+            date_range_picker.select(end);
+        }
+        if let Some(blk) = NaiveDate::new(2026, 11, 20) {
+            date_range_picker.blackout_dates.push(blk);
+        }
+
+        Self {
+            click_counts: HashMap::new(),
+            toggles: HashMap::new(),
+            selected_indices: HashMap::new(),
+            text_buffers: HashMap::new(),
+            slider_values: HashMap::new(),
+            calendar_view,
+            date_range_picker,
+            calendar_stage_rect: Cell::new(None),
+            date_range_stage_rect: Cell::new(None),
+        }
+    }
 }
 
 impl ComponentSandboxState {
@@ -1314,6 +1354,19 @@ impl ComponentSandboxState {
             .copied()
             .unwrap_or(default)
     }
+
+    /// 切换 `CalendarView` 沙盒的示例禁选日期列表（当前浏览月的 12、19、26 日）。
+    pub fn set_calendar_blackouts_enabled(&mut self, enabled: bool) {
+        self.calendar_view.blackout_dates.clear();
+        if enabled {
+            let ym = self.calendar_view.view();
+            for day in [12u8, 19, 26] {
+                if let Some(d) = NaiveDate::new(ym.year, ym.month, day) {
+                    self.calendar_view.blackout_dates.push(d);
+                }
+            }
+        }
+    }
 }
 
 /// 展厅中任意组件卡片用户交互的穷举式状态归约。
@@ -1321,7 +1374,7 @@ impl ComponentSandboxState {
 pub fn reduce_showcase_component(
     id: WidgetCatalogId,
     sandbox: &mut ComponentSandboxState,
-    _click_pos: Option<Vec2>,
+    click_pos: Option<Vec2>,
 ) -> bool {
     let key = id as u8;
     match id {
@@ -1420,9 +1473,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::TimelineTrack
         | WidgetCatalogId::Transfer
         | WidgetCatalogId::TreeView
-        | WidgetCatalogId::CalendarView
         | WidgetCatalogId::DatePicker
-        | WidgetCatalogId::DateRangePicker
         | WidgetCatalogId::TimePicker
         | WidgetCatalogId::GenericDataTable
         | WidgetCatalogId::PipelineView
@@ -1435,6 +1486,22 @@ pub fn reduce_showcase_component(
             let sel = sandbox.selected_indices.entry(key).or_insert(0);
             *sel = (*sel + 1) % 5;
             true
+        }
+        WidgetCatalogId::CalendarView => {
+            if let (Some(pos), Some(rect)) = (click_pos, sandbox.calendar_stage_rect.get()) {
+                let desc = DatePickerDesc::new(rect);
+                sandbox.calendar_view.handle_click(&desc, pos)
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::DateRangePicker => {
+            if let (Some(pos), Some(rect)) = (click_pos, sandbox.date_range_stage_rect.get()) {
+                let desc = DatePickerDesc::new(rect);
+                sandbox.date_range_picker.handle_click(&desc, pos)
+            } else {
+                false
+            }
         }
         WidgetCatalogId::Slider
         | WidgetCatalogId::MultiSplit

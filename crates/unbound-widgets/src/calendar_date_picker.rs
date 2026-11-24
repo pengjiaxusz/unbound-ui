@@ -12,7 +12,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::date_picker::NaiveDate;
+use crate::date_picker::{emit_calendar_view, CalendarSelectionMode, CalendarState, DatePickerDesc, NaiveDate};
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
 use crate::{
@@ -31,8 +31,10 @@ pub const CALENDAR_DATE_PICKER_ICON_WIDTH: f32 = 32.0;
 pub const CALENDAR_DATE_PICKER_ICON_GLYPH: &str = "\u{E787}";
 /// 右侧日历符号图标字号（对齐 WinUI 3 `CalendarDatePickerCalendarGlyph` 的 12px 尺寸）。
 pub const CALENDAR_DATE_PICKER_ICON_FONT_SIZE: f32 = 12.0;
-/// 弹出面板高度（占位外壳）。
-pub const CALENDAR_DATE_PICKER_PANEL_HEIGHT: f32 = 220.0;
+/// 弹出日历面板默认宽度。
+pub const CALENDAR_DATE_PICKER_PANEL_WIDTH: f32 = 280.0;
+/// 弹出日历面板默认高度（容纳 6×7 完整 CalendarView 零越界）。
+pub const CALENDAR_DATE_PICKER_PANEL_HEIGHT: f32 = 280.0;
 /// 弹出面板圆角半径。对齐 WinUI `OverlayCornerRadius = 8`。
 pub const CALENDAR_DATE_PICKER_PANEL_RADIUS: f32 = 8.0;
 /// 弹出面板阴影模糊半径。
@@ -133,15 +135,24 @@ impl CalendarDatePickerDesc {
         )
     }
 
-    /// 弹出面板占位外壳矩形。
+    /// 弹出日历面板矩形（按默认视口高度贴底自动向上翻转）。
     #[must_use]
     pub fn panel_rect(&self) -> Rect {
-        Rect::new(
-            self.rect.origin.x,
-            self.rect.max().y + 4.0,
-            self.rect.size.x,
-            CALENDAR_DATE_PICKER_PANEL_HEIGHT,
-        )
+        self.panel_rect_in_viewport(crate::DEFAULT_VIEWPORT.1)
+    }
+
+    /// 在指定视口高度下计算弹出日历面板矩形；若向下展开超出视口底边且上方空间足够，自动向上翻转。
+    #[must_use]
+    pub fn panel_rect_in_viewport(&self, viewport_height: f32) -> Rect {
+        let w = self.rect.size.x.max(CALENDAR_DATE_PICKER_PANEL_WIDTH);
+        let h = CALENDAR_DATE_PICKER_PANEL_HEIGHT;
+        let below_y = self.rect.max().y + 4.0;
+        let y = if below_y + h > viewport_height && self.rect.origin.y >= h + 4.0 {
+            self.rect.origin.y - h - 4.0
+        } else {
+            below_y
+        };
+        Rect::new(self.rect.origin.x, y, w, h)
     }
 }
 
@@ -261,6 +272,26 @@ impl UiWidget for CalendarDatePickerDesc {
             WidgetInputEvent::PointerDown { pos, .. } => {
                 let mut desc = self.clone();
                 desc.rect = rect;
+                if state.open && desc.panel_rect().contains_point(*pos) {
+                    let cal_desc = DatePickerDesc::new(desc.panel_rect()).disabled(desc.disabled);
+                    let mut cal_state = CalendarState::new(
+                        state.date.unwrap_or(NaiveDate {
+                            year: 2024,
+                            month: 3,
+                            day: 15,
+                        }),
+                        CalendarSelectionMode::Single,
+                    );
+                    cal_state.selected = state.date;
+                    if cal_state.handle_click(&cal_desc, *pos) {
+                        if cal_state.selected != state.date {
+                            state.date = cal_state.selected;
+                            state.open = false;
+                        }
+                        return true;
+                    }
+                    return false;
+                }
                 if desc.icon_rect().contains_point(*pos) || desc.rect.contains_point(*pos) {
                     state.toggle();
                     true
@@ -323,8 +354,22 @@ impl UiWidget for CalendarDatePickerDesc {
                 CALENDAR_DATE_PICKER_ICON_FONT_SIZE,
             )
             .unwrap_or_default();
-        emit_calendar_date_picker_with_icon(node, &desc, state, control, &mut glyphs, &icon_glyphs)
+        emit_calendar_date_picker_with_icon(
+            node,
+            &desc,
+            state,
+            control,
+            &mut glyphs,
+            &icon_glyphs,
+            Some(text_ctx),
+        )
     }
+}
+
+/// 弹出日历视图的确定性子节点键。
+#[must_use]
+pub const fn calendar_popup_node(node: u64) -> u64 {
+    node ^ 0x4341_4C50_4F50
 }
 
 /// 日历图标触发器的确定性子节点键。
@@ -342,7 +387,7 @@ pub fn emit_calendar_date_picker(
     control: ControlState,
     glyphs: &mut [GlyphQuad],
 ) -> WidgetOutput {
-    emit_calendar_date_picker_with_icon(node, desc, state, control, glyphs, &[])
+    emit_calendar_date_picker_with_icon(node, desc, state, control, glyphs, &[], None)
 }
 
 /// 输出日历日期选择器的图元、命中区域与语义节点，支持传入已塑形的右侧日历符号字形。
@@ -354,6 +399,7 @@ fn emit_calendar_date_picker_with_icon(
     control: ControlState,
     glyphs: &mut [GlyphQuad],
     icon_glyphs: &[GlyphQuad],
+    text_ctx: Option<&mut TextCtx<'_>>,
 ) -> WidgetOutput {
     let rect = desc.rect;
     let z = desc.z;
@@ -453,9 +499,9 @@ fn emit_calendar_date_picker_with_icon(
         control.focused && !disabled,
     ));
 
-    // 展开态绘制浮层占位外壳；收起态不产生额外图元。
-    if state.open {
-        let panel = desc.panel_rect();
+    // 展开态准备浮层投影（当提供 TextCtx 时直接挂载真实 CalendarView，否则保留兼容外壳）。
+    let panel_rect = state.open.then(|| desc.panel_rect());
+    if let Some(panel) = panel_rect {
         primitives.push(instance(
             panel,
             [0.0; 4],
@@ -465,23 +511,25 @@ fn emit_calendar_date_picker_with_icon(
             CALENDAR_DATE_PICKER_PANEL_SHADOW,
             PrimType::Shadow,
             SubElement::Shadow,
-            z,
+            z + 8,
         ));
-        primitives.push(surface(
-            panel,
-            CALENDAR_DATE_PICKER_PANEL_RADIUS,
-            Token::OVERLAY_BG,
-            z,
-        ));
-        primitives.push(outlined(
-            panel,
-            CALENDAR_DATE_PICKER_PANEL_RADIUS,
-            Token::NONE,
-            Token::CARD_BORDER,
-            1.0,
-            0.0,
-            z,
-        ));
+        if text_ctx.is_none() {
+            primitives.push(surface(
+                panel,
+                CALENDAR_DATE_PICKER_PANEL_RADIUS,
+                Token::OVERLAY_BG,
+                z + 8,
+            ));
+            primitives.push(outlined(
+                panel,
+                CALENDAR_DATE_PICKER_PANEL_RADIUS,
+                Token::NONE,
+                Token::CARD_BORDER,
+                1.0,
+                0.0,
+                z + 8,
+            ));
+        }
     }
 
     let hit = (!disabled).then(|| {
@@ -532,6 +580,31 @@ fn emit_calendar_date_picker_with_icon(
             .expanded(state.open),
             true,
         );
+    }
+
+    if let (Some(panel), Some(ctx)) = (panel_rect, text_ctx) {
+        let cal_desc = DatePickerDesc::new(panel)
+            .with_label("CalendarDatePicker flyout")
+            .with_z(z.saturating_add(10))
+            .disabled(disabled);
+        let today = state.date.unwrap_or(NaiveDate {
+            year: 2024,
+            month: 3,
+            day: 15,
+        });
+        let mut cal_state = CalendarState::new(today, CalendarSelectionMode::Single);
+        cal_state.selected = state.date;
+        let cal_out = emit_calendar_view(
+            calendar_popup_node(node),
+            &cal_desc,
+            &cal_state,
+            ControlState {
+                disabled,
+                ..ControlState::default()
+            },
+            ctx,
+        );
+        out.extend(cal_out);
     }
 
     out

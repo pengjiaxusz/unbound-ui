@@ -1641,6 +1641,32 @@ impl GalleryApp {
         {
             self.state.bump();
         }
+        if self.state.active_page == PageId::Components {
+            match self.state.active_component {
+                Some(WidgetCatalogId::CalendarView) => {
+                    if let Some(rect) = self.state.sandbox.calendar_stage_rect.get() {
+                        let desc = unbound_widgets::DatePickerDesc::new(rect);
+                        if self.state.sandbox.calendar_view.handle_hover(&desc, position) {
+                            self.state.bump();
+                        }
+                    }
+                }
+                Some(WidgetCatalogId::DateRangePicker) => {
+                    if let Some(rect) = self.state.sandbox.date_range_stage_rect.get() {
+                        let desc = unbound_widgets::DatePickerDesc::new(rect);
+                        if self
+                            .state
+                            .sandbox
+                            .date_range_picker
+                            .handle_hover(&desc, position)
+                        {
+                            self.state.bump();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
         if self.nav_view.scrollbar_drag.is_some() {
             if self
@@ -1929,6 +1955,31 @@ impl GalleryApp {
         }
         if !self.layout.content.contains_point(point) {
             return;
+        }
+        if self.state.active_page == PageId::Components {
+            match self.state.active_component {
+                Some(WidgetCatalogId::CalendarView) => {
+                    if let Some(rect) = self.state.sandbox.calendar_stage_rect.get() {
+                        if rect.contains_point(point) {
+                            if self.state.sandbox.calendar_view.handle_wheel(delta_y) {
+                                self.state.bump();
+                            }
+                            return;
+                        }
+                    }
+                }
+                Some(WidgetCatalogId::DateRangePicker) => {
+                    if let Some(rect) = self.state.sandbox.date_range_stage_rect.get() {
+                        if rect.contains_point(point) {
+                            if self.state.sandbox.date_range_picker.handle_wheel(delta_y) {
+                                self.state.bump();
+                            }
+                            return;
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         if self.state.active_page == PageId::Parity {
             if let Some(pane) = self.state.parity_inspector.list_pane_rect.get() {
@@ -2236,6 +2287,42 @@ impl GalleryApp {
                 let _ = self.editor_event(id, event);
             }
             return;
+        }
+        if self.state.active_page == PageId::Components && !modifiers.control {
+            let chord = match key {
+                PlatformKey::Named(name) => match name.as_str() {
+                    "ArrowLeft" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowLeft"))),
+                    "ArrowRight" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowRight"))),
+                    "ArrowUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowUp"))),
+                    "ArrowDown" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("ArrowDown"))),
+                    "PageUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("PageUp"))),
+                    "PageDown" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("PageDown"))),
+                    "Home" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Home"))),
+                    "End" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("End"))),
+                    "Enter" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Enter"))),
+                    "Escape" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Escape"))),
+                    _ => None,
+                },
+                PlatformKey::Character(text) if text == " " => {
+                    Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named("Space")))
+                }
+                _ => None,
+            };
+            if let Some(chord) = chord {
+                let handled = match self.state.active_component {
+                    Some(WidgetCatalogId::CalendarView) => {
+                        self.state.sandbox.calendar_view.handle_key(&chord)
+                    }
+                    Some(WidgetCatalogId::DateRangePicker) => {
+                        self.state.sandbox.date_range_picker.handle_key(&chord)
+                    }
+                    _ => false,
+                };
+                if handled {
+                    self.state.bump();
+                    return;
+                }
+            }
         }
         if self.state.active_page == PageId::Parity && !modifiers.control {
             match key {
@@ -2664,12 +2751,32 @@ impl GalleryApp {
                         let current = self
                             .state
                             .knob(page_id, card as usize, knob as usize, &spec);
+                        let next_val = if current > 0.5 { 0.0 } else { 1.0 };
                         self.state.set_knob(
                             page_id,
                             card as usize,
                             knob as usize,
-                            if current > 0.5 { 0.0 } else { 1.0 },
+                            next_val,
                         );
+                        if page_id == PageId::Components
+                            && card as usize
+                                == pages::components::component_card_index(
+                                    WidgetCatalogId::CalendarView,
+                                )
+                        {
+                            match knob {
+                                3 => {
+                                    self.state.sandbox.calendar_view.is_today_highlighted =
+                                        next_val > 0.5;
+                                }
+                                4 => {
+                                    self.state
+                                        .sandbox
+                                        .set_calendar_blackouts_enabled(next_val > 0.5);
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -2692,6 +2799,37 @@ impl GalleryApp {
                         Vec2::new(bezier.x1, bezier.y1),
                         Vec2::new(bezier.x2, bezier.y2),
                     );
+                }
+                if PageId::from_index(page as usize) == PageId::Components
+                    && card as usize
+                        == pages::components::component_card_index(WidgetCatalogId::CalendarView)
+                {
+                    match knob {
+                        0 => {
+                            let mode = match option {
+                                0 => unbound_widgets::CalendarSelectionMode::None,
+                                2 => unbound_widgets::CalendarSelectionMode::Multiple,
+                                3 => unbound_widgets::CalendarSelectionMode::Range,
+                                _ => unbound_widgets::CalendarSelectionMode::Single,
+                            };
+                            self.state.sandbox.calendar_view.set_mode(mode);
+                        }
+                        1 => {
+                            self.state.sandbox.calendar_view.display_mode = match option {
+                                1 => unbound_widgets::CalendarDisplayMode::Year,
+                                2 => unbound_widgets::CalendarDisplayMode::Decade,
+                                _ => unbound_widgets::CalendarDisplayMode::Month,
+                            };
+                        }
+                        2 => {
+                            let first_day = if option == 1 { 1 } else { 0 };
+                            self.state
+                                .sandbox
+                                .calendar_view
+                                .set_first_day_of_week(first_day);
+                        }
+                        _ => {}
+                    }
                 }
             }
             Target::Code(page, card) => {
@@ -3036,6 +3174,14 @@ impl GalleryApp {
                             &mut self.state.sandbox,
                             Some(position),
                         ) {
+                            if id == WidgetCatalogId::CalendarView {
+                                let dm = match self.state.sandbox.calendar_view.display_mode {
+                                    unbound_widgets::CalendarDisplayMode::Month => 0.0,
+                                    unbound_widgets::CalendarDisplayMode::Year => 1.0,
+                                    unbound_widgets::CalendarDisplayMode::Decade => 2.0,
+                                };
+                                self.state.set_knob(PageId::Components, card as usize, 1, dm);
+                            }
                             self.state.bump();
                         }
                     }

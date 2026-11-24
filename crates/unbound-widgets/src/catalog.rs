@@ -921,44 +921,25 @@ where
             out
         }
         WidgetCatalogId::CalendarView => {
-            let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(36.0));
-            let desc = DatePickerDesc::new(cal_r);
+            let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(260.0));
+            let desc = DatePickerDesc::new(cal_r).with_label("CalendarView");
             let today = NaiveDate::new(2024, 1, 15).expect("valid probe date");
             let mut calendar = CalendarState::new(today, SelectionMode::Single);
-            let picked_day = 10 + (variant_idx % 18) as u8;
-            if let Some(sel_date) = NaiveDate::new(2024, 1, picked_day) {
+            if let Some(sel_date) = NaiveDate::new(2024, 1, 18) {
                 calendar.select(sel_date);
             }
-            let hdr_r = Rect::new(
-                cal_r.origin.x + 36.0,
-                cal_r.origin.y + 4.0,
-                (cal_r.size.x - 72.0).max(40.0),
-                26.0,
-            );
-            let mut glyphs = shape_centered(&mut shape, "January 2024", hdr_r, 13.0);
-            glyphs.extend(shape_centered(&mut shape, "<", desc.prev_rect(), 12.0));
-            glyphs.extend(shape_centered(&mut shape, ">", desc.next_rect(), 12.0));
-            let col_w = cal_r.size.x / 7.0;
-            for (wd_idx, wd) in ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
-                .iter()
-                .enumerate()
-            {
-                let wd_r = Rect::new(
-                    cal_r.origin.x + wd_idx as f32 * col_w,
-                    cal_r.origin.y + crate::date_picker::CALENDAR_HEADER,
-                    col_w,
-                    crate::date_picker::CALENDAR_WEEKDAYS,
-                );
-                glyphs.extend(shape_centered(&mut shape, wd, wd_r, 11.0));
+            if state.phase == PointerPhase::Hovered {
+                calendar.hover(NaiveDate::new(2024, 1, 20));
             }
-            for (idx, cell) in calendar.cells().iter().enumerate() {
-                if let Some(d) = cell.date {
-                    let cr = desc.cell_rect(idx);
-                    let day_str = format!("{}", d.day);
-                    glyphs.extend(shape_centered(&mut shape, &day_str, cr, 11.5));
-                }
-            }
-            crate::date_picker::emit_calendar(node, &desc, &calendar, state, &mut glyphs)
+            let mut engine = unbound_text::TextEngine::new();
+            let mut cache = unbound_text::GlyphCache::new();
+            let mut text_ctx = crate::TextCtx {
+                engine: &mut engine,
+                cache: &mut cache,
+                atlas_clock: 1,
+                raster_scale: 1.0,
+            };
+            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
         }
         WidgetCatalogId::Divider => {
             let div_r = Rect::new(o.x, o.y + 16.0, rect.size.x, 16.0);
@@ -2203,40 +2184,28 @@ where
             crate::cascader::emit_cascader(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::DateRangePicker => {
-            let drp_r = Rect::new(o.x, o.y, rect.size.x, 96.0);
-            let desc = crate::date_range_picker::DateRangePickerDesc::new(
-                drp_r,
-                Some(crate::date_range_picker::DateRange::ordered(
-                    NaiveDate::new(2026, 11, 1).expect("valid date"),
-                    NaiveDate::new(2026, 11, 13).expect("valid date"),
-                )),
-            );
-            let pad = 6.0;
-            let preset_h = 20.0_f32.min(drp_r.height() * 0.25);
-            let preset_w = ((drp_r.width() - pad * 4.0) / 3.0).max(20.0);
-            let mut glyphs = Vec::new();
-            for (idx, lbl) in ["Last 7d", "Last 30d", "Q4 2026"].iter().enumerate() {
-                let pr = Rect::new(
-                    drp_r.origin.x + pad + idx as f32 * (preset_w + pad),
-                    drp_r.origin.y + pad,
-                    preset_w,
-                    preset_h,
-                );
-                glyphs.extend(shape_centered(&mut shape, lbl, pr, 11.0));
+            let drp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(260.0));
+            let desc = DatePickerDesc::new(drp_r).with_label("DateRangePicker");
+            let today = NaiveDate::new(2026, 11, 15).expect("valid date");
+            let mut calendar = CalendarState::new(today, SelectionMode::Range);
+            if let Some(start) = NaiveDate::new(2026, 11, 5) {
+                calendar.select(start);
             }
-            let panel_y = drp_r.origin.y + preset_h + pad * 2.0;
-            let panel_w = ((drp_r.width() - pad * 3.0) * 0.5).max(24.0);
-            glyphs.extend(shape(
-                "Nov 2026  (Nov 1 – Nov 13)",
-                Vec2::new(drp_r.origin.x + pad + 10.0, panel_y + 8.0),
-                11.5,
-            ));
-            glyphs.extend(shape(
-                "Dec 2026",
-                Vec2::new(drp_r.origin.x + pad * 2.0 + panel_w + 10.0, panel_y + 8.0),
-                11.5,
-            ));
-            crate::date_range_picker::emit_date_range_picker(node, &desc, state, &glyphs)
+            if let Some(end) = NaiveDate::new(2026, 11, 13) {
+                calendar.select(end);
+            }
+            if state.phase == PointerPhase::Hovered {
+                calendar.hover(NaiveDate::new(2026, 11, 18));
+            }
+            let mut engine = unbound_text::TextEngine::new();
+            let mut cache = unbound_text::GlyphCache::new();
+            let mut text_ctx = crate::TextCtx {
+                engine: &mut engine,
+                cache: &mut cache,
+                atlas_clock: 1,
+                raster_scale: 1.0,
+            };
+            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
         }
         WidgetCatalogId::HotkeyInput => {
             let chords = ["Ctrl+K", "Ctrl+Shift+P", "Alt+Enter"];
