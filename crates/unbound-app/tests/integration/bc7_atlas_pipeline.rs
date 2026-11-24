@@ -534,9 +534,15 @@ fn capability_boundaries_reject_invalid_payloads_isolate_uvs_and_avoid_animation
     let prims_after = image_and_placeholder_primitives(&rt);
     let (prim_a_after, payload_a_after) =
         (prims_after[0].0, prims_after[0].1.expect("payload A after"));
-    assert_eq!(prim_a_after.local_pos, [42.0, 35.0]);
+    let (prim_b_after, payload_b_after) =
+        (prims_after[1].0, prims_after[1].1.expect("payload B after"));
+    assert_eq!(prim_a.size, [128.0, 64.0]);
     assert_eq!(prim_a_after.size, [210.0, 105.0]);
+    assert_eq!(prim_b_after.size, [96.0, 48.0]);
     assert_eq!(prim_a_after.border_token_or_tex, prim_a.border_token_or_tex);
     assert_eq!(payload_a_after.p0, payload_a.p0);
     assert_eq!(payload_a_after.p1, payload_a.p1);
+    assert_eq!(prim_b_after.border_token_or_tex, prim_b.border_token_or_tex);
+    assert_eq!(payload_b_after.p0, payload_b.p0);
+    assert_eq!(payload_b_after.p1, payload_b.p1);
 }
