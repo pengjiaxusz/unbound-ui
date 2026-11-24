@@ -275,18 +275,14 @@ fn calendar_view_normal_and_disabled_states() {
         };
         let focused_out = emit_calendar_view(1, &desc, &normal_state, focused_ctrl, text_ctx);
         assert!(
-            focused_out
-                .primitives
-                .iter()
-                .any(|p| {
-                    unbound_gpu::data::PrimFlags(
-                        unbound_gpu::data::GpuPrimitiveInstance::unpack_type(p.prim_type_and_flags)
-                            .2,
-                    )
-                    .sub_element()
-                        == SubElement::FocusRing as u8
-                        && p.opacity() > 0.9
-                }),
+            focused_out.primitives.iter().any(|p| {
+                unbound_gpu::data::PrimFlags(
+                    unbound_gpu::data::GpuPrimitiveInstance::unpack_type(p.prim_type_and_flags).2,
+                )
+                .sub_element()
+                    == SubElement::FocusRing as u8
+                    && p.opacity() > 0.9
+            }),
             "focused CalendarView must show visible focus ring"
         );
 
