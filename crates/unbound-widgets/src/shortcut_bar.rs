@@ -188,7 +188,9 @@ impl KeybindingManagerState {
     pub fn entries_for_scope(&self, scope: &str) -> Vec<&ShortcutEntry> {
         self.bindings
             .iter()
-            .filter(|e| e.scope.eq_ignore_ascii_case(scope) || e.scope.eq_ignore_ascii_case("global"))
+            .filter(|e| {
+                e.scope.eq_ignore_ascii_case(scope) || e.scope.eq_ignore_ascii_case("global")
+            })
             .collect()
     }
 
@@ -233,7 +235,34 @@ impl ShortcutBarDesc {
     }
 }
 
-/// 发射底部快捷键提示栏（保持 24 态恒定图元数）。
+/// 按字符显示宽度估算文本占位单元（ASCII 计 1 单元，CJK 与全角宽字符计 2 单元）。
+fn display_width_units(text: &str) -> f32 {
+    text.chars()
+        .map(|ch| {
+            let cp = ch as u32;
+            let is_wide = matches!(
+                cp,
+                0x1100..=0x115F
+                    | 0x2E80..=0x303E
+                    | 0x3040..=0xA4CF
+                    | 0xAC00..=0xD7A3
+                    | 0xF900..=0xFAFF
+                    | 0xFE10..=0xFE6F
+                    | 0xFF00..=0xFF60
+                    | 0xFFE0..=0xFFE6
+                    | 0x20000..=0x2FFFD
+                    | 0x30000..=0x3FFFD
+            );
+            if is_wide {
+                2.0
+            } else {
+                1.0
+            }
+        })
+        .sum()
+}
+
+/// 发射底部快捷键提示栏（按显示宽度排布并在越界前停止绘制，保持 24 态恒定图元数）。
 #[must_use]
 pub fn emit_shortcut_bar(
     node: u64,
@@ -262,9 +291,13 @@ pub fn emit_shortcut_bar(
         z,
     ));
 
+    let max_x = r.max().x - BAR_PADDING;
     let mut x = r.origin.x + BAR_PADDING;
     for entry in &desc.entries {
-        let keycap_w = (entry.chord.len() as f32 * 7.0 + 12.0).max(24.0);
+        let keycap_w = (display_width_units(&entry.chord) * 7.0 + 12.0).max(24.0);
+        if x + keycap_w > max_x {
+            break;
+        }
         let keycap_r = Rect::new(
             x,
             r.origin.y + KEYCAP_INSET,
@@ -281,11 +314,20 @@ pub fn emit_shortcut_bar(
             0.0,
             z + 1,
         ));
-        x += keycap_w + (entry.label.len() as f32 * 7.0) + 20.0;
+        let label_w = display_width_units(&entry.label) * 7.0;
+        x += keycap_w + label_w + 20.0;
+        if x >= max_x {
+            break;
+        }
     }
 
+    let visible_glyphs: Vec<GlyphQuad> = glyphs
+        .iter()
+        .copied()
+        .filter(|q| q.rect.origin.x >= r.origin.x && q.rect.max().x <= r.max().x)
+        .collect();
     emit_glyphs(
-        glyphs,
+        &visible_glyphs,
         Token::TEXT_SECONDARY,
         z + 2,
         &mut primitives,

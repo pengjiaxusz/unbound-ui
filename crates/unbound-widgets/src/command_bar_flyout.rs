@@ -76,12 +76,22 @@ impl CommandBarFlyoutDesc {
     pub fn item_rect(&self, index: usize) -> Rect {
         let pad = 4.0;
         let height = (self.rect.height() - pad * 2.0).max(0.0);
-        Rect::new(
-            self.rect.origin.x + pad + index as f32 * (COMMAND_BAR_FLYOUT_ITEM + 2.0),
-            self.rect.origin.y + pad,
-            COMMAND_BAR_FLYOUT_ITEM.min(height.max(0.0)),
-            height,
-        )
+        let x = self.rect.origin.x + pad + index as f32 * (COMMAND_BAR_FLYOUT_ITEM + 2.0);
+        let w = COMMAND_BAR_FLYOUT_ITEM.min(height.max(0.0));
+        let right_limit = if self.show_more {
+            self.divider_rect().origin.x - 2.0
+        } else {
+            self.rect.max().x - pad
+        };
+        if x + w > right_limit || x < self.rect.origin.x {
+            return Rect::new(
+                x.min(self.rect.max().x),
+                self.rect.origin.y + pad,
+                0.0,
+                height,
+            );
+        }
+        Rect::new(x, self.rect.origin.y + pad, w, height)
     }
 
     /// 右侧「更多」按钮矩形。
@@ -151,24 +161,45 @@ pub fn emit_command_bar_flyout(
         z,
     ));
 
+    let divider = desc.divider_rect();
+    let more = desc.more_rect();
+    // 窄容器下若项区域侵占右侧分隔线或「更多」按钮，隐藏溢出项以禁止重叠。
+    let item_right_limit = if desc.show_more {
+        divider.origin.x - 2.0
+    } else {
+        rect.max().x - 4.0
+    };
     for index in 0..desc.items {
         let item = desc.item_rect(index);
+        if item.width() <= 0.0 || item.max().x > item_right_limit || item.origin.x < rect.origin.x {
+            continue;
+        }
         primitives.push(outlined(item, 4.0, item_fill, Token::NONE, 0.0, 0.0, z + 1));
     }
 
-    primitives.push(surface(desc.divider_rect(), 0.0, Token::DIVIDER, z + 2));
-    primitives.push(outlined(
-        desc.more_rect(),
-        4.0,
-        item_fill,
-        Token::NONE,
-        0.0,
-        0.0,
-        z + 3,
-    ));
+    if desc.show_more {
+        if divider.origin.x >= rect.origin.x + 4.0 && divider.max().x <= more.origin.x {
+            primitives.push(surface(divider, 0.0, Token::DIVIDER, z + 2));
+        }
+        if more.origin.x >= rect.origin.x + 4.0 && more.max().x <= rect.max().x {
+            primitives.push(outlined(more, 4.0, item_fill, Token::NONE, 0.0, 0.0, z + 3));
+        }
+    }
 
+    let visible_glyphs: Vec<GlyphQuad> = icon_glyphs
+        .iter()
+        .copied()
+        .filter(|q| {
+            let inside_bar = q.rect.origin.x >= rect.origin.x && q.rect.max().x <= rect.max().x;
+            let in_more = desc.show_more
+                && q.rect.origin.x >= more.origin.x
+                && q.rect.max().x <= more.max().x;
+            let in_items = q.rect.max().x <= item_right_limit;
+            inside_bar && (in_items || in_more)
+        })
+        .collect();
     emit_glyphs(
-        icon_glyphs,
+        &visible_glyphs,
         if disabled {
             Token::TEXT_DISABLED
         } else {

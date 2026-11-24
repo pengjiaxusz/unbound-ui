@@ -96,6 +96,23 @@ impl StepperDesc {
         self.orientation = orientation;
         self
     }
+
+    /// 计算单个步骤允许的最大标签宽度（受当前步距与容器宽度约束）。
+    #[must_use]
+    pub fn step_label_max_width(&self) -> f32 {
+        let count = self.steps.len().clamp(1, MAX_STEP_SLOTS);
+        match self.orientation {
+            StepperOrientation::Horizontal => {
+                let pad_x = 8.0_f32.min((self.rect.width() * 0.1).max(0.0));
+                let usable = (self.rect.width() - pad_x * 2.0).max(0.0);
+                (usable / count as f32).max(0.0)
+            }
+            StepperOrientation::Vertical => {
+                let pad_x = 16.0_f32.min((self.rect.width() * 0.25).max(0.0));
+                (self.rect.width() - pad_x - 30.0).max(0.0)
+            }
+        }
+    }
 }
 
 /// 步骤节点的确定性子节点 ID（`0..5`）。
@@ -139,54 +156,87 @@ pub fn emit_stepper(
     ));
 
     let count = desc.steps.len().clamp(1, MAX_STEP_SLOTS);
-    let badge_sz = 22.0_f32.min(desc.rect.height() - 8.0).max(12.0);
     let horizontal = desc.orientation == StepperOrientation::Horizontal;
+    // 窄容器下按步数与容器尺寸同步约束圆点直径与内边距，保证圆点与连接线不越界。
+    let (pad_x, pad_y, badge_sz) = if horizontal {
+        let px = 8.0_f32.min((desc.rect.width() * 0.1).max(0.0));
+        let max_w = ((desc.rect.width() - px * 2.0) / count as f32).max(0.0);
+        let max_h = (desc.rect.height() - 8.0).max(0.0);
+        let sz = 22.0_f32
+            .min(max_w)
+            .min(max_h)
+            .max(4.0_f32.min(desc.rect.width().min(desc.rect.height()).max(0.0)));
+        (px, 4.0_f32, sz)
+    } else {
+        let px = 16.0_f32.min((desc.rect.width() * 0.2).max(0.0));
+        let py = 8.0_f32.min((desc.rect.height() * 0.1).max(0.0));
+        let max_h = ((desc.rect.height() - py * 2.0) / count as f32).max(0.0);
+        let max_w = (desc.rect.width() - px).max(0.0);
+        let sz = 22.0_f32
+            .min(max_w)
+            .min(max_h)
+            .max(4.0_f32.min(desc.rect.width().min(desc.rect.height()).max(0.0)));
+        (px, py, sz)
+    };
 
     let step_center = |idx: usize| -> (f32, f32) {
-        if horizontal {
-            let span = (desc.rect.width() - badge_sz - 16.0).max(1.0);
-            let t = if count <= 1 {
-                0.0
-            } else {
-                idx as f32 / (count - 1) as f32
-            };
-            (
-                desc.rect.origin.x + 8.0 + badge_sz * 0.5 + span * t,
-                desc.rect.origin.y + desc.rect.height() * 0.5,
-            )
+        let t = if count <= 1 {
+            0.0
         } else {
-            let span = (desc.rect.height() - badge_sz - 16.0).max(1.0);
-            let t = if count <= 1 {
-                0.0
-            } else {
-                idx as f32 / (count - 1) as f32
-            };
-            (
-                desc.rect.origin.x + 16.0 + badge_sz * 0.5,
-                desc.rect.origin.y + 8.0 + badge_sz * 0.5 + span * t,
-            )
+            idx as f32 / (count - 1) as f32
+        };
+        if horizontal {
+            let span = (desc.rect.width() - badge_sz - pad_x * 2.0).max(0.0);
+            let cx = (desc.rect.origin.x + pad_x + badge_sz * 0.5 + span * t).clamp(
+                desc.rect.origin.x + badge_sz * 0.5,
+                (desc.rect.max().x - badge_sz * 0.5).max(desc.rect.origin.x + badge_sz * 0.5),
+            );
+            (cx, desc.rect.origin.y + desc.rect.height() * 0.5)
+        } else {
+            let span = (desc.rect.height() - badge_sz - pad_y * 2.0).max(0.0);
+            let cx = (desc.rect.origin.x + pad_x + badge_sz * 0.5).clamp(
+                desc.rect.origin.x + badge_sz * 0.5,
+                (desc.rect.max().x - badge_sz * 0.5).max(desc.rect.origin.x + badge_sz * 0.5),
+            );
+            let cy = (desc.rect.origin.y + pad_y + badge_sz * 0.5 + span * t).clamp(
+                desc.rect.origin.y + badge_sz * 0.5,
+                (desc.rect.max().y - badge_sz * 0.5).max(desc.rect.origin.y + badge_sz * 0.5),
+            );
+            (cx, cy)
         }
     };
 
     for i in 0..(MAX_STEP_SLOTS - 1) {
-        let visible = i + 1 < desc.steps.len();
         let (cx0, cy0) = step_center(i.min(count - 1));
         let (cx1, cy1) = step_center((i + 1).min(count - 1));
-        let conn_rect = if horizontal {
-            Rect::new(
-                cx0 + badge_sz * 0.5 + 2.0,
-                cy0 - CONNECTOR_THICKNESS * 0.5,
-                (cx1 - cx0 - badge_sz - 4.0).max(2.0),
-                CONNECTOR_THICKNESS,
+        let (conn_rect, has_span) = if horizontal {
+            let x0 = cx0 + badge_sz * 0.5 + 2.0;
+            let raw_w = (cx1 - cx0 - badge_sz - 4.0).max(0.0);
+            let clamped_w = raw_w.min((desc.rect.max().x - x0).max(0.0));
+            (
+                Rect::new(
+                    x0.min(desc.rect.max().x),
+                    cy0 - CONNECTOR_THICKNESS * 0.5,
+                    clamped_w,
+                    CONNECTOR_THICKNESS,
+                ),
+                clamped_w > 0.5,
             )
         } else {
-            Rect::new(
-                cx0 - CONNECTOR_THICKNESS * 0.5,
-                cy0 + badge_sz * 0.5 + 2.0,
-                CONNECTOR_THICKNESS,
-                (cy1 - cy0 - badge_sz - 4.0).max(2.0),
+            let y0 = cy0 + badge_sz * 0.5 + 2.0;
+            let raw_h = (cy1 - cy0 - badge_sz - 4.0).max(0.0);
+            let clamped_h = raw_h.min((desc.rect.max().y - y0).max(0.0));
+            (
+                Rect::new(
+                    cx0 - CONNECTOR_THICKNESS * 0.5,
+                    y0.min(desc.rect.max().y),
+                    CONNECTOR_THICKNESS,
+                    clamped_h,
+                ),
+                clamped_h > 0.5,
             )
         };
+        let visible = i + 1 < desc.steps.len() && has_span;
         let completed = desc
             .steps
             .get(i)
@@ -234,13 +284,26 @@ pub fn emit_stepper(
     ));
 
     if !label_glyphs.is_empty() {
-        glyphs(
-            label_glyphs,
-            Token::TEXT_PRIMARY,
-            desc.z + 4,
-            &mut primitives,
-            &mut payloads,
-        );
+        // 窄容器下裁剪越出容器与步距槽位的标签字形，防止标签溢出或跨步距重叠。
+        let label_max_w = desc.step_label_max_width();
+        let clipped_labels: Vec<GlyphQuad> = label_glyphs
+            .iter()
+            .copied()
+            .filter(|q| {
+                q.rect.origin.x >= desc.rect.origin.x
+                    && q.rect.max().x <= desc.rect.max().x
+                    && (!horizontal || q.rect.width() <= label_max_w.max(1.0))
+            })
+            .collect();
+        if !clipped_labels.is_empty() {
+            glyphs(
+                &clipped_labels,
+                Token::TEXT_PRIMARY,
+                desc.z + 4,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
     }
 
     let hit = (!state.disabled).then(|| {
