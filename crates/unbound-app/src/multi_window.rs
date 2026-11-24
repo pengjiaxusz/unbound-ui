@@ -277,7 +277,7 @@ impl<A: Application> WindowContext<A> {
         if self.was_suspended {
             self.was_suspended = false;
             self.frame_dropped = true;
-            // ADR 0030 & ADR 0033：Suspended 窗口恢复可见时直接吸附至目标主题终态，不补播过期动画。
+            // ADR 0030 & ADR 0034：Suspended 窗口恢复可见时直接吸附至目标主题终态，不补播过期动画。
             self.snap_theme_to_current_context();
             self.runtime.invalidate();
         }

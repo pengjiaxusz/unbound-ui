@@ -62,8 +62,8 @@ pub use settings::{
     InvalidationTier, LayerMode, LineBreakMode, PhaseMode, TextRenderSettings, TextShaper,
 };
 pub use shaping::{
-    cjk_family_for_locale, PositionedGlyph, ShapedText, TextCacheStats, TextEngine, TextLine,
-    TextSpan, TextStyle, WrappedText,
+    cjk_family_for_locale, PositionedGlyph, ShapedText, SymbolFontPolicy, TextCacheStats,
+    TextEngine, TextLine, TextSpan, TextStyle, WrappedText, WINDOWS_SYMBOL_FALLBACKS,
 };
 
 // 亚像素相位档位运行期可切与整表失效支持。

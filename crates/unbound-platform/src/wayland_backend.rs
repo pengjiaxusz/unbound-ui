@@ -79,7 +79,7 @@ use crate::window::{
 };
 
 const WAYLAND_CLIPBOARD_MIME: &str = "text/plain;charset=utf-8";
-const WAYLAND_CSD_RESIZE_BORDER: f64 = 6.0;
+const WAYLAND_CSD_RESIZE_BORDER: f64 = 8.0;
 
 /// 应用侧向 Wayland 事件循环发送的窗口控制命令。
 enum WaylandCommand {
@@ -666,6 +666,12 @@ impl WaylandState {
         sctk_window.set_app_id("unbound-ui");
         let (min_w, min_h) = config.effective_min_size();
         sctk_window.set_min_size(Some((min_w, min_h)));
+        sctk_window.xdg_surface().set_window_geometry(
+            0,
+            0,
+            config.width.max(1) as i32,
+            config.height.max(1) as i32,
+        );
         sctk_window.commit();
 
         let id = self.next_window_id;
@@ -942,6 +948,7 @@ impl WaylandState {
                 if let Some(seat) = self.seat.clone() {
                     if let Some(entry) = self.window_by_id_mut(id) {
                         entry.sctk_window.move_(&seat, serial);
+                        let _ = conn.flush();
                     }
                 }
             }
@@ -952,6 +959,7 @@ impl WaylandState {
                         entry
                             .sctk_window
                             .resize(&seat, serial, to_xdg_resize_edge(direction));
+                        let _ = conn.flush();
                     }
                 }
             }
@@ -1217,6 +1225,11 @@ impl WindowHandler for WaylandState {
             });
 
             if new_w != cur_w || new_h != cur_h || !entry.configured {
+                let logical_w = (f64::from(new_w) / scale).round().max(1.0) as i32;
+                let logical_h = (f64::from(new_h) / scale).round().max(1.0) as i32;
+                window
+                    .xdg_surface()
+                    .set_window_geometry(0, 0, logical_w, logical_h);
                 if let Ok(mut sz) = entry.shared.inner_size.lock() {
                     *sz = PhysicalSize::new(new_w, new_h);
                 }
@@ -1484,6 +1497,7 @@ impl PointerHandler for WaylandState {
                                         serial,
                                         to_xdg_resize_edge(dir),
                                     );
+                                    let _ = conn.flush();
                                     continue;
                                 }
                             }

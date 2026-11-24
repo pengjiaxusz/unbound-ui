@@ -62,6 +62,67 @@ internal static class Catalog
         });
     }
 
+    /// <summary>
+    /// 为 NavigationViewOverflow 与 NavigationViewLeftClosedOverflow 填充完全一致的 10 个主菜单项，
+    /// 图标码点与 apps/showcase/src/parity.rs 逐项对齐（Symbol 枚举无精确对应码点时直接使用 FontIcon 钉死），
+    /// 并返回默认选中的 Home 项。
+    /// </summary>
+    private static NavigationViewItem AddOverflowNavigationItems(NavigationView nav)
+    {
+        var home = new NavigationViewItem
+        {
+            Content = "Home",
+            Icon = new SymbolIcon(Symbol.Home),
+        };
+        nav.MenuItems.Add(home);
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Library",
+            Icon = new SymbolIcon(Symbol.Library),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Analytics",
+            Icon = new SymbolIcon(Symbol.FourBars),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Reports",
+            Icon = new SymbolIcon(Symbol.Document),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Projects",
+            Icon = new SymbolIcon(Symbol.Folder),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Tasks",
+            Icon = new FontIcon { Glyph = "\uE762" },
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Calendar",
+            Icon = new SymbolIcon(Symbol.Calendar),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Messages",
+            Icon = new SymbolIcon(Symbol.Mail),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Contacts",
+            Icon = new SymbolIcon(Symbol.Contact),
+        });
+        nav.MenuItems.Add(new NavigationViewItem
+        {
+            Content = "Archive",
+            Icon = new FontIcon { Glyph = "\uE7B8" },
+        });
+        return home;
+    }
+
     private static string ComputeSystemAccentSignature()
     {
         try
@@ -111,9 +172,10 @@ internal static class Catalog
         "HyperlinkButton", "RepeatButton", "DropDownButton", "ToggleSplitButton",
         // 第五批：输入与日期类补充（3）
         "PasswordBox", "DatePicker", "CalendarDatePicker",
-        // 第六批：NavigationView 多形态差分矩阵（6 扩展场景）
+        // 第六批：NavigationView 多形态差分矩阵（8 扩展场景，含展开与折叠溢出态）
         "NavigationViewLeftClosed", "NavigationViewLeftCompact", "NavigationViewLeftMinimal",
         "NavigationViewTop", "NavigationViewHierarchical", "NavigationViewChrome",
+        "NavigationViewOverflow", "NavigationViewLeftClosedOverflow",
     };
 
     private static readonly string[] ImplementedStateList = { "normal", "disabled", "checked", "focused" };
@@ -171,6 +233,7 @@ internal static class Catalog
             "InfoBar" or "MenuBar" or "CommandBar" or "NavigationView" or
             "NavigationViewLeftClosed" or "NavigationViewLeftCompact" or "NavigationViewLeftMinimal" or
             "NavigationViewTop" or "NavigationViewHierarchical" or "NavigationViewChrome" or
+            "NavigationViewOverflow" or "NavigationViewLeftClosedOverflow" or
             "TabView" or "Pivot" or "BreadcrumbBar" or "SelectorBar" or "PipsPager" or
             "Expander" or "SplitView" or "Border" or "Card" or "StackPanel" or
             "ScrollView" or "TreeView" or "ListView" or "FlipView" or "CalendarView" or
@@ -890,6 +953,43 @@ internal static class Catalog
                         Content = "Library",
                         Icon = new SymbolIcon(Symbol.Library),
                     });
+                    nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewOverflow":
+                {
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        OpenPaneLength = 220,
+                        IsPaneOpen = true,
+                        IsSettingsVisible = false,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    var home = AddOverflowNavigationItems(nav);
+                    nav.SelectedItem = home;
+                    AddEnglishSettingsFooter(nav);
+                    element = nav;
+                    return true;
+                }
+
+            case "NavigationViewLeftClosedOverflow":
+                {
+                    var nav = new NavigationView
+                    {
+                        Width = 360,
+                        Height = 280,
+                        PaneDisplayMode = NavigationViewPaneDisplayMode.Left,
+                        IsPaneOpen = false,
+                        IsSettingsVisible = false,
+                        IsBackButtonVisible = NavigationViewBackButtonVisible.Collapsed,
+                    };
+                    var home = AddOverflowNavigationItems(nav);
                     nav.SelectedItem = home;
                     AddEnglishSettingsFooter(nav);
                     element = nav;

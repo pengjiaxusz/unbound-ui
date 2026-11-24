@@ -30,5 +30,6 @@ mod slider_keyboard_and_range;
 mod slot_fixtures;
 mod stable_shape;
 mod switch_spring;
+mod symbol_font_fallback;
 mod text_input;
 mod tooltip_timer;

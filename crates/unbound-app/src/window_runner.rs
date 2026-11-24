@@ -181,7 +181,7 @@ pub struct WindowedRunner<A: Application> {
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     /// GPU 着色器用于解析颜色 token 的语义颜色表。
     theme: ThemeState,
-    /// 框架级主题过渡状态机（ADR 0033：Oklab 4 KiB LUT 逐帧插值）。
+    /// 框架级主题过渡状态机（ADR 0034：Oklab 4 KiB LUT 逐帧插值）。
     theme_transition: ThemeTransition,
     /// 主题过渡单调时钟基准。
     theme_clock_epoch: Instant,
@@ -402,7 +402,7 @@ impl<A: Application> WindowedRunner<A> {
             self.runtime.premultiplied_surface(),
             unbound_platform::accent_policy_export_available(),
         );
-        // 原生后景在主题过渡期间延迟至中点（t >= 0.5）再翻转 DWM 深色模式（ADR 0033）。
+        // 原生后景在主题过渡期间延迟至中点（t >= 0.5）再翻转 DWM 深色模式（ADR 0034）。
         let theme = self.theme_transition.effective_backdrop_theme();
         self.appearance
             .set_host_clear_alpha(self.runtime.clear_alpha());
