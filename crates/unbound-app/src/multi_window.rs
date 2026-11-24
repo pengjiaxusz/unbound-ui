@@ -825,7 +825,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
     pub fn last_snap_anchor(&self, id: WindowId) -> Option<RelativeMonitorAnchor> {
         self.floating_host
             .get(id)
-            .and_then(|s| s.last_snap_anchor.clone())
+            .and_then(|s| s.last_snap_anchor)
     }
 
     /// 查询当前拥有键盘焦点的窗口 ID。
