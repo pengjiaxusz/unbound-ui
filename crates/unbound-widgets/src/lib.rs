@@ -578,8 +578,10 @@ pub use curve_editor::{
 };
 pub use data_grid::{emit_data_grid, DataGridDesc, DataGridState};
 pub use date_picker::{
-    days_in_month, emit_calendar, is_leap_year, CalendarCell, CalendarState, DatePickerDesc,
-    NaiveDate, SelectionMode, YearMonth,
+    calendar_cell_node, calendar_header_node, calendar_next_node, calendar_prev_node,
+    days_in_month, emit_calendar, emit_calendar_view, is_leap_year, CalendarCell,
+    CalendarDisplayMode, CalendarHitTarget, CalendarSelectionMode, CalendarState, DatePickerDesc,
+    NaiveDate, SelectionMode, YearMonth, CALENDAR_CHEVRON_DOWN_GLYPH, CALENDAR_CHEVRON_UP_GLYPH,
 };
 pub use date_range_picker::{
     emit_date_range_picker, DateRange, DateRangePickerDesc, DateRangePickerState,
