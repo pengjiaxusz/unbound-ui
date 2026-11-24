@@ -58,6 +58,7 @@ use unbound_world::{NodeId, UiWorld};
 pub mod appearance;
 pub mod assets;
 pub mod backdrop;
+pub mod floating_host;
 pub mod form;
 pub mod guest_bridge;
 pub mod i18n;
@@ -86,6 +87,7 @@ pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
     WindowBackdropController, MICA_READY_EVENT_ID,
 };
+pub use floating_host::{effective_policy, FloatingHost, FloatingHostState, FloatingWindowSpec};
 pub use form::{FormBindingStore, FormMutator, WidgetValue};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
@@ -1449,6 +1451,87 @@ impl AppContext {
     pub fn close_window(&mut self, id: unbound_platform::WindowId) {
         self.pending_window_commands
             .push(WindowCommand::CloseWindow(id));
+    }
+
+    /// 请求多窗口协调器按给定配置与可选定位策略打开幽灵窗或悬浮浮岛。
+    pub fn open_floating_window(
+        &mut self,
+        config: unbound_platform::WindowConfig,
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::OpenFloatingWindow { config, placement });
+    }
+
+    /// 请求在运行期热更新指定浮窗策略（不销毁重建窗口）。
+    pub fn update_floating_policy(
+        &mut self,
+        id: unbound_platform::WindowId,
+        policy: unbound_platform::FloatingWindowPolicy,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::UpdateFloatingPolicy { id, policy });
+    }
+
+    /// 请求以无激活方式显示或隐藏指定浮窗。
+    pub fn set_window_visible_no_activate(
+        &mut self,
+        id: unbound_platform::WindowId,
+        visible: bool,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetWindowVisibleNoActivate { id, visible });
+    }
+
+    /// 请求热切换指定浮窗的置顶状态。
+    pub fn set_window_always_on_top(
+        &mut self,
+        id: unbound_platform::WindowId,
+        topmost: bool,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
+    }
+
+    /// 请求热切换指定浮窗的鼠标穿透状态。
+    pub fn set_window_click_through(
+        &mut self,
+        id: unbound_platform::WindowId,
+        click_through: bool,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetWindowClickThrough { id, click_through });
+    }
+
+    /// 请求更新指定浮窗的屏幕物理外框矩形。
+    pub fn set_window_outer_rect(
+        &mut self,
+        id: unbound_platform::WindowId,
+        rect: unbound_platform::ScreenRect,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetWindowOuterRect { id, rect });
+    }
+
+    /// 请求将指定浮窗按边缘阈值吸附至所属显示器工作区边界。
+    pub fn snap_floating_window(
+        &mut self,
+        id: unbound_platform::WindowId,
+        desired: unbound_platform::ScreenRect,
+        snap_threshold: i32,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SnapFloatingWindow {
+                id,
+                desired,
+                snap_threshold,
+            });
+    }
+
+    /// 请求关闭指定标识的幽灵窗或悬浮浮岛。
+    pub fn close_floating_window(&mut self, id: unbound_platform::WindowId) {
+        self.pending_window_commands
+            .push(WindowCommand::CloseFloatingWindow(id));
     }
 }
 
@@ -4487,6 +4570,59 @@ pub enum WindowCommand {
     OpenWindow(unbound_platform::WindowConfig),
     /// 请求多窗口协调器关闭指定标识的窗口。
     CloseWindow(unbound_platform::WindowId),
+    /// 请求多窗口协调器打开幽灵窗或悬浮浮岛，并可选附带工作区避让/锚定策略。
+    OpenFloatingWindow {
+        /// 浮窗配置（含角色与初始策略）。
+        config: unbound_platform::WindowConfig,
+        /// 可选初始定位策略。
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+    },
+    /// 运行期热更新指定浮窗的策略（不重建窗口）。
+    UpdateFloatingPolicy {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 目标策略。
+        policy: unbound_platform::FloatingWindowPolicy,
+    },
+    /// 以无激活方式显示或隐藏指定浮窗。
+    SetWindowVisibleNoActivate {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 目标可见性。
+        visible: bool,
+    },
+    /// 运行期热切换指定浮窗的置顶状态。
+    SetWindowAlwaysOnTop {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 是否置顶。
+        topmost: bool,
+    },
+    /// 运行期热切换指定浮窗的鼠标穿透状态。
+    SetWindowClickThrough {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 是否启用穿透。
+        click_through: bool,
+    },
+    /// 运行期热更新指定浮窗的屏幕物理外框矩形。
+    SetWindowOuterRect {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 目标屏幕物理矩形。
+        rect: unbound_platform::ScreenRect,
+    },
+    /// 将指定浮窗按边缘阈值吸附至当前显示器工作区边界。
+    SnapFloatingWindow {
+        /// 目标窗口标识。
+        id: unbound_platform::WindowId,
+        /// 期望屏幕物理矩形。
+        desired: unbound_platform::ScreenRect,
+        /// 边缘磁吸阈值（物理像素）。
+        snap_threshold: i32,
+    },
+    /// 关闭指定标识的幽灵窗或悬浮浮岛。
+    CloseFloatingWindow(unbound_platform::WindowId),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -6300,6 +6436,87 @@ impl<A: Application> AppRuntime<A> {
     /// 请求多窗口协调器关闭指定标识的窗口。
     pub fn close_window(&mut self, id: unbound_platform::WindowId) {
         self.window_commands.push(WindowCommand::CloseWindow(id));
+    }
+
+    /// 请求多窗口协调器按给定配置与可选定位策略打开幽灵窗或悬浮浮岛。
+    pub fn open_floating_window(
+        &mut self,
+        config: unbound_platform::WindowConfig,
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+    ) {
+        self.window_commands
+            .push(WindowCommand::OpenFloatingWindow { config, placement });
+    }
+
+    /// 请求在运行期热更新指定浮窗策略（不销毁重建窗口）。
+    pub fn update_floating_policy(
+        &mut self,
+        id: unbound_platform::WindowId,
+        policy: unbound_platform::FloatingWindowPolicy,
+    ) {
+        self.window_commands
+            .push(WindowCommand::UpdateFloatingPolicy { id, policy });
+    }
+
+    /// 请求以无激活方式显示或隐藏指定浮窗。
+    pub fn set_window_visible_no_activate(
+        &mut self,
+        id: unbound_platform::WindowId,
+        visible: bool,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SetWindowVisibleNoActivate { id, visible });
+    }
+
+    /// 请求热切换指定浮窗的置顶状态。
+    pub fn set_window_always_on_top(
+        &mut self,
+        id: unbound_platform::WindowId,
+        topmost: bool,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
+    }
+
+    /// 请求热切换指定浮窗的鼠标穿透状态。
+    pub fn set_window_click_through(
+        &mut self,
+        id: unbound_platform::WindowId,
+        click_through: bool,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SetWindowClickThrough { id, click_through });
+    }
+
+    /// 请求更新指定浮窗的屏幕物理外框矩形。
+    pub fn set_window_outer_rect(
+        &mut self,
+        id: unbound_platform::WindowId,
+        rect: unbound_platform::ScreenRect,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SetWindowOuterRect { id, rect });
+    }
+
+    /// 请求将指定浮窗按边缘阈值吸附至所属显示器工作区边界。
+    pub fn snap_floating_window(
+        &mut self,
+        id: unbound_platform::WindowId,
+        desired: unbound_platform::ScreenRect,
+        snap_threshold: i32,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SnapFloatingWindow {
+                id,
+                desired,
+                snap_threshold,
+            });
+    }
+
+    /// 请求关闭指定标识的幽灵窗或悬浮浮岛。
+    pub fn close_floating_window(&mut self, id: unbound_platform::WindowId) {
+        self.window_commands
+            .push(WindowCommand::CloseFloatingWindow(id));
     }
 
     /// 同步宿主窗口客户区在屏幕物理坐标系下的原点与窗口标识，用于换算越界原生弹出窗位置。
