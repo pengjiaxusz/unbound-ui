@@ -16,8 +16,9 @@ use unbound_widgets::slot_fixture::{
     CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH,
 };
 use unbound_widgets::{
-    emit_rating, render_rating_with_text, CalendarDatePickerDesc, CalendarDatePickerState,
-    ControlState, NaiveDate, PointerPhase, RatingDesc, TextCtx, UiWidget, WidgetOutput,
+    emit_calendar_view, emit_rating, render_rating_with_text, CalendarDatePickerDesc,
+    CalendarDatePickerState, CalendarSelectionMode, CalendarState, ControlState, DatePickerDesc,
+    NaiveDate, PointerPhase, RatingDesc, TextCtx, UiWidget, WidgetOutput,
     CALENDAR_DATE_PICKER_HEIGHT,
 };
 
@@ -315,5 +316,103 @@ fn rating_emits_star_vectors_and_keeps_24_state_invariant() {
         }
         assert!(direct_counts.windows(2).all(|w| w[0] == w[1]));
         assert!(with_text_counts.windows(2).all(|w| w[0] == w[1]));
+    });
+}
+
+#[test]
+fn calendar_view_falls_back_to_chevron_icons_and_keeps_24_state_invariant() {
+    with_test_ctx(|text_ctx| {
+        let rect = Rect::new(16.0, 16.0, 300.0, 260.0);
+        let desc = DatePickerDesc::new(rect).with_z(100);
+        let fixed_date = NaiveDate::new(2026, 1, 15).expect("valid calendar date");
+        let mut state = CalendarState::new(fixed_date, CalendarSelectionMode::Single);
+        state.is_today_highlighted = false;
+        state.select(fixed_date);
+
+        let unit = Rect::new(0.0, 0.0, 16.0, 16.0);
+        let chevron_prims = shell_icon_prim_count(ShellIcon::ChevronUp, unit)
+            + shell_icon_prim_count(ShellIcon::ChevronDown, unit);
+        // 固定非字形基数：外框 2 + 头部分隔线 1 + 标题底板 1 + 上下翻页按钮底板 2 +
+        // 42 格 × 4 恒定层（168）+ 外框焦点环 1 = 175。
+        let expected_fallback_non_glyph = 175 + chevron_prims;
+
+        // 1. 强制回退路径（Disabled）：上下翻页按钮回退至 ShellIcon::ChevronUp / ChevronDown，
+        //    无缺字、载荷索引有效且 24 态图元数量恒定。
+        text_ctx
+            .engine
+            .set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        assert!(!text_ctx.has_symbol_font());
+        let mut disabled_policy_counts = Vec::with_capacity(24);
+        for control in all_control_states() {
+            let out = emit_calendar_view(1, &desc, &state, control, text_ctx);
+            assert_payload_indices_in_bounds(&out);
+            let non_glyph = out
+                .primitives
+                .iter()
+                .filter(|p| {
+                    p.prim_type() != PrimType::Glyph && p.prim_type() != PrimType::GlyphColor
+                })
+                .count();
+            let curve_count = out
+                .primitives
+                .iter()
+                .filter(|p| p.prim_type() == PrimType::Curve)
+                .count();
+            assert_eq!(
+                non_glyph, expected_fallback_non_glyph,
+                "CalendarView must fall back to ShellIcon::ChevronUp/ChevronDown when symbol font is disabled"
+            );
+            assert_eq!(
+                curve_count, chevron_prims,
+                "CalendarView must emit valid vector chevron curves for both nav buttons"
+            );
+            disabled_policy_counts.push(out.primitives.len());
+        }
+        assert!(
+            disabled_policy_counts.windows(2).all(|w| w[0] == w[1]),
+            "CalendarView 24-state primitive count drifted under Disabled policy: {disabled_policy_counts:?}"
+        );
+
+        // 2. 系统路径（Auto）：若宿主提供符号字体则走原生字形，否则无缝回退矢量轮廓，
+        //    且双路径下均无缺字、载荷合法、24 态图元数量恒定。
+        text_ctx
+            .engine
+            .set_symbol_font_policy(SymbolFontPolicy::Auto);
+        let has_sys_symbol = text_ctx.has_symbol_font();
+        let mut auto_policy_counts = Vec::with_capacity(24);
+        for control in all_control_states() {
+            let out = emit_calendar_view(1, &desc, &state, control, text_ctx);
+            assert_payload_indices_in_bounds(&out);
+            let curve_count = out
+                .primitives
+                .iter()
+                .filter(|p| p.prim_type() == PrimType::Curve)
+                .count();
+            let glyph_count = out
+                .primitives
+                .iter()
+                .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+                .count();
+            assert!(
+                glyph_count > 0,
+                "CalendarView must always emit header and day text glyphs"
+            );
+            if has_sys_symbol {
+                assert_eq!(
+                    curve_count, 0,
+                    "CalendarView should use system symbol glyphs when symbol font is available"
+                );
+            } else {
+                assert_eq!(
+                    curve_count, chevron_prims,
+                    "CalendarView must fall back to chevron vector curves when system symbol font is unavailable"
+                );
+            }
+            auto_policy_counts.push(out.primitives.len());
+        }
+        assert!(
+            auto_policy_counts.windows(2).all(|w| w[0] == w[1]),
+            "CalendarView 24-state primitive count drifted under Auto policy: {auto_policy_counts:?}"
+        );
     });
 }
