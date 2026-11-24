@@ -27,7 +27,7 @@ description: >-
 
 1. **只要 `layers` 含 `bque`，重型命令一律包装**——包括 `cargo run`。用 `bque run -- <命令>`，跑分用 `bque bench -- <命令>`。裸写 `cargo run/build/clippy/test/bench`、`ninja`、`cmake --build`、`ctest`、`pnpm build` 都算缺陷。
 2. **没有 bque 层？** 直跑是当前层的合法降级——在注释里说明，别把它包装成推荐终点。严禁在 Unix / CI 里强行套原生 bque。
-3. **平台成对**：Windows 与 Unix 行为不同就同时写 `[windows]` 与 `[unix]` 两个配方。bque 是 Windows 全局锁，`[unix]` 分支直跑透传属预期，不算绕过。
+3. **平台成对**：Windows 与 Unix 行为不同就同时写 `[windows]` 与 `[unix]` 两个配方。bque 已跨平台支持 Windows 与 Linux/WSL2，但模板 `[unix]` 分支为兼容零依赖 CI 保持直跑透传，属预期行为，不算绕过。
 4. **变参**：声明 `*ARGS` 并用 `{{ARGS}}` 转发。本层不再提供临时包装配方（`just q-run` 已撤掉）：一次性重命令直接 `bque run -- <命令>` / `bque bench -- <命令>`，反复要用的再在这里写成具体配方。
 
 ## 3. 最小正确配方

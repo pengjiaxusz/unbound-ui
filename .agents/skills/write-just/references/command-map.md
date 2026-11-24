@@ -35,7 +35,7 @@ description: >-
 
 - 只要 Windows 与 Unix 命令体不同，就必须同时写 `[windows]` 与 `[unix]`。只写 `[windows]` 会让 Linux / macOS 上的 `just` 报「找不到配方」。
 - `[unix]` 是 just 的真实属性（含 Linux 与 macOS）。不要用 `[linux]` 然后以为 macOS 也覆盖了。
-- bque 是 Windows 全局内核锁，`[unix]` 分支直跑是预期行为——绝不在那里调 bque。
+- bque 已支持 Windows 与 Linux/WSL2 双平台，但模板 `[unix]` 分支为保证 CI 零依赖保持直跑透传——不要强行把 `bque` 塞进通用 `[unix]` 配方。
 - 所有平台命令体一样时（如 `fmt`）只写一遍，不加属性。
 
 ## 3. 变参与 shell 细节

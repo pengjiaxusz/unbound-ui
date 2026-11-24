@@ -2,108 +2,102 @@
 name: bque
 description: >-
 
-  通用跨工作树全局编译排队、后台 CPU 降级防卡顿与纯净基准测试保护技能。规范 Agent 何时必须走排队调度、何时直跑，提供纯净跑分独占执行（秒级挂起后台构建）、构建管道安全铁律（防 Windows 4KB 管道永久死锁）、全局状态自省与死锁自愈。当需要执行重型构建、编译、检查、单测、性能跑分（bench）、性能画像分析，或遇到 CPU 占满卡顿、命令挂死、编译锁争用时使用。
-  Triggers: bque, build-queue, 排队构建, 全局排队, 编译排队, 跑分保护, 纯净跑分, 冻结后台构建, 挂起构建, cpu降级, idle优先级, queue-status, queue-clean, 编译锁, 管道死锁, 管道卫生, ninja, ctest, cmake, cargo, 编译, 构建, 跑测试, 运行测试, 单测, 性能跑分, bench, ninja -C, cmake --build, cargo build, cargo test.
+  跨平台（Windows 与 Linux/WSL2）全局编译预算调度、低占用自动让槽（Yielding）、局部互斥作用域（Scope）、停滞/超时看门狗（退出码 124）、后台 CPU 降级与纯净基准测试保护技能。规范 Agent 如何按任务权重分级接入 `bque`、防范 Windows 4KB 管道死锁、以及排查队列异常与孤儿冻结进程。当需要执行构建、编译、检查、单测、性能跑分（bench）、性能画像，或遇到任务卡死堵队、CPU 争抢、编译锁冲突时使用。
+  Triggers: bque, build-queue, 排队构建, 全局排队, 预算调度, 自动让槽, 编译排队, 跑分保护, 纯净跑分, 冻结后台构建, 挂起构建, cpu降级, idle优先级, queue-status, queue-clean, 编译锁, 管道死锁, 管道卫生, 看门狗, stall-timeout, ninja, ctest, cmake, cargo, 编译, 构建, 跑测试, 运行测试, 单测, 性能跑分, bench.
 
 ---
 
 <!-- PENGJ_TEMPLATE_START -->
 
-# bque — 全局编译排队、CPU 调速与纯净跑分保护技能
+# bque — 跨平台预算调度、活跃度看门狗与纯净跑分保护技能
 
-用于协调跨工作树构建排队、前台防卡顿与纯净基准测试的工程基础设施技能。通过 Windows 内核原生对象将重型编译置于 `Idle` 空闲优先级，让路前台交互；在性能跑分时秒级挂起（Freeze）后台编译，保证 0% 后台 CPU 干扰与干净的 L3 缓存。
+面向 Windows 与 Linux/WSL2 的无守护进程构建调度与资源管控工具。`bque` 采用 **100 单位共享预算（Budget）+ 低占用自动让槽（Yielding）**模型，既保证重型编译互不踩踏、前台丝滑，又彻底消除“前序任务卡住或低占用导致后面全傻等”的队头阻塞；同时支持 `--scope` 局部互斥、`--stall-timeout` / `--max-duration` 看门狗以及 0% 干扰的纯净跑分冻结。
 
 ---
 
-## ⚡ 1. 何时使用 vs 何时不使用 bque
+## 1. 选型决策表：权重分级、模式与旁路
 
 | 场景分类 | 是否使用 bque？ | 推荐调用方式 | 选型理由 |
 | :--- | :---: | :--- | :--- |
-| **重型编译构建**（`cargo build`、`cmake`、`ninja`、`pnpm build`、`tsc`、`xtask pack`） | **必须使用** | `just build` 或 `bque run -- <命令>` | 跨工作树串行排队，进程优先级降为 `Idle`，杜绝卡死前台 IDE 与桌面 |
-| **工作区检查与测试**（`cargo check`、`cargo clippy`、`cargo test`、`vitest run`） | **必须使用** | `just check` / `just test` 或 `bque run -- <命令>` | 高负载 CPU 任务，接入排队避免多工作树争抢挤爆 CPU 与磁盘 IO |
-| **性能跑分与基准测试**（`bench`、`perf`、耗时画像探针） | **必须使用（Bench 模式）** | `just bench` 或 `bque bench -- <命令>` | **纯净跑分保护**：秒级挂起后台正在跑的编译，提供干净 CPU 环境，结束后原位恢复 |
-| **常驻服务**（dev server、watch 循环、`xtask dev`、`pnpm dev`） | **必须使用（observer 模式）** | `bque run --observer -- <命令>` | 优先级与 CPU 预算不变，但**不取**全局编译锁——持锁的常驻服务会把所有其他构建一直堵住 |
-| **递归/嵌套会话**（检测到 `BQUE_ACTIVE_PID` 环境变量） | **禁止使用** | 原生命令直跑（`& <命令>`）或 `bque run`（原生自动穿透） | 当前进程树已被外层 bque 纳管，直接执行避免重复排队造成嵌套死锁 |
-| **轻量格式化与单文件检查**（`cargo fmt`、单文件 `prettier`/`eslint`） | **无需使用** | 原生命令直跑 | 秒级极速完成，几乎不占 CPU，无需额外排队开销 |
-| **Git 工作流操作**（`git status`、`commit`、`push`、`rebase`） | **无需使用** | 原生命令直跑 | I/O 与网络操作，绝对严禁堵在编译队列后面 |
-| **队列自省与运维**（`status`、`clean`） | **无需使用** | `bque status` / `bque clean` | 控制面与排查诊断工具，必须瞬时直达 |
+| **重型编译构建**（`cargo build`、`cmake --build`、`ninja`、`pnpm build`、`tsc`） | **必须（`heavy`）** | `just build` 或 `bque run -- <命令>` | 默认 `weight=100` 保持重编译串行；若持续 10s CPU `<5%` 会自动进入 `Yielding` 让出配额 |
+| **工作区全量检查与测试**（`cargo clippy --workspace`、`cargo test --workspace`） | **必须（`heavy`/`medium`）** | `just check` / `just test` 或 `bque run --weight medium -- <命令>` | 降为 `Idle` 优先级防卡前台；中等负载可用 `medium`（`50`）允许双任务并发 |
+| **单包轻量检查 / 单测 / Linter** | **推荐（`light`）** | `bque run --weight light -- cargo check -p <crate>` | 仅占 `25/100` 预算，可与其他轻任务并发或通过 Backfill 利用空闲配额 |
+| **共享构建目录防踩踏**（如同一 CMake/Ninja 构建目录） | **必须（`--scope`）** | `bque run --scope <目录键> -- <命令>` | 同一 Scope 严格互斥——**即使持有者进入 `Yielding` 也不会并发** |
+| **Agent / 自动化长任务**（防 0% CPU 挂死或死循环） | **推荐（看门狗）** | `bque run --stall-timeout 300 --max-duration 1800 -- <命令>` | 保留原生 TTY，连续 `<0.5%` CPU 或超总时长时强杀进程树并返回退出码 **`124`** |
+| **性能跑分与基准测试**（`cargo bench`、`perf`、耗时画像） | **必须（`bench`）** | `just bench` 或 `bque bench -- <命令>` | **纯净跑分模式**：带 RAII 守卫冻结所有活跃任务与观察者，提权至 `High`，退出自动恢复 |
+| **常驻服务**（dev server、watch 循环、`xtask dev`、`pnpm dev`） | **必须（`--observer`）** | `bque run --observer -- <命令>` | 登记状态并限流，但消耗 `0` 预算、绝不阻塞队列 |
+| **递归/嵌套调用**（已设 `BQUE_ACTIVE_PID`） | **无需** | 原生命令直跑或 `bque run`（自动穿透） | 外层已受 `bque` 纳管，避免重复排队 |
+| **秒级格式化与 Git 操作**（`cargo fmt`、`git status`/`commit`/`push`） | **无需** | 原生命令直跑 | 轻量或 I/O/网络操作不应堵在编译队列后 |
+| **控制面与自省**（`status`、`clean`、`pause`、`resume`、`probe`） | **无需** | `bque status` / `bque clean` / `bque pause` | 诊断与控制命令瞬时直达 |
 
-完整场景判定表与命令映射详见 [references/usage-matrix.md](references/usage-matrix.md)。
+完整命令对照与异常自愈见 [references/usage-matrix.md](references/usage-matrix.md)。
 
 ---
 
-## 🛑 2. 严禁裸跑原生构建/测试命令（硬性禁令与自动转换表）
+## 2. 严禁裸跑原生重型命令（强制包装表）
 
-AI 助手**绝对严禁**在终端中直接裸跑任何底层构建或编译测试命令！绕过 `bque` / `just` 会吃满所有 CPU 逻辑核心导致系统交互冻结、跨工作树产生编译锁争用、破坏性能跑分置信度，并在 PowerShell 管道下引发 4KB 匿名管道死锁。必须严格按下表映射为包装调用：
+AI 助手在开发机终端中**严禁**直接裸跑重型编译、测试或基准测试命令，必须按以下方式接入 `bque`：
 
-| 严禁裸跑的原生命令 (FORBIDDEN RAW) | 危害与问题 | 强制替换调用的包装形式 (MANDATORY WRAPPED FORM) |
+| 严禁裸跑的原生命令 | 危害与问题 | 强制替换调用方式 |
 | :--- | :--- | :--- |
-| ❌ `ninja -C <dir> <target>` / `ninja ...` | 抢占全部 CPU 逻辑核心导致系统卡死，多工作树冲突 | `just test-build <target>` 或 `bque run -- ninja -C <dir> <target>` |
-| ❌ `cmake --build <dir> ...` | 争用 CMake/Ninja 编译锁，打死前台交互 | `just build` 或 `bque run -- cmake --build <dir> ...` |
-| ❌ `cargo build` / `cargo test` / `cargo clippy` | 产生 cargo target/ 锁争用，打满 CPU | `just build` / `just test` / `just check` 或 `bque run -- cargo ...` |
-| ❌ 原生基准测试（如 `ninja -C target/debug DuntingThumbnailPipelineBenchmark` 或 `./bench.exe`） | **致命跑分污染**：未冻结后台构建，CPU 与 L3 缓存严重受扰，测试数据失真 | `just test-bench` 或 `bque bench -- <命令>`（自动挂起后台编译以提供 0% 干扰环境） |
-| ❌ `ctest ...` / `<TestBinary>.exe` | 未降级的多线程并发测试抢占 CPU 造成前台卡顿 | `just test` 或 `bque run -- ctest ...` |
-| ❌ `pnpm build` / `tsc`（大型前端项目） | Node.js/V8 引擎内存与 CPU 突增卡顿 | `just build` 或 `bque run -- pnpm build` |
+| `ninja -C <dir> <target>` | 打满全部核心、卡死桌面、多工作树冲突 | `just test-build <target>` 或 `bque run --scope <dir> -- ninja -C <dir> <target>` |
+| `cmake --build <dir> ...` | 构建目录锁争用、前台交互卡顿 | `just build` 或 `bque run --scope <dir> -- cmake --build <dir> ...` |
+| `cargo build` / `cargo test` / `cargo clippy` | CPU 抢占、多工作树互踩 | `just build` / `just test` / `just check`，或 `bque run [--weight light] -- cargo ...` |
+| 原生基准测试 / `cargo bench` | 后台构建污染 L3 缓存导致跑分失真 | `just bench` 或 `bque bench -- <命令>` |
+| `ctest ...` / `<TestBinary>.exe` | 未降级多线程测试瞬间挤爆 CPU | `just test` 或 `bque run -- ctest ...` |
+| `pnpm build` / `tsc`（大型前端） | V8 内存与 CPU 尖峰卡顿 | `just build` 或 `bque run -- pnpm build` |
 
 ---
 
-## 🚀 3. 双阶梯执行规范（按优先级选用）
+## 3. 双阶梯执行规范与平台边界
 
-### 阶梯 1：统一优先使用 `just` 命令（首选）
-项目日常命令已由 `justfile` 原生接入 `bque`，AI 助手应优先运行 `just`：
+### 阶梯 1：优先使用 `just` 统一入口
+优先查阅仓库 `justfile`，标准配方已默认接入 `bque`：
 ```powershell
-just build           # 全局排队 + Idle 优先级构建
-just check           # 全局排队代码检查
-just test            # 全局排队单测运行
-just bench           # 纯净基准测试（自动冻结后台其他编译）
-bque status          # 查看当前全局持锁者、排队任务与状态
-bque clean           # 应急清理异常残留的编译锁状态
-just doctor          # 自检工具链、bque 安装、PATH 回退与锁状态
+just build           # 预算排队 + Idle 优先级构建（默认 weight=100，支持自动让槽）
+just check           # 排队代码检查
+just test            # 排队运行测试
+just bench           # 纯净基准测试（安全冻结全部活跃任务与观察者）
+bque status          # 查看活跃任务、预算占用（used/100）、实时 CPU%、Yielding 与等待队列
+bque clean           # 清理僵尸记录并自动解冻异常崩溃遗留的冻结进程
+just doctor          # 自检工具链、bque 版本与机器资源档位（bque probe）
 ```
 
-无现成配方时直接走原生 CLI（`bque run -- <cmd>`）——本层不再提供临时包装配方：包装层只能转发
-命令，传不进 bque 自己的 `--cwd` / `--observer` / `--priority`，这正是它被撤掉的原因。需要长期
-排队的那条命令，就在项目专属区里写一个具体配方把它包住。`justfile` 框架区位于
-`# PENGJ_TEMPLATE_START/END` 托管块内，项目自有配方写在块外、模板更新不会覆盖。
-bque 是 Windows 全局锁：Unix 与 CI 环境下同一批 `just` 配方的 `[unix]` 分支会直跑透传，
-属预期行为，严禁在那里强行套用原生 bque。
+**平台说明**：`bque` 原生支持 **Windows 与 Linux/WSL2 双平台**（预算准入、进程树 CPU 活跃度采样、自动让槽、看门狗与冻结均跨平台可用）。模板生成的 `justfile` 中 `[unix]` 分支默认直跑透传是为了让 CI Runner 零额外依赖；在已装 `bque` 的 Linux/WSL2 开发机上需要跨仓库协调时，直接调用 `bque run` / `bque bench` 即可。
 
-### 阶梯 2：原生 CLI 直调（定制或临时任务）
-当无预设的 `just` 命令时，直接调用 `bque`：
+### 阶梯 2：原生 `bque` CLI 直调（定制权重、作用域与看门狗）
+需要精细控制 `--weight`、`--scope`、`--stall-timeout`、`--max-duration`、`--observer` 或 `--cwd` 时，直接调用原生 CLI：
 ```powershell
-# 常规排队任务（默认 Idle 优先级，原生防重入穿透）
+# 默认重型构建（weight=100，持续 10s CPU <5% 自动让槽）
 bque run -- cargo build --release
 
-# 纯净跑分模式（独占排他锁，秒级挂起后台所有编译任务）
-bque bench -- pnpm bench
+# 单包轻量并发检查（weight=25）
+bque run --weight light -- cargo clippy -p my-crate
 
-# 状态查询与锁清理
-bque status
-bque clean
+# 强目录隔离 + 自动化看门狗（停滞或超时强杀进程树并返回退出码 124）
+bque run --scope target-debug --stall-timeout 300 --max-duration 1800 -- cargo test
 
-# 常驻服务：优先级不变，但不取全局编译锁
-bque run --observer -- cargo run -- dev
+# 手动冻结后台构建（可用 --keep-observers 保留 dev server 不被冻住）
+bque pause --keep-observers --reason "交互式性能分析"
+bque resume
 ```
 
 ---
 
-## 🛡️ 4. 构建安全两铁律（硬性红线）
+## 4. 构建安全两铁律
 
-1. **管道卫生安全（严禁截断原生管道）**：
-   - **反例（严禁）**：`cargo test 2>&1 | Select-Object -First 100` 或 `cmake --build ... | Select-Object -Last 50`（# pipeline-hygiene: ok 反例演示）。
-   - **原理解析**：原生 Windows 进程不响应 PowerShell 的协同终止信号，4KB 匿名管道缓冲区写满后触发内核级系统调用阻塞，整条调用链永久死锁（卡死 120 秒超时）。
-   - **正确姿势**：必须先重定向落盘，再通过 PowerShell 读取：`cargo test *> out.log; Get-Content out.log -TotalCount 100`。
-2. **多工作树进程精准终止**：
-   - 在清理构建残留或重启服务时，**严禁使用进程名无差别盲杀**（如 `Stop-Process -Name Dunting`）；
-   - 必须通过命令行路径精确匹配**当前工作树路径**后再终止，严禁误杀其他 worktree 的前台调试或测试实例。
+1. **Windows 4KB 匿名管道卫生（严禁截断原生管道）**：
+   - **反例（严禁）**：`cargo test 2>&1 | Select-Object -First 100`（# pipeline-hygiene: ok 反例演示）。
+   - **原理**：Windows 原生进程不响应 PowerShell 协同断开，4KB 管道写满后 `WriteFile` 永久阻塞。
+   - **正确姿势**：先重定向落盘再读取：`cargo test *> out.log; Get-Content out.log -TotalCount 100`。
+2. **精准进程终止**：
+   - 严禁按进程名无差别盲杀（`Stop-Process -Name ...`）；必须按工作树路径精确匹配，或直接交给 `bque` 的 `--stall-timeout` / `--max-duration` 清理整棵进程树。
 
 ---
 
-## 🔧 5. 环境检测与安装指引
+## 5. 环境检测与安装指引
 
-先运行 `just doctor`：它会探测 `PATH`、回退到 `$env:LOCALAPPDATA\bque\bin`，
-缺失时直接打印一键安装命令。完整安装指引：
-👉 详见 [references/install.md](references/install.md)。
+运行 `just doctor` 可一次检测 `bque` 安装状态与主机资源档位（`bque probe --json`）。完整安装指南见 [references/install.md](references/install.md)。
 
 
 <!-- PENGJ_TEMPLATE_END -->

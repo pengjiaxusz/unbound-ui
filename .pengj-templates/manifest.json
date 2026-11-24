@@ -1,6 +1,6 @@
 {
   "tool": "pengj-templates",
-  "version": "0.88.1",
+  "version": "0.88.2",
   "project_name": "unbound-ui",
   "layers": [
     "common",
@@ -68,9 +68,9 @@
     ".agents/.gitignore": "b765ef8965f8923b4a9d4a239cda9b4c3434d23de79b843f77fded4a03fccfb7",
     ".agents/skills/ask-matt/PHASE-BOUNDARIES.md": "438ab657c2c15c2fe05fa2f53769bb3e31c123ef8bb25ba549264a38b6123bf5",
     ".agents/skills/ask-matt/SKILL.md": "7c49491f14e3dfadc8eea7e5938d3948666a688cebc7bab3f9ac294887f6b692",
-    ".agents/skills/bque/SKILL.md": "9e909f49519b9a42a6cffa786f4802966b1e44037c15d8087c53ad3e22b0ef72",
+    ".agents/skills/bque/SKILL.md": "1f794b732c9e8ad81a0168d1d7e04506722b785e4ba1740e5bcda51962aa2365",
     ".agents/skills/bque/references/install.md": "57914fba9a913d05f25efd78dc65eba03708e8f0ab008669044e924f1e868b69",
-    ".agents/skills/bque/references/usage-matrix.md": "396eaf4a4b5c184d7bbcbad107c73720cb3b39d95a94258d7619cd331c0b7f49",
+    ".agents/skills/bque/references/usage-matrix.md": "daf1763558bbd51df04fb94df8a1b86912fc11e328ffc7b9aabff22dc3826e45",
     ".agents/skills/caveman/SKILL.md": "56a31b9be677ca0afcc24e2273846931841534990657251e1d47815adf661914",
     ".agents/skills/code-review/SKILL.md": "3728d8de00d7372b18eb16d33113ee452fcfc485b3b493e4ababe034c6621ab5",
     ".agents/skills/codebase-design/DEEPENING.md": "0afbac9ed6cd25ad59ca1075f4670c5082116f63a302acd66029fc1844d775e3",
@@ -159,8 +159,8 @@
     ".agents/skills/worktree/SKILL.md": "0733707b73721d8646f0d71e2fc6ff71e9f978595a4753abb46aff9307ede9d2",
     ".agents/skills/write-a-skill/SKILL.md": "4d1b1de7937feabcc909050c34d95b149134e2b07baf1521c3f708dcb10e8ba5",
     ".agents/skills/write-docs/SKILL.md": "873c5688743b786c3f445229240d9faf562c5179f484be5b04d00b85a9dcfeca",
-    ".agents/skills/write-just/SKILL.md": "ed1c59af6fda383805be4318b65008ace76b843b41ad6e91df1d7f9f1655ba43",
-    ".agents/skills/write-just/references/command-map.md": "18df1bc8b06e21763ebc373177600fd2dd3faa877b908e6cc795afdf87db3a3c",
+    ".agents/skills/write-just/SKILL.md": "f2e4fdba484cefc4e703440e1c3e875257b4c1bf50f48136dcdd8b8da11f435f",
+    ".agents/skills/write-just/references/command-map.md": "539c5e9434cf9b5d8b3d0be18a8f2020a61a1e73e18341a3dcb42f727e7f6788",
     ".agents/skills/write-just/scripts/check-just.sh": "3e44d53b2e0f239f56a37b7ebe6fddc3cfcd3f976e137c4364997043726d05df",
     ".agents/skills/writing-for-agents/SKILL-MECHANICS.md": "8270f0089a3f0f21ff6df51a728b1ac4fcb71405cc5cc3612fb28e028451edf0",
     ".agents/skills/writing-for-agents/SKILL.md": "97ab5dc50277c8eb78cb83cd36c7b08bd997969fcb7efebcb2cb82f2592e580e",
@@ -187,7 +187,7 @@
     "AGENTS.md": "0fe516aa7d28f8ebb49daadfa87ec7108a56cfcafc251850f940a432bb93652c",
     "CONTRIBUTING.md": "433e060b280aba3d150db28569908c541b4068cf7a0b5aeabdcd056aadecf1f4",
     "Cargo.toml": "6f722ee3f7a969f9b46d867b96c1e14420b5560d7effd65c7c9b183e4e797707",
-    "justfile": "3b4f95ff7beca5fc56fb81aaba21f54565844266ea427d35bb8d2d9e34a6d1c8",
+    "justfile": "7d9724bbb728bbc126ee411e94a28887dfb639f831a43c721c5b26e8a37c99bc",
     "rust-toolchain.toml": "b2bc09cc2b9bfbea423fe65a786d858571071150478018b261181135d4010412"
   }
 }
