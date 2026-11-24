@@ -920,7 +920,7 @@ mod tests {
         let _ = ime.set_allowed(true);
 
         // 长 CJK 预编辑文本在 done 前暂存，done 时原子派发且保留 UTF-8 边界
-        let long_cjk = "中文输入法超长预编辑测试内容校验组合区间".to_string();
+        let long_cjk = "中文输入法超长预编辑测试内容校验组合区间".to_string(); // lang-ok: CJK UTF-8 test fixture
         ime.on_preedit(Some(long_cjk.clone()), 0, long_cjk.len() as i32);
         assert!(!ime.has_active_composition());
         let events = ime.on_done();
@@ -934,9 +934,9 @@ mod tests {
         assert!(ime.has_active_composition());
 
         // commit + 清除预编辑在同一次 done 中先 commit，不产生重复提交
-        ime.on_commit(Some("你好世界".to_string()));
+        ime.on_commit(Some("你好世界".to_string())); // lang-ok: CJK UTF-8 test fixture
         let events = ime.on_done();
-        assert_eq!(events, vec![ImeEvent::Commit("你好世界".to_string())]);
+        assert_eq!(events, vec![ImeEvent::Commit("你好世界".to_string())]); // lang-ok: CJK UTF-8 test fixture
         assert!(!ime.has_active_composition());
 
         // 下一次空 done 不重复提交已消费的 commit

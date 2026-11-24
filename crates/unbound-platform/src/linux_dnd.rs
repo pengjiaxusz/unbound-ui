@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn uri_list_round_trips_spaces_cjk_and_ignores_comments_and_remote_uris() {
         let paths = vec![
-            PathBuf::from("/home/user/My Assets/图标 01.png"),
+            PathBuf::from("/home/user/My Assets/图标 01.png"), // lang-ok: CJK UTF-8 test fixture
             PathBuf::from("/tmp/plain_file.txt"),
         ];
         let encoded = encode_uri_list(&paths);
@@ -262,7 +262,7 @@ mod tests {
         let payload = TabTearPayload {
             source_window_id: 1,
             tab_id: 42,
-            title: "文档\t预览".to_string(),
+            title: "文档\t预览".to_string(), // lang-ok: CJK UTF-8 test fixture
         };
         let wire = payload.encode();
         assert_eq!(TabTearPayload::decode(&wire), Some(payload));

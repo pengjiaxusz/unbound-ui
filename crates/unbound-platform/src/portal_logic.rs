@@ -182,7 +182,7 @@ mod tests {
     fn decode_file_uri_handles_spaces_cjk_localhost_and_rejects_non_file() {
         assert_eq!(
             decode_file_uri("file:///home/user/My%20Documents/%E6%B5%8B%E8%AF%95.png"),
-            Some(PathBuf::from("/home/user/My Documents/测试.png"))
+            Some(PathBuf::from("/home/user/My Documents/测试.png")) // lang-ok: CJK UTF-8 test fixture
         );
         assert_eq!(
             decode_file_uri("file://localhost/tmp/demo.txt"),
