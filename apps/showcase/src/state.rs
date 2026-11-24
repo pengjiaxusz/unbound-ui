@@ -5,7 +5,7 @@
 //! 这使得整个外壳无需窗口即可进行测试。
 //!
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use unbound_anim::{Spring, SpringPreset};
@@ -1293,6 +1293,20 @@ pub struct ComponentSandboxState {
     pub calendar_stage_rect: Cell<Option<Rect>>,
     /// 最近一帧 `DateRangePicker` 舞台实际渲染矩形。
     pub date_range_stage_rect: Cell<Option<Rect>>,
+    /// 最近一帧各组件演示舞台的实际渲染矩形（供精确指针命中与连续值映射）。
+    pub stage_rects: RefCell<HashMap<u8, Rect>>,
+    /// `TabView` 演示的当前标签标题列表（支持点击选中、关闭单个标签与新增恢复）。
+    pub tab_view_tabs: Vec<String>,
+    /// `TabView` 新增标签的递增编号。
+    pub tab_view_next_id: usize,
+    /// `NavigationView` 演示窗格的展开/折叠状态。
+    pub nav_demo_pane_open: bool,
+    /// `AddressBar` 演示当前激活的路径段深度（`1..=3`）。
+    pub address_bar_depth: usize,
+    /// `RatingControl` 演示的当前评分（`0.5..=5.0`，支持半星精度）。
+    pub rating_value: f32,
+    /// `PipsPager` 演示的当前页码（`1..=12`）。
+    pub pips_page: usize,
 }
 
 impl Default for ComponentSandboxState {
@@ -1322,6 +1336,13 @@ impl Default for ComponentSandboxState {
             date_range_picker,
             calendar_stage_rect: Cell::new(None),
             date_range_stage_rect: Cell::new(None),
+            stage_rects: RefCell::new(HashMap::new()),
+            tab_view_tabs: vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()],
+            tab_view_next_id: 4,
+            nav_demo_pane_open: true,
+            address_bar_depth: 3,
+            rating_value: 4.5,
+            pips_page: 1,
         }
     }
 }
@@ -1358,6 +1379,17 @@ impl ComponentSandboxState {
             .unwrap_or(default)
     }
 
+    /// 记录指定组件最近一帧的演示舞台矩形。
+    pub fn set_stage_rect(&self, id: WidgetCatalogId, rect: Rect) {
+        self.stage_rects.borrow_mut().insert(id as u8, rect);
+    }
+
+    /// 读取指定组件最近一帧的演示舞台矩形。
+    #[must_use]
+    pub fn stage_rect(&self, id: WidgetCatalogId) -> Option<Rect> {
+        self.stage_rects.borrow().get(&(id as u8)).copied()
+    }
+
     /// 切换 `CalendarView` 沙盒的示例禁选日期列表（当前浏览月的 12、19、26 日）。
     pub fn set_calendar_blackouts_enabled(&mut self, enabled: bool) {
         self.calendar_view.blackout_dates.clear();
@@ -1378,8 +1410,12 @@ pub fn reduce_showcase_component(
     id: WidgetCatalogId,
     sandbox: &mut ComponentSandboxState,
     click_pos: Option<Vec2>,
+    stage_rect: Option<Rect>,
+    part: u16,
 ) -> bool {
     let key = id as u8;
+    let stage = stage_rect.or_else(|| sandbox.stage_rect(id));
+    let sub_idx = (part >= 1000).then(|| (part - 1000) as usize);
     match id {
         WidgetCatalogId::Button
         | WidgetCatalogId::SplitButton
@@ -1437,7 +1473,6 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::ToolTip
         | WidgetCatalogId::HoverCard
         | WidgetCatalogId::LoadingOverlay
-        | WidgetCatalogId::AddressBar
         | WidgetCatalogId::QueryBuilder
         | WidgetCatalogId::SchemaForm
         | WidgetCatalogId::AppBarToggleButton
@@ -1447,29 +1482,506 @@ pub fn reduce_showcase_component(
             *on = !*on;
             true
         }
-        WidgetCatalogId::ExpanderGroup
-        | WidgetCatalogId::TreeTable
+        WidgetCatalogId::Pivot => {
+            let labels = ["Overview", "Activity", "Settings"];
+            let target = if (10..13).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let desc = unbound_widgets::pivot::PivotDesc::new(
+                    Rect::new(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.x.min(360.0),
+                        unbound_widgets::pivot::PIVOT_HEIGHT,
+                    ),
+                    &labels,
+                )
+                .with_item_widths(&[104.0, 96.0, 88.0]);
+                (0..labels.len()).find(|&idx| desc.item_rect(idx).contains_point(pos))
+            } else {
+                sub_idx.map(|i| i % labels.len())
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::SelectorBar => {
+            let target = if (10..13).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let ctrl_rect = Rect::new(
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.x.min(320.0),
+                    rect.size.y.min(36.0),
+                );
+                let desc = unbound_widgets::segmented::SegmentedDesc::new(
+                    ctrl_rect,
+                    &["One", "Two", "Three"],
+                );
+                (0..3)
+                    .find(|&idx| desc.segment_rect(idx).contains_point(pos))
+                    .or_else(|| {
+                        ctrl_rect.contains_point(pos).then(|| {
+                            let rel = (pos.x - ctrl_rect.origin.x) / ctrl_rect.size.x.max(1.0);
+                            (rel * 3.0).floor().clamp(0.0, 2.0) as usize
+                        })
+                    })
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::TabView => {
+            // 关闭按钮热区：`100..200`；新增按钮热区：`200`；标签选中热区：`10..100`。
+            let close_idx = if (100..200).contains(&part) {
+                Some((part - 100) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let titles: Vec<&str> = sandbox.tab_view_tabs.iter().map(String::as_str).collect();
+                let desc = unbound_widgets::tabs::TabsDesc::new(
+                    Rect::new(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.x,
+                        rect.size.y.min(36.0),
+                    ),
+                    &titles,
+                )
+                .with_addable(true);
+                desc.hit_test_close(0.0, pos)
+            } else {
+                None
+            };
+            if let Some(idx) = close_idx {
+                if idx < sandbox.tab_view_tabs.len() {
+                    if sandbox.tab_view_tabs.len() > 1 {
+                        sandbox.tab_view_tabs.remove(idx);
+                        let cur = sandbox.selected_indices.get(&key).copied().unwrap_or(0);
+                        let next = if cur >= sandbox.tab_view_tabs.len() {
+                            sandbox.tab_view_tabs.len() - 1
+                        } else if idx < cur {
+                            cur.saturating_sub(1)
+                        } else {
+                            cur
+                        };
+                        sandbox.selected_indices.insert(key, next);
+                    } else {
+                        sandbox.tab_view_tabs =
+                            vec!["One".to_owned(), "Two".to_owned(), "Three".to_owned()];
+                        sandbox.selected_indices.insert(key, 0);
+                    }
+                    return true;
+                }
+            }
+
+            let add_clicked = part == 200
+                || match (click_pos, stage) {
+                    (Some(pos), Some(rect)) => {
+                        let titles: Vec<&str> =
+                            sandbox.tab_view_tabs.iter().map(String::as_str).collect();
+                        let desc = unbound_widgets::tabs::TabsDesc::new(
+                            Rect::new(
+                                rect.origin.x,
+                                rect.origin.y,
+                                rect.size.x,
+                                rect.size.y.min(36.0),
+                            ),
+                            &titles,
+                        )
+                        .with_addable(true);
+                        desc.hit_test_add(0.0, pos)
+                    }
+                    _ => false,
+                };
+            if add_clicked {
+                if sandbox.tab_view_tabs.len() < 6 {
+                    let label = format!("Tab {}", sandbox.tab_view_next_id);
+                    sandbox.tab_view_next_id += 1;
+                    sandbox.tab_view_tabs.push(label);
+                    sandbox
+                        .selected_indices
+                        .insert(key, sandbox.tab_view_tabs.len() - 1);
+                    return true;
+                }
+                return false;
+            }
+
+            let tab_idx = if (10..100).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let titles: Vec<&str> = sandbox.tab_view_tabs.iter().map(String::as_str).collect();
+                let desc = unbound_widgets::tabs::TabsDesc::new(
+                    Rect::new(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.x,
+                        rect.size.y.min(36.0),
+                    ),
+                    &titles,
+                )
+                .with_addable(true);
+                desc.hit_test_tab(0.0, pos)
+            } else {
+                sub_idx.map(|i| i % sandbox.tab_view_tabs.len().max(1))
+            };
+            if let Some(idx) = tab_idx {
+                if idx < sandbox.tab_view_tabs.len() {
+                    sandbox.selected_indices.insert(key, idx);
+                    return true;
+                }
+            }
+            false
+        }
+        WidgetCatalogId::NavigationView => {
+            if part == 200 {
+                sandbox.nav_demo_pane_open = !sandbox.nav_demo_pane_open;
+                return true;
+            }
+            if (10..14).contains(&part) {
+                sandbox.selected_indices.insert(key, (part - 10) as usize);
+                return true;
+            }
+            if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let desc = unbound_widgets::navigation_view::NavigationViewDesc::new(
+                    rect,
+                    vec![
+                        unbound_widgets::navigation_view::NavigationViewMenuItem::header(
+                            "Workspace",
+                        ),
+                        unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                            unbound_widgets::navigation_view::NavigationViewItem::new(1, "Home")
+                                .with_icon(unbound_widgets::ShellIcon::Grid),
+                        ),
+                        unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                            unbound_widgets::navigation_view::NavigationViewItem::new(
+                                2, "Sessions",
+                            )
+                            .with_icon(unbound_widgets::ShellIcon::Bolt)
+                            .with_info_badge("3"),
+                        ),
+                        unbound_widgets::navigation_view::NavigationViewMenuItem::separator(),
+                        unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                            unbound_widgets::navigation_view::NavigationViewItem::new(
+                                3,
+                                "Analytics",
+                            )
+                            .with_icon(unbound_widgets::ShellIcon::Chart),
+                        ),
+                    ],
+                )
+                .pane_display_mode(
+                    unbound_widgets::navigation_view::NavigationViewPaneDisplayMode::Left,
+                )
+                .open_pane_length(rect.size.x.clamp(
+                    180.0,
+                    unbound_widgets::navigation_view::NAVIGATION_VIEW_OPEN_PANE_LENGTH,
+                ))
+                .footer_menu_items(vec![
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                        unbound_widgets::navigation_view::NavigationViewItem::new(9, "Account")
+                            .with_icon(unbound_widgets::ShellIcon::Sliders),
+                    ),
+                ]);
+                let mut nav_state =
+                    unbound_widgets::navigation_view::NavigationViewState::from_desc(&desc);
+                nav_state.is_pane_open = sandbox.nav_demo_pane_open;
+                let layout = desc.compute_layout(&nav_state);
+                if layout
+                    .pane_toggle_rect
+                    .is_some_and(|r| r.contains_point(pos))
+                {
+                    sandbox.nav_demo_pane_open = !sandbox.nav_demo_pane_open;
+                    return true;
+                }
+                for row in &layout.rows {
+                    // 遵循视口热区裁剪契约：主菜单行仅在 `menu_viewport_rect` 内响应点击。
+                    let in_viewport = layout.is_top
+                        || matches!(
+                            row.kind,
+                            unbound_widgets::navigation_view::NavigationViewRowKind::FooterItem { .. }
+                                | unbound_widgets::navigation_view::NavigationViewRowKind::Settings
+                        )
+                        || layout.menu_viewport_rect.contains_point(pos);
+                    if in_viewport && row.rect.contains_point(pos) {
+                        if let Some(item_id) = row.item_id() {
+                            let idx = match item_id {
+                                1 => Some(0),
+                                2 => Some(1),
+                                3 => Some(2),
+                                9 => Some(3),
+                                _ => None,
+                            };
+                            if let Some(i) = idx {
+                                sandbox.selected_indices.insert(key, i);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+        WidgetCatalogId::AddressBar => {
+            let all_segments = ["Workspace", "Assets", "Shaders"];
+            let depth = sandbox.address_bar_depth.clamp(1, all_segments.len());
+            let editing = sandbox.toggles.get(&key).copied().unwrap_or(false);
+            if !editing {
+                if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                    let ab_r = Rect::new(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.x.min(560.0),
+                        unbound_widgets::address_bar::ADDRESS_BAR_HEIGHT,
+                    );
+                    let segments: Vec<String> = all_segments[..depth]
+                        .iter()
+                        .map(|s| (*s).to_owned())
+                        .collect();
+                    let desc = unbound_widgets::address_bar::AddressBarDesc::new(ab_r, segments);
+                    let layout = unbound_widgets::address_bar::compute_layout(&desc);
+                    for seg_layout in &layout.segments {
+                        if seg_layout.label_rect.contains_point(pos) {
+                            let idx = seg_layout.index;
+                            let new_depth = if idx + 1 == depth && depth < all_segments.len() {
+                                all_segments.len()
+                            } else {
+                                idx + 1
+                            };
+                            sandbox.address_bar_depth = new_depth;
+                            sandbox.selected_indices.insert(key, idx);
+                            return true;
+                        }
+                    }
+                }
+            }
+            let on = sandbox.toggles.entry(key).or_insert(false);
+            *on = !*on;
+            if !*on {
+                sandbox.address_bar_depth = all_segments.len();
+            }
+            true
+        }
+        WidgetCatalogId::BreadcrumbBar => {
+            let target = if (10..13).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let crumbs = vec![
+                    unbound_widgets::breadcrumb::Crumb::new(1, "Root"),
+                    unbound_widgets::breadcrumb::Crumb::new(2, "src"),
+                    unbound_widgets::breadcrumb::Crumb::new(3, "main.rs"),
+                ];
+                let desc = unbound_widgets::breadcrumb::BreadcrumbDesc::new(
+                    Rect::new(rect.origin.x, rect.origin.y, rect.size.x, 28.0),
+                    crumbs,
+                );
+                let slots = desc.layout(&[44.0, 36.0, 68.0]);
+                slots
+                    .iter()
+                    .find(|slot| slot.rect.contains_point(pos))
+                    .and_then(|slot| slot.crumb)
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::RatingControl => {
+            if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let rating_r = Rect::new(
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.x.min(200.0),
+                    rect.size.y.min(36.0),
+                );
+                let gap = 8.0_f32;
+                let sz = ((rating_r.width() - gap * 6.0) / 5.0)
+                    .min(rating_r.height() - 8.0)
+                    .clamp(12.0, 16.0);
+                let start_x = rating_r.origin.x + gap;
+                let stride = (sz + gap).max(1.0);
+                let rel = ((pos.x - start_x) / stride).clamp(0.0, 5.0);
+                let half_steps = (rel * 2.0).ceil().clamp(1.0, 10.0);
+                sandbox.rating_value = half_steps * 0.5;
+                sandbox.selected_indices.insert(
+                    key,
+                    (sandbox.rating_value.ceil() as usize).saturating_sub(1),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::PipsPager => {
+            if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let pg_r = Rect::new(
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.x.min(380.0),
+                    rect.size.y.min(36.0),
+                );
+                let total_slots = 9usize;
+                let gap = 4.0_f32;
+                let pad = 4.0_f32;
+                let slot_w = ((pg_r.width() - pad * 2.0 - gap * (total_slots - 1) as f32)
+                    / total_slots as f32)
+                    .max(18.0);
+                let slot_h = (pg_r.height() - pad * 2.0).max(18.0);
+                let desc =
+                    unbound_widgets::pagination::PaginationDesc::new(pg_r, 12, sandbox.pips_page);
+                let slots = desc.visible_slots();
+                for idx in 0..total_slots {
+                    let slot_r = Rect::new(
+                        pg_r.origin.x + pad + idx as f32 * (slot_w + gap),
+                        pg_r.origin.y + pad,
+                        slot_w,
+                        slot_h,
+                    );
+                    if slot_r.contains_point(pos) {
+                        if idx == 0 {
+                            sandbox.pips_page = sandbox.pips_page.saturating_sub(1).max(1);
+                        } else if idx == total_slots - 1 {
+                            sandbox.pips_page = (sandbox.pips_page + 1).min(12);
+                        } else if let Some(target_page) = slots[idx - 1] {
+                            sandbox.pips_page = target_page.clamp(1, 12);
+                        } else {
+                            return false;
+                        }
+                        sandbox
+                            .selected_indices
+                            .insert(key, sandbox.pips_page.saturating_sub(1));
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+        WidgetCatalogId::RadioButton => {
+            let target = if (10..13).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let item_w = (rect.size.x / 3.0).clamp(96.0, 140.0);
+                let idx = ((pos.x - rect.origin.x) / item_w).floor();
+                (0.0..3.0).contains(&idx).then_some(idx as usize)
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::MenuBar => {
+            let target = if (10..13).contains(&part) {
+                Some((part - 10) as usize)
+            } else if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let desc = unbound_widgets::menubar::MenuBarDesc::new(
+                    Rect::new(
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.x,
+                        unbound_widgets::menubar::MENUBAR_HEIGHT,
+                    ),
+                    vec![
+                        unbound_widgets::menubar::MenuBarItem::new(1, "File"),
+                        unbound_widgets::menubar::MenuBarItem::new(2, "Edit"),
+                        unbound_widgets::menubar::MenuBarItem::new(3, "View"),
+                    ],
+                );
+                let rects = desc.layout(&[44.0, 44.0, 48.0]);
+                rects
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (r, _))| r.contains_point(pos))
+                    .map(|(idx, _)| idx)
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::Stepper => {
+            let target = if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let rel = ((pos.x - rect.origin.x) / rect.size.x.max(1.0)).clamp(0.0, 0.999);
+                Some((rel * 3.0).floor() as usize)
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::ExpanderGroup => {
+            let target = if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let mid_y = rect.origin.y + rect.size.y * 0.5;
+                Some(usize::from(pos.y >= mid_y))
+            } else {
+                sub_idx.map(|i| i % 2)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::FlipView => {
+            let cur = sandbox.selected_indices.get(&key).copied().unwrap_or(0);
+            let next = if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                if pos.x < rect.origin.x + rect.size.x * 0.5 {
+                    (cur + 4) % 5
+                } else {
+                    (cur + 1) % 5
+                }
+            } else {
+                (cur + 1) % 5
+            };
+            sandbox.selected_indices.insert(key, next);
+            true
+        }
+        WidgetCatalogId::Table | WidgetCatalogId::ListBox | WidgetCatalogId::ListView => {
+            let target = if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let row_y = (pos.y - rect.origin.y - 32.0).max(0.0);
+                Some(((row_y / 30.0).floor() as usize).min(2))
+            } else {
+                sub_idx.map(|i| i % 3)
+            };
+            if let Some(idx) = target {
+                sandbox.selected_indices.insert(key, idx);
+                true
+            } else {
+                false
+            }
+        }
+        WidgetCatalogId::TreeTable
         | WidgetCatalogId::VirtualMasonry
-        | WidgetCatalogId::TabView
-        | WidgetCatalogId::Pivot
-        | WidgetCatalogId::RadioButton
-        | WidgetCatalogId::SelectorBar
-        | WidgetCatalogId::Stepper
-        | WidgetCatalogId::RatingControl
-        | WidgetCatalogId::PipsPager
-        | WidgetCatalogId::FlipView
-        | WidgetCatalogId::NavigationView
         | WidgetCatalogId::MenuFlyout
-        | WidgetCatalogId::MenuBar
         | WidgetCatalogId::ContextMenu
-        | WidgetCatalogId::BreadcrumbBar
         | WidgetCatalogId::CommandBar
         | WidgetCatalogId::CanvasToolbar
         | WidgetCatalogId::ComboBox
         | WidgetCatalogId::Cascader
-        | WidgetCatalogId::Table
         | WidgetCatalogId::DataGrid
-        | WidgetCatalogId::ListView
         | WidgetCatalogId::Masonry
         | WidgetCatalogId::Chart
         | WidgetCatalogId::Timeline
@@ -1481,13 +1993,16 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::GenericDataTable
         | WidgetCatalogId::PipelineView
         | WidgetCatalogId::GridView
-        | WidgetCatalogId::ListBox
         | WidgetCatalogId::SwipeControl
         | WidgetCatalogId::ItemsView
         | WidgetCatalogId::OrbitView
         | WidgetCatalogId::BladeView => {
-            let sel = sandbox.selected_indices.entry(key).or_insert(0);
-            *sel = (*sel + 1) % 5;
+            if let Some(idx) = sub_idx {
+                sandbox.selected_indices.insert(key, idx);
+            } else {
+                let sel = sandbox.selected_indices.entry(key).or_insert(0);
+                *sel = (*sel + 1) % 5;
+            }
             true
         }
         WidgetCatalogId::CalendarView => {
@@ -1506,8 +2021,27 @@ pub fn reduce_showcase_component(
                 false
             }
         }
-        WidgetCatalogId::Slider
-        | WidgetCatalogId::MultiSplit
+        WidgetCatalogId::Slider => {
+            if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let ctrl_rect = Rect::new(
+                    rect.origin.x,
+                    rect.origin.y,
+                    rect.size.x.min(320.0),
+                    rect.size.y.min(36.0),
+                );
+                let desc =
+                    unbound_widgets::slider::SliderDesc::new(ctrl_rect, "Gap", 0.0, 0.0, 100.0)
+                        .with_step(1.0);
+                let val = unbound_widgets::slider::value_from_pointer(pos, &desc);
+                sandbox.slider_values.insert(key, val);
+                true
+            } else {
+                let val = sandbox.slider_values.entry(key).or_insert(50.0);
+                *val = (*val + 10.0) % 100.0;
+                true
+            }
+        }
+        WidgetCatalogId::MultiSplit
         | WidgetCatalogId::ProgressBar
         | WidgetCatalogId::NumberBox
         | WidgetCatalogId::ProgressRing
@@ -1528,8 +2062,13 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::RadialGauge
         | WidgetCatalogId::ImageCropper
         | WidgetCatalogId::Viewport3D => {
-            let val = sandbox.slider_values.entry(key).or_insert(50.0);
-            *val = (*val + 10.0) % 100.0;
+            if let (Some(pos), Some(rect)) = (click_pos, stage) {
+                let t = ((pos.x - rect.origin.x) / rect.size.x.max(1.0)).clamp(0.0, 1.0);
+                sandbox.slider_values.insert(key, (t * 100.0).round());
+            } else {
+                let val = sandbox.slider_values.entry(key).or_insert(50.0);
+                *val = (*val + 10.0) % 100.0;
+            }
             true
         }
         WidgetCatalogId::TextBox

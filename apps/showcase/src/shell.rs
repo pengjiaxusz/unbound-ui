@@ -2650,12 +2650,25 @@ impl GalleryApp {
             return;
         }
         match target {
-            Target::NavPage(_) | Target::NavCategory(_) | Target::NavComponent(_) => {
+            Target::NavPage(_)
+            | Target::NavCategory(_)
+            | Target::NavComponent(_)
+            | Target::ContentNavPage(_)
+            | Target::ContentNavCategory(_)
+            | Target::ContentNavComponent(_) => {
+                // 将内容区隔离目标归一化到对应的侧边栏导航项 ID，驱动 NavigationView 同步选中与展开状态。
+                let sidebar_target = match target {
+                    Target::ContentNavPage(page_idx) => Target::NavPage(page_idx),
+                    Target::ContentNavCategory(cat_idx) => Target::NavCategory(cat_idx),
+                    Target::ContentNavComponent(comp_idx) => Target::NavComponent(comp_idx),
+                    other => other,
+                };
                 let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
-                self.nav_view.invoke_item(&nav_desc, target::id(target));
+                self.nav_view
+                    .invoke_item(&nav_desc, target::id(sidebar_target));
                 self.drain_navigation_view_events();
-                // 首页或分类索引页内直接点击的卡片可能不在当前折叠展开的树视图中，兜底确保直达。
-                match target {
+                // 首页、面包屑或分类索引页内直接点击的卡片可能不在当前折叠展开的树视图中，兜底确保直达。
+                match sidebar_target {
                     Target::NavCategory(cat_idx) => {
                         if let Some(cat) = ControlCategory::from_index(cat_idx as usize) {
                             if self.state.active_page != PageId::Components
@@ -2919,7 +2932,7 @@ impl GalleryApp {
         if page == PageId::ListView && part == 200 {
             self.begin_list_scrollbar_drag(card as usize, position);
         }
-        if page == PageId::Sliders {
+        if matches!(page, PageId::Sliders | PageId::Components) {
             if let Some(zone) = self
                 .ranges
                 .iter()
@@ -3200,10 +3213,13 @@ impl GalleryApp {
             PageId::Components => {
                 if let Some(example) = PageId::Components.examples().get(card as usize) {
                     if let pages::DemoKind::Component { id } = example.demo {
+                        let stage_rect = self.state.sandbox.stage_rect(id);
                         if crate::state::reduce_showcase_component(
                             id,
                             &mut self.state.sandbox,
                             Some(position),
+                            stage_rect,
+                            part,
                         ) {
                             if id == WidgetCatalogId::CalendarView {
                                 let dm = match self.state.sandbox.calendar_view.display_mode {
@@ -3688,6 +3704,14 @@ impl GalleryApp {
             {
                 self.state.demo.sliders[part as usize - 1] = value;
                 self.state.bump();
+            }
+            Some(Target::Demo(page, card, _)) if page as usize == PageId::Components.index() => {
+                if let Some(example) = PageId::Components.examples().get(card as usize) {
+                    if let pages::DemoKind::Component { id } = example.demo {
+                        self.state.sandbox.slider_values.insert(id as u8, value);
+                        self.state.bump();
+                    }
+                }
             }
             _ => {}
         }
@@ -4277,12 +4301,15 @@ fn draw_top_bar(
         }
         canvas.end_clip();
         if layout.search.size.x > 280.0 {
-            widgets::badge(
+            widgets::badge_right_aligned(
                 canvas,
-                Rect::new(search.max().x - 52.0, search.origin.y + 7.0, 44.0, 18.0),
+                search.max().x - 8.0,
+                search.origin.y + 7.0,
+                18.0,
                 "Ctrl K",
                 palette.text_muted,
                 palette.stage_bg,
+                10.0,
             );
         }
         canvas.control(
@@ -4699,7 +4726,7 @@ fn tooltip_target_of(
                 placement: Placement::Right,
             }
         }
-        Target::NavPage(_) | Target::NavComponent(_) => {
+        Target::NavPage(_) | Target::NavCategory(_) | Target::NavComponent(_) => {
             let row = nav_layout
                 .rows
                 .iter()
@@ -5227,7 +5254,7 @@ fn draw_page(
                         AlignY::Center,
                     );
                     canvas.control(
-                        target::id(Target::NavPage(PageId::Components.index() as u8)),
+                        target::id(Target::ContentNavPage(PageId::Components.index() as u8)),
                         all_rect,
                         Role::Link,
                         all_label,
@@ -5255,7 +5282,7 @@ fn draw_page(
                         AlignY::Center,
                     );
                     canvas.control(
-                        target::id(Target::NavCategory(cat.index() as u8)),
+                        target::id(Target::ContentNavCategory(cat.index() as u8)),
                         cat_rect,
                         Role::Link,
                         cat_label,
@@ -5305,26 +5332,26 @@ fn draw_page(
                     // 来源徽章 + 模块标签 + 收藏切换按钮
                     let badge_text = pages::control_class_badge(comp_id.class());
                     let (b_fg, b_bg) = pages::home::origin_badge_colors(palette, comp_id.class());
-                    let bw = canvas.labels.measure(badge_text, 10.5).x + 16.0;
-                    widgets::badge(
+                    let origin_badge = widgets::badge_sized(
                         canvas,
-                        Rect::new(page.header.origin.x, page.header.origin.y + 90.0, bw, 20.0),
+                        Rect::new(page.header.origin.x, page.header.origin.y + 90.0, 0.0, 20.0),
                         badge_text,
                         b_fg,
                         b_bg,
+                        10.5,
                     );
-                    let mod_w = canvas.labels.measure(comp_id.module_name(), 10.5).x + 16.0;
-                    widgets::badge(
+                    widgets::badge_sized(
                         canvas,
                         Rect::new(
-                            page.header.origin.x + bw + 6.0,
+                            origin_badge.max().x + 6.0,
                             page.header.origin.y + 90.0,
-                            mod_w,
+                            0.0,
                             20.0,
                         ),
                         comp_id.module_name(),
                         palette.text_muted,
                         palette.surface,
+                        10.5,
                     );
                     let starred = state.is_favorite(comp_id);
                     let fav_label = if starred {
@@ -5463,14 +5490,33 @@ fn draw_example(
         4.0,
     );
     canvas.begin_clip(card.rect);
-    canvas.text(
+    // 先自右向左排布 crate 徽章并记录最左缘，再以该左缘约束标题宽度并做省略截断。
+    let mut badge_right = card.rect.max().x - 18.0;
+    let badge_limit = card.rect.origin.x + 170.0;
+    let mut badges_left_x = card.rect.max().x - 18.0;
+    for krate in example.crates.iter().rev() {
+        let width = widgets::measure_badge(canvas, krate, 9.5);
+        if badge_right - width < badge_limit {
+            break;
+        }
+        let badge = widgets::badge_right_aligned(
+            canvas,
+            badge_right,
+            card.rect.origin.y + 14.0,
+            18.0,
+            krate,
+            palette.text_muted,
+            palette.stage_bg,
+            9.5,
+        );
+        badges_left_x = badge.origin.x;
+        badge_right = badge.origin.x - 6.0;
+    }
+    let title_x = card.rect.origin.x + 18.0;
+    let title_w = (badges_left_x - title_x - 8.0).max(40.0);
+    canvas.text_elided(
         localized_title,
-        Rect::new(
-            card.rect.origin.x + 18.0,
-            card.rect.origin.y + 12.0,
-            card.rect.size.x - 36.0,
-            24.0,
-        ),
+        Rect::new(title_x, card.rect.origin.y + 12.0, title_w, 24.0),
         15.0,
         palette.text,
         AlignX::Start,
@@ -5487,25 +5533,6 @@ fn draw_example(
         10.5,
         palette.text_muted,
     );
-
-    let mut badge_x = card.rect.max().x - 18.0;
-    let badge_limit = card.rect.origin.x + 170.0;
-    for krate in example.crates.iter().rev() {
-        let width = canvas.labels.measure(krate, 9.5).x + 16.0;
-        if badge_x - width < badge_limit {
-            break;
-        }
-        badge_x -= width;
-        let badge = widgets::badge_sized(
-            canvas,
-            Rect::new(badge_x, card.rect.origin.y + 14.0, width, 18.0),
-            krate,
-            palette.text_muted,
-            palette.stage_bg,
-            9.5,
-        );
-        badge_x = badge.origin.x - 6.0;
-    }
 
     // 实时舞台。
     canvas.rect(

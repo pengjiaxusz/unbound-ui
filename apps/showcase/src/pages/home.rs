@@ -283,7 +283,7 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
                 q_w,
                 QUICK_CARD_H,
             );
-            super::components::draw_control_tile_demo(canvas, state, cell, comp_id, PageId::Home);
+            super::components::draw_control_tile(canvas, state, cell, comp_id);
         }
         let q_rows = items.len().div_ceil(q_cols);
         y += q_rows as f32 * QUICK_CARD_H
@@ -337,6 +337,8 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             palette.card_border
         };
         canvas.rect(cell, 10.0, bg, border, 1.0, 0.0);
+        // 裁剪分类卡片内部内容，防止长标题或简介溢出卡片边界。
+        canvas.begin_clip(cell);
 
         let (accent_fg, accent_bg) = category_accent(palette, idx);
         let icon_box = Rect::new(cell.origin.x + 12.0, cell.origin.y + 14.0, 36.0, 36.0);
@@ -351,23 +353,22 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
 
         let title = category_localized_label(cat, state.locale);
         let count_text = format!("{}", cat.count());
-        let count_w = canvas.labels.measure(&count_text, 10.0).x + 14.0;
-        let badge_rect = Rect::new(
-            cell.max().x - count_w - 10.0,
+        let badge_rect = widgets::badge_right_aligned(
+            canvas,
+            cell.max().x - 10.0,
             cell.origin.y + 12.0,
-            count_w,
             18.0,
+            &count_text,
+            accent_fg,
+            accent_bg,
+            10.0,
         );
-        widgets::badge(canvas, badge_rect, &count_text, accent_fg, accent_bg);
 
-        canvas.text(
+        let title_x = icon_box.max().x + 10.0;
+        let title_w = (badge_rect.origin.x - title_x - 8.0).max(40.0);
+        canvas.text_elided(
             title,
-            Rect::new(
-                icon_box.max().x + 10.0,
-                cell.origin.y + 12.0,
-                (cell.size.x - 74.0 - count_w).max(40.0),
-                18.0,
-            ),
+            Rect::new(title_x, cell.origin.y + 12.0, title_w, 18.0),
             12.5,
             palette.text,
             AlignX::Start,
@@ -377,14 +378,15 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
         canvas.text_wrapped(
             summary,
             Rect::new(
-                icon_box.max().x + 10.0,
+                title_x,
                 cell.origin.y + 34.0,
-                (cell.size.x - 70.0).max(60.0),
+                (cell.max().x - title_x - 10.0).max(60.0),
                 40.0,
             ),
             10.5,
             palette.text_muted,
         );
+        canvas.end_clip();
         canvas.control(
             node,
             cell,
