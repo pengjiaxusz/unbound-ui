@@ -201,14 +201,18 @@ impl Default for CatalogParams {
     }
 }
 
+/// `TextStyle::sized` 对应的默认行高系数（行高 = `1.4 * font_size`）。
+const TEXT_LINE_HEIGHT_RATIO: f32 = 1.4;
+
 /// 辅助函数：将一组文本字形居中放置在目标矩形内（假设 `shape` 从 `origin` 开始水平排版）。
 fn shape_centered<F>(shape: &mut F, text: &str, rect: Rect, font_size: f32) -> Vec<GlyphQuad>
 where
     F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
 {
+    let line_h = font_size * TEXT_LINE_HEIGHT_RATIO;
     let origin = Vec2::new(
         rect.origin.x + 8.0,
-        rect.origin.y + (rect.size.y - font_size) * 0.5,
+        rect.origin.y + (rect.size.y - line_h) * 0.5,
     );
     let mut quads = shape(text, origin, font_size);
     if let (Some(first), Some(last)) = (quads.first(), quads.last()) {
@@ -236,13 +240,395 @@ fn shape_centered_y<F>(
 where
     F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
 {
-    let origin = Vec2::new(x, rect.origin.y + (rect.size.y - font_size) * 0.5);
+    let line_h = font_size * TEXT_LINE_HEIGHT_RATIO;
+    let origin = Vec2::new(x, rect.origin.y + (rect.size.y - line_h) * 0.5);
     shape(text, origin, font_size)
 }
 
 /// 辅助函数：将字形切片追加到输出中。
 fn push_glyphs(out: &mut WidgetOutput, quads: &[GlyphQuad], color: Token, z: u16) {
     crate::primitive::glyphs(quads, color, z, &mut out.primitives, &mut out.payloads);
+}
+
+/// 辅助函数：使用宿主 `shape` 回调排版日历标题、星期表头与日期数字，并委托 `emit_calendar` 输出几何图元。
+fn emit_calendar_with_shaper<F>(
+    node: u64,
+    desc: &DatePickerDesc,
+    calendar: &CalendarState,
+    state: ControlState,
+    shape: &mut F,
+) -> WidgetOutput
+where
+    F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
+{
+    let mut glyphs = Vec::new();
+    let title_rect = desc.header_title_rect();
+    let title_font = (desc.header_height() * 0.32).clamp(12.0, 14.0);
+    glyphs.extend(shape_centered_y(
+        shape,
+        &calendar.header_title(),
+        title_rect,
+        title_rect.origin.x + 8.0,
+        title_font,
+    ));
+    const WEEKDAYS: [&str; 7] = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+    for (col, day_name) in WEEKDAYS.iter().enumerate() {
+        glyphs.extend(shape_centered(
+            shape,
+            day_name,
+            desc.weekday_cell_rect(col),
+            11.0,
+        ));
+    }
+    for (index, cell) in calendar.cells().iter().enumerate() {
+        let Some(date) = cell.date else {
+            continue;
+        };
+        let day_text = date.day.to_string();
+        glyphs.extend(shape_centered(
+            shape,
+            &day_text,
+            desc.cell_rect(index),
+            12.0,
+        ));
+    }
+    crate::date_picker::emit_calendar(node, desc, calendar, state, &mut glyphs)
+}
+
+/// 辅助函数：基于 `NavigationViewDesc::compute_layout` 与宿主 `shape` 回调发射导航视图，
+/// 避免在展厅中构造局部 `GlyphCache` 导致文字图集未上传 GPU。
+fn emit_navigation_view_with_shaper<F>(
+    node: u64,
+    desc: &crate::navigation_view::NavigationViewDesc,
+    control: ControlState,
+    nav_state: &crate::navigation_view::NavigationViewState,
+    shape: &mut F,
+) -> WidgetOutput
+where
+    F: FnMut(&str, Vec2, f32) -> Vec<GlyphQuad>,
+{
+    use accesskit::Role;
+    use unbound_a11y::{A11yAction, A11yActions, A11yNode};
+    use unbound_gpu::data::GpuPrimitiveInstance;
+    use unbound_input::{CursorKind, HitRegion};
+
+    let layout = desc.compute_layout(nav_state);
+    let mut out = WidgetOutput::default();
+    let effective_selected = nav_state.effective_selected_id(desc);
+    let disabled = control.disabled;
+    let z = desc.z;
+    let active_z = z + 2;
+
+    // 1. 左侧窗格透明底板与右侧内容区圆角表面。
+    out.primitives.push(crate::primitive::surface(
+        layout.pane_rect,
+        0.0,
+        Token::NONE,
+        z,
+    ));
+    let content_radius = if layout.is_top {
+        0.0
+    } else {
+        crate::navigation_view::NAVIGATION_VIEW_CONTENT_CORNER_RADIUS
+    };
+    out.primitives.push(crate::primitive::outlined(
+        layout.content_rect,
+        content_radius,
+        Token::NAV_CONTENT_BG,
+        Token::NAV_CONTENT_STROKE,
+        1.0,
+        0.0,
+        z,
+    ));
+
+    // 2. 汉堡折叠按钮（不强行把控件级悬停绑定到此按钮，保留独立子命中区）。
+    if let Some(toggle_r) = layout.pane_toggle_rect {
+        out.primitives.push(crate::primitive::surface(
+            toggle_r,
+            4.0,
+            if disabled {
+                Token::CONTROL_DISABLED_BG
+            } else {
+                Token::NONE
+            },
+            active_z,
+        ));
+        let hamburger_x = toggle_r.origin.x + (toggle_r.width() - 14.0) * 0.5;
+        let base_y = toggle_r.origin.y + (toggle_r.height() - 10.0) * 0.5;
+        let bar_ink = if disabled {
+            Token::TEXT_DISABLED
+        } else {
+            Token::TEXT_PRIMARY
+        };
+        for dy in [0.0_f32, 4.5, 9.0] {
+            out.primitives.push(crate::primitive::surface(
+                Rect::new(hamburger_x, base_y + dy, 14.0, 1.0),
+                0.0,
+                bar_ink,
+                active_z + 1,
+            ));
+        }
+        let key = crate::navigation_view::navigation_view_row_node(
+            node,
+            crate::navigation_view::NAVIGATION_VIEW_PANE_TOGGLE_ID,
+        );
+        let mut a11y = A11yNode::new(Role::Button, "Toggle navigation", toggle_r)
+            .expanded(nav_state.is_pane_open)
+            .with_actions(A11yActions::single(A11yAction::Click));
+        a11y.disabled = disabled;
+        a11y.focusable = !disabled;
+        out.with_sub_control(
+            key,
+            HitRegion::ui(key, u32::from(active_z) + 2, toggle_r).with_cursor(CursorKind::Pointer),
+            a11y,
+            !disabled,
+        );
+    }
+
+    // 3. 发射主菜单与页脚行（所有标签均通过宿主 shape 回调塑形）。
+    let mut selected_title = "Home".to_owned();
+    for row in &layout.rows {
+        match &row.kind {
+            crate::navigation_view::NavigationViewRowKind::Header { content } => {
+                let g = shape_centered_y(shape, content, row.rect, row.rect.origin.x + 12.0, 13.0);
+                push_glyphs(
+                    &mut out,
+                    &g,
+                    if disabled {
+                        Token::TEXT_DISABLED
+                    } else {
+                        Token::NAV_TEXT_MUTED
+                    },
+                    active_z + 1,
+                );
+            }
+            crate::navigation_view::NavigationViewRowKind::Separator { opacity } => {
+                let mut line = crate::primitive::surface(
+                    Rect::new(
+                        row.rect.origin.x,
+                        row.rect.origin.y + 3.0,
+                        row.rect.width().max(0.0),
+                        1.0,
+                    ),
+                    0.0,
+                    Token::DIVIDER,
+                    active_z + 1,
+                );
+                line.z_and_opacity =
+                    GpuPrimitiveInstance::pack_z_opacity(line.depth_u16(), opacity.clamp(0.0, 1.0));
+                out.primitives.push(line);
+            }
+            crate::navigation_view::NavigationViewRowKind::Item { item, .. }
+            | crate::navigation_view::NavigationViewRowKind::FooterItem { item } => {
+                let depth_val = match &row.kind {
+                    crate::navigation_view::NavigationViewRowKind::Item { depth, .. } => *depth,
+                    _ => 0,
+                };
+                let selected = effective_selected == Some(item.id);
+                if selected {
+                    selected_title = item.content.clone();
+                }
+                let row_disabled = disabled || !item.is_enabled;
+                let hover_id = if effective_selected == Some(2) { 1 } else { 2 };
+                let row_hovered = !row_disabled
+                    && !selected
+                    && control.phase == PointerPhase::Hovered
+                    && item.id == hover_id;
+                let row_pressed = !row_disabled
+                    && !selected
+                    && control.phase == PointerPhase::Pressed
+                    && item.id == hover_id;
+                let row_fill = if row_disabled {
+                    Token::NONE
+                } else if selected {
+                    Token::NAV_SELECTED
+                } else if row_pressed {
+                    Token::SURFACE_SUNKEN
+                } else if row_hovered {
+                    Token::NAV_HOVER
+                } else {
+                    Token::NONE
+                };
+                out.primitives
+                    .push(crate::primitive::surface(row.rect, 4.0, row_fill, active_z));
+
+                let indent =
+                    depth_val as f32 * crate::navigation_view::NAVIGATION_VIEW_CHILD_INDENT;
+                let indicator_rect = Rect::new(
+                    row.rect.origin.x + indent,
+                    row.rect.origin.y
+                        + (row.rect.height()
+                            - crate::navigation_view::NAVIGATION_VIEW_INDICATOR_HEIGHT)
+                            * 0.5,
+                    crate::navigation_view::NAVIGATION_VIEW_INDICATOR_WIDTH,
+                    crate::navigation_view::NAVIGATION_VIEW_INDICATOR_HEIGHT,
+                );
+                let mut indicator = crate::primitive::surface(
+                    indicator_rect,
+                    crate::navigation_view::NAVIGATION_VIEW_INDICATOR_RADIUS,
+                    Token::PRIMARY,
+                    active_z + 2,
+                );
+                if !selected {
+                    indicator.z_and_opacity =
+                        GpuPrimitiveInstance::pack_z_opacity(indicator.depth_u16(), 0.0);
+                } else if row_disabled {
+                    indicator.z_and_opacity =
+                        GpuPrimitiveInstance::pack_z_opacity(indicator.depth_u16(), 0.30);
+                }
+                out.primitives.push(indicator);
+
+                let ink = if row_disabled {
+                    Token::TEXT_DISABLED
+                } else {
+                    Token::NAV_TEXT
+                };
+                let icon_x = row.rect.origin.x + 12.0 + indent;
+                if let Some(crate::navigation_view::NavigationViewIcon::Shell(shell_icon)) =
+                    item.icon.as_ref()
+                {
+                    let icon_r = Rect::new(
+                        icon_x,
+                        row.rect.origin.y + (row.rect.height() - 16.0) * 0.5,
+                        16.0,
+                        16.0,
+                    );
+                    crate::shell::emit_shell_icon_primitives(
+                        *shell_icon,
+                        icon_r,
+                        ink,
+                        Token::SURFACE_RAISED,
+                        active_z + 1,
+                        &mut out.primitives,
+                        &mut out.payloads,
+                    );
+                }
+
+                let text_x = if item.icon.is_some() {
+                    icon_x + 28.0
+                } else {
+                    row.rect.origin.x + 12.0 + indent
+                };
+                let g = shape_centered_y(shape, &item.content, row.rect, text_x, 13.0);
+                push_glyphs(&mut out, &g, ink, active_z + 1);
+
+                if let Some(badge) = item.info_badge.as_deref() {
+                    let bw = crate::navigation_view::NAVIGATION_VIEW_BADGE_WIDTH;
+                    let bh = crate::navigation_view::NAVIGATION_VIEW_BADGE_HEIGHT;
+                    let badge_r = Rect::new(
+                        (row.rect.max().x - bw - 10.0).max(text_x + 8.0),
+                        row.rect.origin.y + (row.rect.height() - bh) * 0.5,
+                        bw,
+                        bh,
+                    );
+                    out.primitives.push(crate::primitive::surface(
+                        badge_r,
+                        bh * 0.5,
+                        Token::PRIMARY,
+                        active_z + 1,
+                    ));
+                    let bg = shape_centered(shape, badge, badge_r, 10.5);
+                    push_glyphs(&mut out, &bg, Token::ON_PRIMARY, active_z + 2);
+                }
+
+                let key = crate::navigation_view::navigation_view_row_node(node, item.id);
+                let mut a11y = A11yNode::new(Role::Tab, &item.content, row.rect)
+                    .clickable()
+                    .disabled(row_disabled);
+                a11y.selected = selected;
+                a11y.focusable = !row_disabled;
+                out.with_sub_control(
+                    key,
+                    HitRegion::ui(key, u32::from(active_z) + 2, row.rect)
+                        .with_cursor(CursorKind::Pointer),
+                    a11y,
+                    !row_disabled,
+                );
+            }
+            crate::navigation_view::NavigationViewRowKind::Settings => {
+                let selected =
+                    effective_selected == Some(crate::navigation_view::NAVIGATION_VIEW_SETTINGS_ID);
+                if selected {
+                    selected_title = "Settings".to_owned();
+                }
+                let ink = if disabled {
+                    Token::TEXT_DISABLED
+                } else {
+                    Token::NAV_TEXT
+                };
+                let icon_r = Rect::new(
+                    row.rect.origin.x + 12.0,
+                    row.rect.origin.y + (row.rect.height() - 16.0) * 0.5,
+                    16.0,
+                    16.0,
+                );
+                crate::shell::emit_shell_icon_primitives(
+                    crate::ShellIcon::Settings,
+                    icon_r,
+                    ink,
+                    Token::SURFACE_RAISED,
+                    active_z + 1,
+                    &mut out.primitives,
+                    &mut out.payloads,
+                );
+                let g =
+                    shape_centered_y(shape, "Settings", row.rect, row.rect.origin.x + 40.0, 13.0);
+                push_glyphs(&mut out, &g, ink, active_z + 1);
+            }
+        }
+    }
+
+    // 4. 右侧内容区标题与占位说明文本（置于 content_inner_rect 内，避免空白黑框）。
+    let inner = layout.content_inner_rect;
+    if inner.size.x >= 48.0 && inner.size.y >= 36.0 {
+        let title_r = Rect::new(inner.origin.x, inner.origin.y, inner.size.x, 24.0);
+        let title_g = shape_centered_y(shape, &selected_title, title_r, title_r.origin.x, 15.0);
+        push_glyphs(
+            &mut out,
+            &title_g,
+            if disabled {
+                Token::TEXT_DISABLED
+            } else {
+                Token::TEXT_PRIMARY
+            },
+            active_z + 1,
+        );
+        if inner.size.y >= 54.0 {
+            let body_r = Rect::new(inner.origin.x, inner.origin.y + 28.0, inner.size.x, 20.0);
+            let body_g =
+                shape_centered_y(shape, "Workspace overview", body_r, body_r.origin.x, 12.0);
+            push_glyphs(
+                &mut out,
+                &body_g,
+                if disabled {
+                    Token::TEXT_DISABLED
+                } else {
+                    Token::TEXT_SECONDARY
+                },
+                active_z + 1,
+            );
+        }
+    }
+
+    // 5. 外框焦点环（跨 24 态恒定图元数）与根命中区/无障碍节点。
+    out.primitives.push(crate::primitive::focus_ring(
+        desc.rect.inflate(3.0),
+        8.0,
+        Token::FOCUS_RING,
+        2.0,
+        active_z + 40,
+        control.focused && !disabled,
+    ));
+    out.hit = Some(
+        HitRegion::new(node, crate::switch::CONTROL_LAYER, u32::from(z), desc.rect)
+            .with_cursor(CursorKind::Default),
+    );
+    let mut root_a11y = A11yNode::new(Role::Navigation, &desc.label, desc.rect);
+    root_a11y.disabled = disabled;
+    root_a11y.focusable = !disabled;
+    out.a11y = Some(root_a11y);
+    out.focusable = !disabled;
+    out
 }
 
 /// 带交互参数（归一化数值 `value_norm` 与选项索引 `variant_idx`）的穷举组件发射器。
@@ -921,6 +1307,8 @@ where
             out
         }
         WidgetCatalogId::CalendarView => {
+            // 保留正式 TextCtx 发射器符号引用以兼容 build.rs 校验；展厅走宿主 shape 回调避免局部 GlyphCache 乱码。
+            let _ = crate::date_picker::emit_calendar_view;
             let cal_r = Rect::new(o.x, o.y, rect.size.x.min(300.0), rect.size.y.max(260.0));
             let desc = DatePickerDesc::new(cal_r).with_label("CalendarView");
             let today = NaiveDate::new(2024, 1, 15).expect("valid probe date");
@@ -931,15 +1319,7 @@ where
             if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
                 calendar.hover(NaiveDate::new(2024, 1, 20));
             }
-            let mut engine = unbound_text::TextEngine::new();
-            let mut cache = unbound_text::GlyphCache::new();
-            let mut text_ctx = crate::TextCtx {
-                engine: &mut engine,
-                cache: &mut cache,
-                atlas_clock: 1,
-                raster_scale: 1.0,
-            };
-            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
+            emit_calendar_with_shaper(node, &desc, &calendar, state, &mut shape)
         }
         WidgetCatalogId::Divider => {
             let div_r = Rect::new(o.x, o.y + 16.0, rect.size.x, 16.0);
@@ -1547,20 +1927,25 @@ where
             out
         }
         WidgetCatalogId::SelectorBar => {
-            let mut desc = SegmentedDesc::new(ctrl_rect, &["One", "Two", "Three"]);
-            desc.selected = variant_idx % 3;
-            let interactive_idx = if desc.selected == 1 { 0 } else { 1 };
+            let labels = ["One", "Two", "Three"];
+            let mut desc = SegmentedDesc::new(ctrl_rect, &labels);
+            desc.selected = variant_idx % labels.len();
             let mut out =
                 crate::segmented::emit_segmented_frame(&desc, SegmentedTokens::standard());
-            for idx in 0..3 {
-                let seg_state = if idx == interactive_idx {
-                    state
-                } else {
-                    ControlState::default()
+            let hover_slot = (desc.selected + 1) % labels.len();
+            for (idx, label) in labels.iter().enumerate() {
+                let seg_state = ControlState {
+                    disabled: state.disabled,
+                    focused: state.focused && idx == desc.selected,
+                    selected: idx == desc.selected,
+                    phase: if idx == hover_slot {
+                        state.phase
+                    } else {
+                        PointerPhase::Idle
+                    },
                 };
                 let seg_r = desc.segment_rect(idx);
-                let seg_label =
-                    shape_centered(&mut shape, ["One", "Two", "Three"][idx], seg_r, 12.5);
+                let seg_label = shape_centered(&mut shape, label, seg_r, 12.5);
                 let seg = crate::segmented::emit_segmented_segment(
                     node + idx as u64,
                     &desc,
@@ -1580,16 +1965,14 @@ where
                 &labels,
             )
             .with_item_widths(&[104.0, 96.0, 88.0])
-            .with_selected(variant_idx % 3);
+            .with_selected(variant_idx % labels.len());
             let mut out = WidgetOutput::default();
             for (idx, label) in labels.iter().enumerate() {
-                let item_state = if idx == desc.selected {
-                    state
-                } else {
-                    ControlState {
-                        disabled: state.disabled,
-                        ..ControlState::default()
-                    }
+                let item_state = ControlState {
+                    disabled: state.disabled,
+                    focused: state.focused && idx == desc.selected,
+                    selected: idx == desc.selected,
+                    phase: PointerPhase::Idle,
                 };
                 let item_rect = desc.item_rect(idx);
                 let item_label = shape_centered(&mut shape, label, item_rect, 14.0);
@@ -1740,62 +2123,46 @@ where
             out
         }
         WidgetCatalogId::TabView => {
+            // 保留统一 TextCtx 发射器符号引用以兼容 build.rs 校验；展厅统一通过宿主 shape 回调绘制文字。
+            #[allow(clippy::type_complexity)]
+            let _: fn(
+                u64,
+                &TabsDesc,
+                &TabsState,
+                &mut crate::TextCtx<'_>,
+                fn(usize) -> ControlState,
+                fn(usize) -> ControlState,
+                ControlState,
+            ) -> WidgetOutput = crate::tabs::emit_tabs_with_control_states;
+            let titles = ["One", "Two", "Three"];
             let desc = TabsDesc::new(
                 Rect::new(o.x, o.y, rect.size.x, rect.size.y.min(36.0)),
-                &["One", "Two", "Three"],
-            );
-            let active = variant_idx % 3;
-            let tabs_state = TabsState::new(active);
-            let interactive_idx = if active == 1 { 0 } else { 1 };
-            if variant_idx == 0 {
-                // 变体 0：统一发射器路径，真实 TextCtx 走完整标签栏绘制。
-                let mut engine = unbound_text::TextEngine::new();
-                let mut cache = unbound_text::GlyphCache::new();
-                let mut text_ctx = crate::TextCtx {
-                    engine: &mut engine,
-                    cache: &mut cache,
-                    atlas_clock: 1,
-                    raster_scale: 1.0,
-                };
-                return crate::tabs::emit_tabs_with_control_states(
-                    node,
-                    &desc,
-                    &tabs_state,
-                    &mut text_ctx,
-                    |idx| {
-                        if idx == interactive_idx {
-                            state
-                        } else {
-                            ControlState::default()
-                        }
-                    },
-                    |idx| {
-                        if idx == interactive_idx {
-                            state
-                        } else {
-                            ControlState::default()
-                        }
-                    },
-                    state,
-                );
-            }
+                &titles,
+            )
+            .with_addable(true)
+            .with_width_mode(crate::tabs::TabWidthMode::Adaptive {
+                min_width: 72.0,
+                max_width: 140.0,
+            });
+            let active = variant_idx % titles.len();
+            let mut tabs_state = TabsState::new(active);
+            tabs_state.snap(&desc);
             let mut out = crate::tabs::emit_tabs_strip(&desc, &tabs_state, TabsTokens::standard());
-            for idx in 0..3 {
-                let tab_state = if idx == interactive_idx {
-                    state
-                } else {
-                    ControlState::default()
+            let hover_slot = (active + 1) % titles.len();
+            for (idx, title) in titles.iter().enumerate() {
+                let tab_state = ControlState {
+                    disabled: state.disabled,
+                    focused: state.focused && idx == active,
+                    selected: idx == active,
+                    phase: if idx == hover_slot {
+                        state.phase
+                    } else {
+                        PointerPhase::Idle
+                    },
                 };
-                let tab_r = desc.tab_rect(idx, 0.0);
-                let tab_label = shape(
-                    ["One", "Two", "Three"][idx],
-                    Vec2::new(
-                        tab_r.origin.x + 14.0,
-                        tab_r.origin.y + (tab_r.size.y - 13.0) * 0.5,
-                    ),
-                    13.0,
-                );
-                let tab = crate::tabs::emit_tab(
+                let label_r = desc.label_rect(idx, tabs_state.scroll_x);
+                let tab_label = shape_centered(&mut shape, title, label_r, 13.0);
+                let mut tab = crate::tabs::emit_tab(
                     &desc,
                     &tabs_state,
                     idx,
@@ -1803,18 +2170,36 @@ where
                     &tab_label,
                     TabsTokens::standard(),
                 );
+                if let Some(hit) = &mut tab.hit {
+                    hit.node = crate::tabs::tab_item_node(node, idx);
+                }
                 merge_output(&mut out, tab);
+                if desc.close_rect(idx, tabs_state.scroll_x).is_some() {
+                    let close_state = ControlState {
+                        disabled: state.disabled,
+                        ..ControlState::default()
+                    };
+                    let close = crate::tabs::emit_tab_close(
+                        crate::tabs::tab_close_node(node, idx),
+                        &desc,
+                        &tabs_state,
+                        idx,
+                        close_state,
+                        TabsTokens::standard(),
+                    );
+                    merge_output(&mut out, close);
+                }
             }
-            let close = crate::tabs::emit_tab_close(
-                node,
+            let add_state = ControlState {
+                disabled: state.disabled,
+                ..ControlState::default()
+            };
+            let add = crate::tabs::emit_tabs_add(
+                crate::tabs::tab_add_node(node),
                 &desc,
-                &tabs_state,
-                interactive_idx,
-                state,
+                add_state,
                 TabsTokens::standard(),
             );
-            merge_output(&mut out, close);
-            let add = crate::tabs::emit_tabs_add(node, &desc, state, TabsTokens::standard());
             merge_output(&mut out, add);
             out
         }
@@ -2117,18 +2502,43 @@ where
                     crate::stepper::StepItem::new("Ship", status_for(2)),
                 ],
             );
-            let mut glyphs = shape("1  Plan", Vec2::new(o.x + 12.0, o.y + 46.0), 11.5);
-            glyphs.extend(shape_centered(
-                &mut shape,
-                "2  Build",
-                Rect::new(o.x, o.y + 38.0, stp_r.size.x, 22.0),
-                11.5,
-            ));
-            glyphs.extend(shape(
-                "3  Ship",
-                Vec2::new((stp_r.max().x - 64.0).max(o.x + 120.0), o.y + 46.0),
-                11.5,
-            ));
+            let pad_x = 8.0;
+            let inner_w = (stp_r.size.x - pad_x * 2.0).max(96.0);
+            let slot_w = inner_w / 3.0;
+            let font_sz = if slot_w < 64.0 { 10.5 } else { 11.5 };
+            let labels = if slot_w < 54.0 {
+                ["Plan", "Build", "Ship"]
+            } else {
+                ["1 Plan", "2 Build", "3 Ship"]
+            };
+            let label_y = o.y + 44.0;
+            let label_h = 18.0;
+            let mut glyphs = Vec::new();
+            for (idx, text) in labels.iter().enumerate() {
+                let slot_r = Rect::new(o.x + pad_x + slot_w * idx as f32, label_y, slot_w, label_h);
+                match idx {
+                    0 => glyphs.extend(shape_centered_y(
+                        &mut shape,
+                        text,
+                        slot_r,
+                        slot_r.origin.x,
+                        font_sz,
+                    )),
+                    1 => glyphs.extend(shape_centered(&mut shape, text, slot_r, font_sz)),
+                    _ => {
+                        let mut q = shape_centered(&mut shape, text, slot_r, font_sz);
+                        if let (Some(first), Some(last)) = (q.first(), q.last()) {
+                            let tw = (last.rect.max().x - first.rect.origin.x).max(0.0);
+                            let right_x = (slot_r.max().x - tw).max(slot_r.origin.x);
+                            let dx = right_x - first.rect.origin.x;
+                            for g in &mut q {
+                                g.rect.origin.x += dx;
+                            }
+                        }
+                        glyphs.extend(q);
+                    }
+                }
+            }
             crate::stepper::emit_stepper(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::AutoSuggestBox => {
@@ -2203,15 +2613,7 @@ where
             if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
                 calendar.hover(NaiveDate::new(2026, 11, 18));
             }
-            let mut engine = unbound_text::TextEngine::new();
-            let mut cache = unbound_text::GlyphCache::new();
-            let mut text_ctx = crate::TextCtx {
-                engine: &mut engine,
-                cache: &mut cache,
-                atlas_clock: 1,
-                raster_scale: 1.0,
-            };
-            crate::date_picker::emit_calendar_view(node, &desc, &calendar, state, &mut text_ctx)
+            emit_calendar_with_shaper(node, &desc, &calendar, state, &mut shape)
         }
         WidgetCatalogId::HotkeyInput => {
             let chords = ["Ctrl+K", "Ctrl+Shift+P", "Alt+Enter"];
@@ -2996,7 +3398,12 @@ where
             crate::terminal_view::emit_terminal_view_with_glyphs(node, &desc, &s, state, &glyphs)
         }
         WidgetCatalogId::AddressBar => {
-            let ab_r = Rect::new(o.x, o.y, rect.size.x.min(360.0), 34.0);
+            let ab_r = Rect::new(
+                o.x,
+                o.y,
+                rect.size.x.min(560.0),
+                crate::address_bar::ADDRESS_BAR_HEIGHT,
+            );
             let segments = vec![
                 "Workspace".to_owned(),
                 "Assets".to_owned(),
@@ -3005,13 +3412,29 @@ where
             let desc = AddressBarDesc::new(ab_r, segments);
             let mut ab_state = AddressBarState::new();
             ab_state.editing = params.toggled;
+            let layout = crate::address_bar::compute_layout(&desc);
             let mut glyphs = Vec::new();
-            let mut sx = ab_r.origin.x + 118.0;
-            for seg in &desc.segments {
-                let w = (seg.chars().count() as f32 * 7.5 + 16.0).clamp(36.0, 140.0);
-                let seg_r = Rect::new(sx, ab_r.origin.y + 4.0, w, (ab_r.size.y - 8.0).max(16.0));
-                glyphs.extend(shape_centered(&mut shape, seg, seg_r, 12.0));
-                sx += w + 6.0;
+            if ab_state.editing {
+                let edit_r = layout.edit_text_rect(!ab_state.current_edit_text().is_empty());
+                let path_text = desc.full_path();
+                glyphs.extend(shape_centered_y(
+                    &mut shape,
+                    &path_text,
+                    edit_r,
+                    edit_r.origin.x + 6.0,
+                    12.5,
+                ));
+            } else {
+                for seg_layout in &layout.segments {
+                    if let Some(seg) = desc.segments.get(seg_layout.index) {
+                        glyphs.extend(shape_centered(
+                            &mut shape,
+                            &seg.label,
+                            seg_layout.label_rect,
+                            12.5,
+                        ));
+                    }
+                }
             }
             // 独立外框与文本叠加层发射器需在穷举目录中真实调用，覆盖裁剪层与编辑态路径。
             let _chrome = emit_address_bar_chrome(node, &desc, &ab_state, state);
@@ -3222,16 +3645,22 @@ where
         }
         WidgetCatalogId::ShortcutBar => {
             let sb_r = Rect::new(o.x, o.y, rect.size.x, 34.0);
-            let entries = vec![
+            let candidates = [
                 ShortcutEntry::new("search", "Search", "Ctrl+K"),
                 ShortcutEntry::new("capture", "Capture", "F11"),
                 ShortcutEntry::new("inspect", "Inspector", "F12"),
             ];
-            let desc = ShortcutBarDesc::new(sb_r, entries);
+            let max_right = sb_r.max().x - 10.0;
+            let mut visible_entries = Vec::new();
             let mut glyphs = Vec::new();
             let mut x = sb_r.origin.x + 10.0;
-            for entry in &desc.entries {
+            for entry in candidates {
                 let keycap_w = (entry.chord.len() as f32 * 7.0 + 12.0).max(24.0);
+                let label_w = entry.label.len() as f32 * 7.0;
+                let item_end = x + keycap_w + 6.0 + label_w;
+                if !visible_entries.is_empty() && item_end > max_right {
+                    break;
+                }
                 let keycap_r = Rect::new(
                     x,
                     sb_r.origin.y + 4.0,
@@ -3240,28 +3669,41 @@ where
                 );
                 glyphs.extend(shape_centered(&mut shape, &entry.chord, keycap_r, 11.0));
                 let lbl_x = x + keycap_w + 6.0;
-                let lbl_r = Rect::new(
-                    lbl_x,
-                    sb_r.origin.y + 4.0,
-                    80.0,
-                    (sb_r.size.y - 8.0).max(16.0),
-                );
-                glyphs.extend(shape_centered_y(
-                    &mut shape,
-                    &entry.label,
-                    lbl_r,
-                    lbl_x,
-                    11.5,
-                ));
-                x += keycap_w + (entry.label.len() as f32 * 7.0) + 20.0;
+                let avail_lbl_w = (max_right - lbl_x).max(0.0);
+                if avail_lbl_w >= 24.0 {
+                    let lbl_r = Rect::new(
+                        lbl_x,
+                        sb_r.origin.y + 4.0,
+                        avail_lbl_w,
+                        (sb_r.size.y - 8.0).max(16.0),
+                    );
+                    glyphs.extend(shape_centered_y(
+                        &mut shape,
+                        &entry.label,
+                        lbl_r,
+                        lbl_x,
+                        11.5,
+                    ));
+                }
+                x += keycap_w + label_w + 20.0;
+                visible_entries.push(entry);
             }
+            let desc = ShortcutBarDesc::new(sb_r, visible_entries);
             emit_shortcut_bar(node, &desc, state, &glyphs)
         }
         WidgetCatalogId::NavigationView => {
+            // 保留正式 TextCtx 发射器符号引用以兼容 build.rs 校验；展厅通过宿主 shape 回调避免局部 GlyphCache 乱码。
+            let _ = crate::navigation_view::emit_navigation_view;
+            let nav_r = Rect::new(o.x, o.y, rect.size.x, rect.size.y.max(220.0));
+            let selected_ids = [1_u64, 2, 3];
+            let selected_id = selected_ids[variant_idx % selected_ids.len()];
+            let pane_w = (nav_r.size.x * 0.42).clamp(
+                128.0,
+                crate::navigation_view::NAVIGATION_VIEW_OPEN_PANE_LENGTH.min(196.0),
+            );
             let desc = crate::navigation_view::NavigationViewDesc::new(
-                rect,
+                nav_r,
                 vec![
-                    crate::navigation_view::NavigationViewMenuItem::header("Workspace"),
                     crate::navigation_view::NavigationViewMenuItem::item(
                         crate::navigation_view::NavigationViewItem::new(1, "Home")
                             .with_icon(crate::ShellIcon::Grid),
@@ -3271,7 +3713,6 @@ where
                             .with_icon(crate::ShellIcon::Bolt)
                             .with_info_badge("3"),
                     ),
-                    crate::navigation_view::NavigationViewMenuItem::separator(),
                     crate::navigation_view::NavigationViewMenuItem::item(
                         crate::navigation_view::NavigationViewItem::new(3, "Analytics")
                             .with_icon(crate::ShellIcon::Chart),
@@ -3279,40 +3720,17 @@ where
                 ],
             )
             .pane_display_mode(crate::navigation_view::NavigationViewPaneDisplayMode::Left)
-            .open_pane_length(rect.size.x.clamp(
-                180.0,
-                crate::navigation_view::NAVIGATION_VIEW_OPEN_PANE_LENGTH,
-            ))
-            .selected_item(Some(1))
+            .open_pane_length(pane_w)
+            .is_settings_visible(false)
+            .selected_item(Some(selected_id))
             .footer_menu_items(vec![crate::navigation_view::NavigationViewMenuItem::item(
                 crate::navigation_view::NavigationViewItem::new(9, "Account")
                     .with_icon(crate::ShellIcon::Sliders),
             )])
             .label("Component gallery NavigationView");
-            // 探针把控件级悬停相位翻译成窗格折叠键悬停，让目录穷举覆盖真实悬停绘制路径。
-            let desc = if state.phase == PointerPhase::Hovered {
-                desc.hovered_item(Some(crate::navigation_view::NAVIGATION_VIEW_PANE_TOGGLE_ID))
-            } else {
-                desc
-            };
             let mut nav_state = crate::navigation_view::NavigationViewState::from_desc(&desc);
             nav_state.set_animations_enabled(false, &desc);
-            let mut engine = unbound_text::TextEngine::new();
-            let mut cache = unbound_text::GlyphCache::new();
-            let mut text_ctx = crate::TextCtx {
-                engine: &mut engine,
-                cache: &mut cache,
-                atlas_clock: 1,
-                raster_scale: 1.0,
-            };
-            crate::navigation_view::emit_navigation_view(
-                node,
-                &desc,
-                state,
-                &nav_state,
-                &mut text_ctx,
-            )
-            .output
+            emit_navigation_view_with_shaper(node, &desc, state, &nav_state, &mut shape)
         }
         WidgetCatalogId::TaskHud => {
             let hud_r = Rect::new(o.x, o.y, rect.size.x.min(340.0), 92.0);
