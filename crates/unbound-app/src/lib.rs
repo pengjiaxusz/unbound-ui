@@ -114,7 +114,7 @@ pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use unbound_widgets::ergonomics::UiWidget;
 pub use window_runner::{
     run_windowed, run_windowed_with_frame_callback, run_windowed_with_hooks,
-    run_windowed_with_hwnd, WindowedRunner,
+    run_windowed_with_hwnd, ViewportPassFactory, WindowedRunner,
 };
 
 /// [`ui_key!`] 使用的编译期 64 位 FNV-1a 哈希。
@@ -1707,6 +1707,37 @@ pub enum WidgetSpec {
         /// 图像适应方式。
         fit: unbound_widgets::ObjectFit,
     },
+    /// 3D 视口控件（绑定离屏 Vulkan 渲染目标或软件降级外部纹理）。
+    Viewport3D {
+        /// 3D 视口逻辑标识。
+        viewport_id: unbound_gpu::ViewportId,
+        /// 期望布局占位尺寸（逻辑像素）。
+        size: Vec2,
+        /// 四角圆角半径。
+        radius: [f32; 4],
+        /// 边框线宽（逻辑像素）。
+        border_width: f32,
+        /// 边框颜色令牌。
+        border_color: unbound_theme::Token,
+        /// 采样色偏令牌。
+        tint: unbound_theme::Token,
+        /// 整体不透明度。
+        opacity: f32,
+        /// 渲染分辨率倍率。
+        render_scale: f32,
+        /// 占位背景颜色令牌。
+        placeholder_color: unbound_theme::Token,
+        /// 软件降级外部纹理句柄。
+        fallback_external_texture: Option<ExternalTextureHandle>,
+        /// 显式指定的 Bindless 纹理槽位。
+        texture_slot: Option<u32>,
+        /// 是否接受指针与滚轮交互。
+        interactive: bool,
+        /// 无障碍替代描述文本。
+        alt: String,
+        /// 局部绘制 Z 偏移。
+        z: u16,
+    },
     /// 虚拟树形视图。
     TreeView {
         /// 树形视图描述符。
@@ -2508,6 +2539,7 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
             WidgetSpec::ExternalImage { size, .. } => Some(*size),
+            WidgetSpec::Viewport3D { size, .. } => (size.x > 0.0 && size.y > 0.0).then_some(*size),
             WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                 && desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -2930,6 +2962,54 @@ impl<'a> ViewBuilder<'a> {
             key,
             node_desc,
             WidgetSpec::ExternalImage { handle, size, fit },
+        )
+    }
+
+    /// 声明式 3D 视口控件。
+    pub fn viewport_3d(
+        &mut self,
+        key: impl KeyDiscriminator,
+        desc: unbound_widgets::Viewport3DDesc<'_>,
+    ) -> NodeId {
+        let mut node_desc = RawNodeDesc::container();
+        if desc.size.x > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.size.x));
+        }
+        if desc.size.y > 0.0 {
+            node_desc = node_desc.height(Dim::px(desc.size.y));
+        }
+        self.viewport_3d_with_layout(key, node_desc, desc)
+    }
+
+    /// 声明式 3D 视口控件（允许传入自定义布局容器约束）。
+    pub fn viewport_3d_with_layout(
+        &mut self,
+        key: impl KeyDiscriminator,
+        node_desc: RawNodeDesc,
+        desc: unbound_widgets::Viewport3DDesc<'_>,
+    ) -> NodeId {
+        let raw_key = key.into_u64();
+        self.widget(
+            raw_key,
+            node_desc,
+            WidgetSpec::Viewport3D {
+                viewport_id: desc.viewport_id,
+                size: desc.size,
+                radius: desc.radius,
+                border_width: desc.border_width,
+                border_color: desc.border_color,
+                tint: desc.tint,
+                opacity: desc.opacity,
+                render_scale: desc.render_scale,
+                placeholder_color: desc.placeholder_color,
+                fallback_external_texture: desc
+                    .fallback_external_texture
+                    .map(ExternalTextureHandle),
+                texture_slot: desc.texture_slot,
+                interactive: desc.interactive,
+                alt: desc.alt.to_owned(),
+                z: desc.z,
+            },
         )
     }
 
@@ -4721,6 +4801,23 @@ impl BubbleTrace {
     }
 }
 
+/// 单帧中活跃 3D 视口控件的几何与目标尺寸同步条目。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Viewport3DFrameEntry {
+    /// 3D 视口逻辑标识。
+    pub viewport_id: unbound_gpu::ViewportId,
+    /// 布局求解后的逻辑像素矩形。
+    pub logical_rect: Rect,
+    /// 经 `effective_scale * render_scale` 派生后的物理像素目标尺寸；退化尺寸时为 `None`。
+    pub physical_size: Option<(u32, u32)>,
+    /// 本帧生效的渲染分辨率倍率（已钳位）。
+    pub render_scale: f32,
+    /// 本帧生效的系统与界面综合缩放比（`os_scale * ui_scale`）。
+    pub effective_scale: f32,
+    /// 可选软件降级外部纹理句柄。
+    pub fallback_external_texture: Option<ExternalTextureHandle>,
+}
+
 /// 重建单帧的结果。
 #[derive(Clone, Debug)]
 pub struct FrameReport {
@@ -4745,6 +4842,16 @@ pub struct FrameReport {
     pub atlas_uploads: Vec<AtlasUpload>,
     /// 本帧待窗口运行器执行的外部纹理槽上传、更新与释放操作队列。
     pub external_texture_ops: Vec<ExternalTextureOp>,
+    /// 本帧活跃的 3D 视口同步条目列表（不含退化零尺寸视口）。
+    pub viewports_3d: Vec<Viewport3DFrameEntry>,
+    /// 本帧活跃的 3D 视口数量。
+    pub active_viewports_3d: usize,
+    /// 本帧已执行的 3D 视口自定义渲染通道派发次数。
+    pub viewport_pass_dispatches: u32,
+    /// 本帧发生物理目标尺寸变更的 3D 视口次数。
+    pub viewport_resize_count: u32,
+    /// 本帧收集到的 3D 视口交互手势事件列表。
+    pub viewport_gesture_events: Vec<unbound_widgets::Viewport3DGestureEvent>,
 }
 
 /// 单帧已挂载上下文菜单的点击反解条目。
@@ -4842,6 +4949,28 @@ pub struct AppRuntime<A: Application> {
     tooltip_pending_indices: FxHashSet<usize>,
     /// 运行时全局唯一的托管工具提示状态机（ADR-0035）。
     managed_tooltip: ManagedTooltipState,
+    /// 已提交的 3D 视口 GPU Bindless 纹理槽位表。
+    viewport_3d_slots: FxHashMap<unbound_gpu::ViewportId, u32>,
+    /// 上一次观测到的 3D 视口物理像素尺寸表（用于统计 resize 次数）。
+    viewport_3d_last_physical: FxHashMap<unbound_gpu::ViewportId, (u32, u32)>,
+    /// 本帧已挂载的 3D 视口节点映射：`node_key -> (viewport_id, interactive)`。
+    viewport_3d_nodes: FxHashMap<u64, (unbound_gpu::ViewportId, bool)>,
+    /// 3D 视口多按键拖拽与滚轮手势跟踪器。
+    viewport_3d_tracker: unbound_widgets::Viewport3DPointerTracker,
+    /// 本帧待输出的 3D 视口手势事件队列。
+    viewport_3d_pending_gestures: Vec<unbound_widgets::Viewport3DGestureEvent>,
+    /// 最近一帧活跃的 3D 视口同步条目快照。
+    viewport_3d_last_entries: Vec<Viewport3DFrameEntry>,
+    /// 窗口运行器上报的待结算 3D 视口通道派发次数。
+    viewport_3d_pending_dispatches: u32,
+    /// 运行时动态覆写的 3D 视口渲染倍率表（不触发布局脏标志）。
+    viewport_3d_render_scale_overrides: FxHashMap<unbound_gpu::ViewportId, f32>,
+    /// 是否有 3D 视口渲染倍率覆写待在下一帧快路径同步。
+    viewport_3d_scale_dirty: bool,
+    /// 本帧累计的 3D 视口物理目标尺寸变更次数。
+    viewport_3d_frame_resize_count: u32,
+    /// 最近一次观测到的键盘修饰键状态。
+    current_modifiers: Modifiers,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -4914,6 +5043,17 @@ impl<A: Application> AppRuntime<A> {
             active_native_popups: FxHashMap::default(),
             tooltip_pending_indices: FxHashSet::default(),
             managed_tooltip: ManagedTooltipState::default(),
+            viewport_3d_slots: FxHashMap::default(),
+            viewport_3d_last_physical: FxHashMap::default(),
+            viewport_3d_nodes: FxHashMap::default(),
+            viewport_3d_tracker: unbound_widgets::Viewport3DPointerTracker::new(),
+            viewport_3d_pending_gestures: Vec::new(),
+            viewport_3d_last_entries: Vec::new(),
+            viewport_3d_pending_dispatches: 0,
+            viewport_3d_render_scale_overrides: FxHashMap::default(),
+            viewport_3d_scale_dirty: false,
+            viewport_3d_frame_resize_count: 0,
+            current_modifiers: Modifiers::default(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -5497,10 +5637,65 @@ impl<A: Application> AppRuntime<A> {
         self.force_rebuild = true;
     }
 
+    /// 更新当前键盘修饰键状态（用于 Shift + 左键拖拽切换 3D 视口平移模式）。
+    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
+        self.current_modifiers = modifiers;
+    }
+
+    /// 查询指定 3D 视口当前已提交的 GPU Bindless 纹理槽位。
+    #[must_use]
+    pub fn viewport_3d_slot(&self, id: unbound_gpu::ViewportId) -> Option<u32> {
+        self.viewport_3d_slots.get(&id).copied()
+    }
+
+    /// 回写指定 3D 视口的 GPU Bindless 纹理槽位；槽位变更时仅标记绘制脏标志。
+    pub fn commit_viewport_3d_slot(&mut self, id: unbound_gpu::ViewportId, slot: Option<u32>) {
+        let prev = self.viewport_3d_slots.get(&id).copied();
+        match slot {
+            Some(s) => {
+                self.viewport_3d_slots.insert(id, s);
+            }
+            None => {
+                self.viewport_3d_slots.remove(&id);
+            }
+        }
+        if prev != slot {
+            self.mark(DirtyFlags::PAINT);
+        }
+    }
+
+    /// 清空全部已提交的 3D 视口 GPU Bindless 槽位（用于 Vulkan 销毁或设备恢复）。
+    pub fn invalidate_all_viewport_3d_slots(&mut self) {
+        if !self.viewport_3d_slots.is_empty() {
+            self.viewport_3d_slots.clear();
+            self.mark(DirtyFlags::PAINT);
+        }
+    }
+
+    /// 累加窗口运行器上报的 3D 视口自定义渲染通道派发次数。
+    pub fn record_viewport_pass_dispatches(&mut self, count: u32) {
+        self.viewport_3d_pending_dispatches =
+            self.viewport_3d_pending_dispatches.saturating_add(count);
+    }
+
+    /// 动态调整指定 3D 视口的渲染分辨率倍率，不标记布局脏标志，仅在下一帧触发轻量目标同步。
+    pub fn set_viewport_render_scale(&mut self, id: unbound_gpu::ViewportId, render_scale: f32) {
+        let clamped = unbound_gpu::clamp_render_scale(render_scale);
+        let prev = self.viewport_3d_render_scale_overrides.insert(id, clamped);
+        if prev.is_none_or(|old| (old - clamped).abs() > 1e-6) {
+            self.viewport_3d_scale_dirty = true;
+        }
+    }
+
     /// 移动指针，产生悬停 / 移动事件。
     pub fn pointer_move(&mut self, pos: Vec2) -> DirtyFlags {
         self.ctx.pointer = pos;
         let mut flags = DirtyFlags::PAINT;
+        if self.viewport_3d_tracker.active_viewport().is_some() {
+            if let Some(gesture_event) = self.viewport_3d_tracker.on_pointer_move(pos, 1.0) {
+                self.viewport_3d_pending_gestures.push(gesture_event);
+            }
+        }
         let event = self.router.pointer_move(pos);
         // 先同步路由悬停态到 `ctx`，确保 `reduce_pointer` 与后续渲染立即可见当前帧悬停目标。
         self.sync_router_context();
@@ -5579,6 +5774,16 @@ impl<A: Application> AppRuntime<A> {
                     .merge(self.dispatch(AppEvent::OverlayDismissed { node }));
             }
         }
+        if let Some(hit) = self.router.pick(pos) {
+            if let Some(&(viewport_id, true)) = self.viewport_3d_nodes.get(&hit.node) {
+                let _ = self.viewport_3d_tracker.on_pointer_down(
+                    viewport_id,
+                    button,
+                    self.current_modifiers.shift,
+                    pos,
+                );
+            }
+        }
         let event = self.router.pointer_down_button(pos, button, self.time);
         self.ctx.pointer = pos;
         flags = flags.merge(event.map_or(DirtyFlags::NONE, |event| self.reduce_pointer(event)));
@@ -5589,6 +5794,7 @@ impl<A: Application> AppRuntime<A> {
 
     /// 释放 `button`。
     pub fn pointer_up(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
+        let _ = self.viewport_3d_tracker.on_pointer_up(button);
         let events = self.router.pointer_up_button(pos, button, self.time);
         self.ctx.pointer = pos;
         let mut flags = DirtyFlags::PAINT;
@@ -5606,6 +5812,7 @@ impl<A: Application> AppRuntime<A> {
     /// 下一次 `pointer_up` 绝不能把被放弃的按下变成一次激活。
     ///
     pub fn cancel_pointer(&mut self) -> DirtyFlags {
+        self.viewport_3d_tracker.on_capture_lost();
         let _ = self.router.cancel();
         self.sync_router_context();
         self.managed_tooltip.last_pointer_hover = None;
@@ -5625,6 +5832,15 @@ impl<A: Application> AppRuntime<A> {
         let mut scroll_dirty = DirtyFlags::NONE;
         if self.dismiss_managed_tooltip(false) {
             scroll_dirty = scroll_dirty.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+        }
+        if let Some(hit) = self.router.pick(pos) {
+            if let Some(&(viewport_id, true)) = self.viewport_3d_nodes.get(&hit.node) {
+                if let Some(gesture_event) =
+                    unbound_widgets::Viewport3DPointerTracker::on_wheel(viewport_id, delta.y, 1.0)
+                {
+                    self.viewport_3d_pending_gestures.push(gesture_event);
+                }
+            }
         }
         // 若当前存在位于 Portal / 模态层的滚动区或遮罩覆盖，背景层的滚动区不得越界抢夺滚轮。
         let has_portal_layer = self
@@ -5747,6 +5963,7 @@ impl<A: Application> AppRuntime<A> {
 
     /// 处理按键按下或释放。
     pub fn key(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
+        self.current_modifiers = modifiers;
         let mut flags = DirtyFlags::NONE;
         let prev_focus = self.ctx.focused.filter(|_| self.ctx.focus_visible);
         if pressed && matches!(key, AppKey::F(12)) {
@@ -6109,6 +6326,39 @@ impl<A: Application> AppRuntime<A> {
         self.dirty = self.dirty.merge(asset_dirty);
         let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         if dirty == DirtyFlags::NONE && !self.force_rebuild {
+            let mut viewport_resize_count = 0u32;
+            if self.viewport_3d_scale_dirty {
+                self.viewport_3d_scale_dirty = false;
+                for entry in &mut self.viewport_3d_last_entries {
+                    if let Some(&override_scale) = self
+                        .viewport_3d_render_scale_overrides
+                        .get(&entry.viewport_id)
+                    {
+                        let clamped = unbound_gpu::clamp_render_scale(override_scale);
+                        entry.render_scale = clamped;
+                        let new_phys = unbound_gpu::compute_viewport_physical_extent(
+                            entry.logical_rect.size.x,
+                            entry.logical_rect.size.y,
+                            entry.effective_scale,
+                            clamped,
+                        );
+                        entry.physical_size = new_phys;
+                        if let Some(phys) = new_phys {
+                            let prev = self
+                                .viewport_3d_last_physical
+                                .insert(entry.viewport_id, phys);
+                            if prev != Some(phys) {
+                                viewport_resize_count = viewport_resize_count.saturating_add(1);
+                            }
+                        }
+                    }
+                }
+            }
+            let viewports_3d = self.viewport_3d_last_entries.clone();
+            let active_viewports_3d = viewports_3d.len();
+            let viewport_pass_dispatches =
+                core::mem::take(&mut self.viewport_3d_pending_dispatches);
+            let viewport_gesture_events = core::mem::take(&mut self.viewport_3d_pending_gestures);
             return FrameReport {
                 diff: SceneDiff::Identical,
                 dirty,
@@ -6118,6 +6368,11 @@ impl<A: Application> AppRuntime<A> {
                 backdrops: self.backdrops.clone(),
                 atlas_uploads: self.collect_atlas_uploads(),
                 external_texture_ops: self.asset_hub.take_external_texture_ops(),
+                viewports_3d,
+                active_viewports_3d,
+                viewport_pass_dispatches,
+                viewport_resize_count,
+                viewport_gesture_events,
             };
         }
 
@@ -6361,6 +6616,12 @@ impl<A: Application> AppRuntime<A> {
         // 即便没有其他元素变脏。
         self.force_rebuild = inspector_active;
 
+        let viewports_3d = self.viewport_3d_last_entries.clone();
+        let active_viewports_3d = viewports_3d.len();
+        let viewport_pass_dispatches = core::mem::take(&mut self.viewport_3d_pending_dispatches);
+        let viewport_resize_count = core::mem::take(&mut self.viewport_3d_frame_resize_count);
+        let viewport_gesture_events = core::mem::take(&mut self.viewport_3d_pending_gestures);
+
         FrameReport {
             diff,
             dirty,
@@ -6370,6 +6631,11 @@ impl<A: Application> AppRuntime<A> {
             backdrops: self.backdrops.clone(),
             atlas_uploads: self.collect_atlas_uploads(),
             external_texture_ops: self.asset_hub.take_external_texture_ops(),
+            viewports_3d,
+            active_viewports_3d,
+            viewport_pass_dispatches,
+            viewport_resize_count,
+            viewport_gesture_events,
         }
     }
 
@@ -6713,6 +6979,10 @@ impl<A: Application> AppRuntime<A> {
 
     fn layout_pending(&mut self) {
         if self.pending.is_empty() && !self.world.topology_dirty() {
+            self.viewport_3d_nodes.clear();
+            self.viewport_3d_last_entries.clear();
+            self.viewport_3d_frame_resize_count = 0;
+            self.viewport_3d_scale_dirty = false;
             let boundaries = self.world.dirty_boundaries();
             if boundaries.is_empty() {
                 self.last_layout_stats = LayoutStats::default();
@@ -6779,6 +7049,9 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
                     WidgetSpec::ExternalImage { size, .. } => Some(*size),
+                    WidgetSpec::Viewport3D { size, .. } => {
+                        (size.x > 0.0 && size.y > 0.0).then_some(*size)
+                    }
                     WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                         && desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -6875,6 +7148,10 @@ impl<A: Application> AppRuntime<A> {
         self.mounted_widgets.clear();
         self.scroll_regions.clear();
         self.active_context_menus.clear();
+        self.viewport_3d_nodes.clear();
+        self.viewport_3d_last_entries.clear();
+        self.viewport_3d_frame_resize_count = 0;
+        self.viewport_3d_scale_dirty = false;
         let pending = core::mem::take(&mut self.pending);
         for (entry_idx, entry) in pending.iter().enumerate() {
             let is_tooltip_entry = self.tooltip_pending_indices.contains(&entry_idx);
@@ -7162,6 +7439,96 @@ impl<A: Application> AppRuntime<A> {
                         &self.asset_hub,
                     );
                     self.collector.push(entry.key, out);
+                }
+                WidgetSpec::Viewport3D {
+                    viewport_id,
+                    size,
+                    radius,
+                    border_width,
+                    border_color,
+                    tint,
+                    opacity,
+                    render_scale,
+                    placeholder_color,
+                    fallback_external_texture,
+                    texture_slot,
+                    interactive,
+                    alt,
+                    z,
+                } => {
+                    let effective_scale = self.ctx.effective_scale();
+                    let effective_render_scale = unbound_gpu::clamp_render_scale(
+                        self.viewport_3d_render_scale_overrides
+                            .get(viewport_id)
+                            .copied()
+                            .unwrap_or(*render_scale),
+                    );
+                    let physical_size = unbound_gpu::compute_viewport_physical_extent(
+                        rect.size.x,
+                        rect.size.y,
+                        effective_scale,
+                        effective_render_scale,
+                    );
+                    if let Some(phys) = physical_size {
+                        let resolved_slot = self
+                            .viewport_3d_slots
+                            .get(viewport_id)
+                            .copied()
+                            .or(*texture_slot)
+                            .or_else(|| {
+                                fallback_external_texture.and_then(|handle| {
+                                    self.asset_hub
+                                        .external_texture_slot(handle)
+                                        .map(|(slot, _, _)| slot)
+                                })
+                            });
+                        let resolved_desc = unbound_widgets::Viewport3DDesc {
+                            viewport_id: *viewport_id,
+                            size: *size,
+                            radius: *radius,
+                            border_width: *border_width,
+                            border_color: *border_color,
+                            tint: *tint,
+                            opacity: *opacity,
+                            render_scale: effective_render_scale,
+                            placeholder_color: *placeholder_color,
+                            fallback_external_texture: fallback_external_texture.map(|h| h.0),
+                            texture_slot: resolved_slot,
+                            interactive: *interactive,
+                            alt: alt.as_str(),
+                            z: entry.z_base.saturating_add(*z),
+                        };
+                        let mut out = unbound_widgets::emit_viewport_3d(
+                            entry.key,
+                            rect,
+                            &resolved_desc,
+                            state,
+                        );
+                        if i32::from(entry.z_base) >= PORTAL_Z_BASE {
+                            if let Some(hit) = out.hit.as_mut() {
+                                hit.layer = unbound_input::PORTAL_LAYER;
+                            }
+                            for sub_hit in &mut out.sub_hits {
+                                sub_hit.layer = unbound_input::PORTAL_LAYER;
+                            }
+                        }
+                        self.collector.push(entry.key, out);
+                        self.viewport_3d_nodes
+                            .insert(entry.key, (*viewport_id, *interactive));
+                        self.viewport_3d_last_entries.push(Viewport3DFrameEntry {
+                            viewport_id: *viewport_id,
+                            logical_rect: rect,
+                            physical_size: Some(phys),
+                            render_scale: effective_render_scale,
+                            effective_scale,
+                            fallback_external_texture: *fallback_external_texture,
+                        });
+                        let prev = self.viewport_3d_last_physical.insert(*viewport_id, phys);
+                        if prev != Some(phys) {
+                            self.viewport_3d_frame_resize_count =
+                                self.viewport_3d_frame_resize_count.saturating_add(1);
+                        }
+                    }
                 }
                 WidgetSpec::TreeView {
                     desc,

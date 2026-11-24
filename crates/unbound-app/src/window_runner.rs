@@ -155,6 +155,10 @@ fn window_instance_extensions(window: &NativeWindow) -> Result<Vec<String>, Stri
 /// 每帧开始时执行的宿主钩子；在 UI 线程上拿到运行时的可变引用。
 type FrameHook<A> = Box<dyn FnMut(&mut AppRuntime<A>) + Send>;
 
+/// 3D 视口自定义渲染通道工厂（用于在首次建窗与 GPU 设备恢复后重新注册通道）。
+pub type ViewportPassFactory =
+    Box<dyn Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync>;
+
 /// 驱动 [`AppRuntime`] 的通用窗口化宿主适配器。
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
@@ -209,6 +213,8 @@ pub struct WindowedRunner<A: Application> {
     pending_popup_closes: Vec<u64>,
     /// 上一帧是否处于最小化/遮挡暂停态，用于在恢复可见后强制刷新首帧。
     was_suspended: bool,
+    /// 已注册的 3D 视口自定义渲染通道工厂集合（建窗初始化与设备恢复后自动重注册）。
+    viewport_pass_factories: Vec<ViewportPassFactory>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -268,6 +274,7 @@ impl<A: Application> WindowedRunner<A> {
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
             was_suspended: false,
+            viewport_pass_factories: Vec::new(),
         }
     }
 
@@ -301,6 +308,60 @@ impl<A: Application> WindowedRunner<A> {
     /// 可变访问底层应用运行时。
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    /// 注册 3D 视口自定义渲染通道工厂（首次建窗与 GPU 设备恢复后自动重注册到渲染器）。
+    #[must_use]
+    pub fn with_viewport_pass_factory(
+        mut self,
+        factory: impl Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync + 'static,
+    ) -> Self {
+        self.viewport_pass_factories.push(Box::new(factory));
+        self
+    }
+
+    /// 在运行期追加 3D 视口自定义渲染通道工厂；若渲染器已就绪则立即注册并回写 Bindless 槽位。
+    pub fn register_viewport_pass_factory(
+        &mut self,
+        factory: impl Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync + 'static,
+    ) {
+        let boxed: ViewportPassFactory = Box::new(factory);
+        if let Some(renderer) = self.renderer.as_mut() {
+            let pass = boxed();
+            let viewport_id = pass.viewport_id();
+            match renderer.register_viewport_pass(pass) {
+                Ok(slot) => self
+                    .runtime
+                    .commit_viewport_3d_slot(viewport_id, Some(slot)),
+                Err(error) => {
+                    eprintln!(
+                        "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
+                    );
+                }
+            }
+        }
+        self.viewport_pass_factories.push(boxed);
+    }
+
+    /// 将所有已登记的 3D 视口通道工厂重新注册到当前渲染器。
+    fn register_all_viewport_passes(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        for factory in &self.viewport_pass_factories {
+            let pass = factory();
+            let viewport_id = pass.viewport_id();
+            match renderer.register_viewport_pass(pass) {
+                Ok(slot) => self
+                    .runtime
+                    .commit_viewport_3d_slot(viewport_id, Some(slot)),
+                Err(error) => {
+                    eprintln!(
+                        "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// 同步窗口当前系统 DPI 缩放因子（`os_scale`）。
@@ -630,11 +691,51 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    /// 同步本帧活跃的 3D 视口离屏渲染目标、Bindless 槽位及通道派发计数。
+    fn sync_viewports_3d(
+        &mut self,
+        entries: &[crate::Viewport3DFrameEntry],
+        window: &NativeWindow,
+    ) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        let mut slot_changed = false;
+        for entry in entries {
+            let mut desc = unbound_gpu::ViewportRenderPassDesc::new(entry.viewport_id);
+            desc.render_scale = entry.render_scale;
+            desc.bounds = entry.logical_rect;
+            if let Err(error) =
+                renderer.sync_viewport_target(entry.viewport_id, desc, entry.physical_size)
+            {
+                eprintln!(
+                    "[unbound-app] Could not sync 3D viewport target {:?}: {error:?}",
+                    entry.viewport_id
+                );
+            }
+            let committed = renderer.viewport_bindless_slot(entry.viewport_id);
+            if self.runtime.viewport_3d_slot(entry.viewport_id) != committed {
+                slot_changed = true;
+            }
+            self.runtime
+                .commit_viewport_3d_slot(entry.viewport_id, committed);
+        }
+        let dispatches = renderer.take_viewport_pass_dispatches();
+        if dispatches > 0 {
+            self.runtime.record_viewport_pass_dispatches(dispatches);
+        }
+        if slot_changed {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.invalidate_all_viewport_3d_slots();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -661,6 +762,7 @@ impl<A: Application> WindowedRunner<A> {
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.invalidate_all_viewport_3d_slots();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -754,6 +856,7 @@ impl<A: Application> WindowedRunner<A> {
                 self.swapchain = Some(swapchain);
                 self.surface = Some(surface);
                 self.atlases = Some(atlases);
+                self.register_all_viewport_passes();
                 self.runtime.set_premultiplied_surface(premultiplied);
                 self.swapchain_dirty = true;
                 self.frame_dropped = true;
@@ -932,6 +1035,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
+        self.register_all_viewport_passes();
         #[cfg(windows)]
         if let (Some(cb), Some(hwnd)) = (&mut self.on_hwnd_created, window.win32_hwnd()) {
             cb(hwnd);
@@ -1078,6 +1182,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
+                self.runtime.set_modifiers(translate_modifiers(modifiers));
             }
             PlatformEvent::Ime(ime) => match ime {
                 ImeEvent::Preedit(text, selection) => {
@@ -1284,6 +1389,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.sync_appearance(window);
 
         self.process_external_texture_ops(report.external_texture_ops, window);
+        self.sync_viewports_3d(&report.viewports_3d, window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
             if !report.atlas_uploads.is_empty() {
