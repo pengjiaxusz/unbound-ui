@@ -21,6 +21,7 @@
 #![warn(missing_debug_implementations)]
 
 pub mod atlas;
+pub mod bc7_atlas;
 pub mod curve;
 pub mod data;
 pub mod debug;
@@ -41,6 +42,10 @@ pub mod timing;
 pub mod tlsf;
 
 pub use atlas::{AtlasKind, AtlasSet, AtlasTexture, AtlasUpload};
+pub use bc7_atlas::{
+    validate_bc7_subregion, BC7_BLOCK_BYTES, BC7_BLOCK_DIM, BC7_MODE6_TRANSPARENT_BLACK,
+    BC7_PAGE_SIZE,
+};
 pub use curve::{cubic_to_draws, CurveDraw};
 pub use data::{
     BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
@@ -55,8 +60,9 @@ pub use debug::{
 pub use device::{
     explain_vk_result, filter_instance_extensions, is_13_backport_device_extension,
     is_optional_device_extension, is_optional_instance_extension, last_init_diagnostics,
-    resolve_device_extensions, Buffer, DeviceExtensionResolution, Gpu, GpuConfig, GpuError,
-    GpuFeatures, GpuInitDiagnostics, InstanceExtensionResolution, MemoryKind, Timeline,
+    resolve_device_extensions, Buffer, CompressedTextureBackend, CompressedTextureCapabilities,
+    DeviceExtensionResolution, Gpu, GpuConfig, GpuError, GpuFeatures, GpuInitDiagnostics,
+    InstanceExtensionResolution, MemoryKind, Timeline,
 };
 pub use frame::{Camera, FrameStats, ManagedExternalTextureDesc, Renderer, SceneUpload};
 pub use pool::{PersistentPool, PoolHandle, PoolStats, ScatterPatch};

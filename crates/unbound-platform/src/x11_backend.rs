@@ -34,6 +34,7 @@ use x11rb::xcb_ffi::XCBConnection;
 use x11rb::COPY_DEPTH_FROM_PARENT;
 
 use crate::backend::{push_coalesced_event, Flow, PlatformApp};
+use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea, WindowRole};
 use crate::linux_backend::{
     compute_interactive_resize_rect, place_x11_popup_in_work_area, set_active_linux_backend,
     LinuxBackendKind,
@@ -72,6 +73,22 @@ enum X11Command {
     SetVisible {
         window: X11WindowId,
         visible: bool,
+    },
+    SetVisibleNoActivate {
+        window: X11WindowId,
+        visible: bool,
+    },
+    SetAlwaysOnTop {
+        window: X11WindowId,
+        topmost: bool,
+    },
+    SetClickThrough {
+        window: X11WindowId,
+        click_through: bool,
+    },
+    SetOuterRect {
+        window: X11WindowId,
+        rect: ScreenRect,
     },
     SetCursor {
         window: X11WindowId,
@@ -347,6 +364,50 @@ impl X11WindowHandle {
         });
     }
 
+    pub(crate) fn set_visible_no_activate(&self, visible: bool) {
+        self.shared.visible.store(visible, Ordering::Release);
+        self.send(X11Command::SetVisibleNoActivate {
+            window: self.shared.xid,
+            visible,
+        });
+    }
+
+    pub(crate) fn set_always_on_top(&self, topmost: bool) {
+        self.send(X11Command::SetAlwaysOnTop {
+            window: self.shared.xid,
+            topmost,
+        });
+    }
+
+    pub(crate) fn set_click_through(&self, click_through: bool) {
+        self.send(X11Command::SetClickThrough {
+            window: self.shared.xid,
+            click_through,
+        });
+    }
+
+    pub(crate) fn set_outer_rect(&self, rect: ScreenRect) {
+        if let Ok(mut org) = self.shared.screen_origin.lock() {
+            *org = (rect.x, rect.y);
+        }
+        if let Ok(mut sz) = self.shared.inner_size.lock() {
+            *sz = PhysicalSize::new(rect.width.max(1), rect.height.max(1));
+        }
+        self.send(X11Command::SetOuterRect {
+            window: self.shared.xid,
+            rect,
+        });
+    }
+
+    pub(crate) fn capabilities(&self) -> FloatingWindowCapabilities {
+        FloatingWindowCapabilities::x11_default()
+    }
+
+    pub(crate) fn work_area(&self) -> Option<MonitorWorkArea> {
+        let rect = self.client_rect_on_screen();
+        crate::floating::work_area_for_point(rect.x, rect.y)
+    }
+
     pub(crate) fn set_minimized(&self, minimized: bool) {
         if minimized {
             self.send(X11Command::SetMinimized {
@@ -604,6 +665,10 @@ struct X11Atoms {
     net_wm_state: Atom,
     net_wm_state_maximized_horz: Atom,
     net_wm_state_maximized_vert: Atom,
+    net_wm_state_above: Atom,
+    net_wm_state_skip_taskbar: Atom,
+    net_wm_state_skip_pager: Atom,
+    wm_hints: Atom,
     net_wm_moveresize: Atom,
     motif_wm_hints: Atom,
     utf8_string: Atom,
@@ -641,6 +706,10 @@ impl X11Atoms {
             net_wm_state: intern(b"_NET_WM_STATE")?,
             net_wm_state_maximized_horz: intern(b"_NET_WM_STATE_MAXIMIZED_HORZ")?,
             net_wm_state_maximized_vert: intern(b"_NET_WM_STATE_MAXIMIZED_VERT")?,
+            net_wm_state_above: intern(b"_NET_WM_STATE_ABOVE")?,
+            net_wm_state_skip_taskbar: intern(b"_NET_WM_STATE_SKIP_TASKBAR")?,
+            net_wm_state_skip_pager: intern(b"_NET_WM_STATE_SKIP_PAGER")?,
+            wm_hints: intern(b"WM_HINTS")?,
             net_wm_moveresize: intern(b"_NET_WM_MOVERESIZE")?,
             motif_wm_hints: intern(b"_MOTIF_WM_HINTS")?,
             utf8_string: intern(b"UTF8_STRING")?,
@@ -784,6 +853,44 @@ fn set_motif_borderless(conn: &XCBConnection, atoms: &X11Atoms, window: X11Windo
         atoms.motif_wm_hints,
         &hints,
     );
+}
+
+fn set_x11_no_activate_hints(conn: &XCBConnection, atoms: &X11Atoms, window: X11WindowId) {
+    // ICCCM `WM_HINTS`: flags = 1 (InputHint), input = 0 (False)
+    let hints: [u32; 9] = [1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let _ = conn.change_property32(
+        PropMode::REPLACE,
+        window,
+        atoms.wm_hints,
+        atoms.wm_hints,
+        &hints,
+    );
+}
+
+fn set_x11_click_through(conn: &XCBConnection, window: X11WindowId, click_through: bool) {
+    if click_through {
+        if let Ok(region_id) = conn.generate_id() {
+            let empty: [Rectangle; 0] = [];
+            if conn.xfixes_create_region(region_id, &empty).is_ok() {
+                let _ = conn.xfixes_set_window_shape_region(
+                    window,
+                    x11rb::protocol::shape::SK::INPUT,
+                    0,
+                    0,
+                    region_id,
+                );
+                let _ = conn.xfixes_destroy_region(region_id);
+            }
+        }
+    } else {
+        let _ = conn.xfixes_set_window_shape_region(
+            window,
+            x11rb::protocol::shape::SK::INPUT,
+            0,
+            0,
+            x11rb::NONE,
+        );
+    }
 }
 
 fn send_net_wm_moveresize(
@@ -974,8 +1081,31 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             AtomEnum::ATOM,
             &[5u32],
         );
-        if !cfg.decorations {
+        if !cfg.decorations || cfg.role != WindowRole::Standard {
             set_motif_borderless(&conn, &atoms, xid);
+        }
+        let mut initial_states = Vec::new();
+        if cfg.floating_policy.always_on_top {
+            initial_states.push(atoms.net_wm_state_above);
+        }
+        if cfg.floating_policy.skip_taskbar {
+            initial_states.push(atoms.net_wm_state_skip_taskbar);
+            initial_states.push(atoms.net_wm_state_skip_pager);
+        }
+        if !initial_states.is_empty() {
+            let _ = conn.change_property32(
+                PropMode::REPLACE,
+                xid,
+                atoms.net_wm_state,
+                AtomEnum::ATOM,
+                &initial_states,
+            );
+        }
+        if cfg.floating_policy.no_activate {
+            set_x11_no_activate_hints(&conn, &atoms, xid);
+        }
+        if cfg.floating_policy.click_through {
+            set_x11_click_through(&conn, xid, true);
         }
         if cfg.visible {
             let _ = conn.map_window(xid);
@@ -1508,6 +1638,46 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     } else {
                         let _ = conn.unmap_window(window);
                     }
+                }
+                X11Command::SetVisibleNoActivate { window, visible } => {
+                    if visible {
+                        let _ = conn.map_window(window);
+                    } else {
+                        let _ = conn.unmap_window(window);
+                    }
+                }
+                X11Command::SetAlwaysOnTop { window, topmost } => {
+                    let action = u32::from(topmost);
+                    let ev = ClientMessageEvent {
+                        response_type: x11rb::protocol::xproto::CLIENT_MESSAGE_EVENT,
+                        format: 32,
+                        sequence: 0,
+                        window,
+                        type_: atoms.net_wm_state,
+                        data: ClientMessageData::from([action, atoms.net_wm_state_above, 0, 1, 0]),
+                    };
+                    let _ = conn.send_event(
+                        false,
+                        root,
+                        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+                        ev,
+                    );
+                }
+                X11Command::SetClickThrough {
+                    window,
+                    click_through,
+                } => {
+                    set_x11_click_through(&conn, window, click_through);
+                }
+                X11Command::SetOuterRect { window, rect } => {
+                    let _ = conn.configure_window(
+                        window,
+                        &ConfigureWindowAux::new()
+                            .x(rect.x)
+                            .y(rect.y)
+                            .width(rect.width.max(1))
+                            .height(rect.height.max(1)),
+                    );
                 }
                 X11Command::SetCursor { window, cursor } => {
                     cursor_cache.apply(&conn, window, cursor);

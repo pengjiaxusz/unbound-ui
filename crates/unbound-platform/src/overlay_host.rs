@@ -94,6 +94,7 @@ impl OverlayWindowSpec {
                 // 把它改成预乘 alpha 会让覆盖层内容按另一套 alpha 语义参与合成。
                 surface_alpha: crate::window::SurfaceAlpha::Opaque,
                 backdrop: None,
+                ..WindowConfig::default()
             },
             transparent: false,
             always_on_top: false,

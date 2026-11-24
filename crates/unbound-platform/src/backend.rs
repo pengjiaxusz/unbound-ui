@@ -822,6 +822,8 @@ mod win32 {
         resizable: bool,
         /// 是否为无激活越界弹出窗（用于拦截 `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`）。
         is_popup: bool,
+        /// 是否启用无激活策略（点击时不抢占前台焦点）。
+        no_activate: bool,
         min_width: u32,
         min_height: u32,
         /// 原生装饰窗口的非客户区边框增量（用于 `WM_GETMINMAXINFO` 保证客户区最小尺寸准确）。
@@ -1014,8 +1016,8 @@ mod win32 {
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_MOUSEACTIVATE => {
-                if data.is_popup {
-                    // 越界原生弹出窗绝不抢占主窗口键盘焦点与输入法组合上下文。
+                if data.is_popup || data.no_activate {
+                    // 越界原生弹出窗或无激活浮窗绝不抢占主窗口键盘焦点与输入法组合上下文。
                     return LRESULT(MA_NOACTIVATE as isize);
                 }
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1609,6 +1611,7 @@ mod win32 {
             decorations: config.decorations,
             resizable: config.resizable,
             is_popup: false,
+            no_activate: config.floating_policy.no_activate,
             min_width: eff_min_w,
             min_height: eff_min_h,
             frame_extra_w: std::cell::Cell::new(0),
@@ -1622,9 +1625,14 @@ mod win32 {
             destroyed: Arc::clone(&destroyed),
         });
 
+        let ex_style = if config.role != crate::floating::WindowRole::Standard {
+            WINDOW_EX_STYLE(config.floating_policy.win32_ex_style_bits())
+        } else {
+            WS_EX_APPWINDOW
+        };
         let hwnd = unsafe {
             CreateWindowExW(
-                WS_EX_APPWINDOW,
+                ex_style,
                 class_name,
                 PCWSTR(title_wide.as_ptr()),
                 style,
@@ -1753,7 +1761,9 @@ mod win32 {
         ));
         let a11y = PlatformA11y::for_win32(hwnd.0 as isize);
         if config.visible {
-            let show_cmd = if config.initial_maximized {
+            let show_cmd = if config.floating_policy.no_activate {
+                SW_SHOWNOACTIVATE
+            } else if config.initial_maximized {
                 SW_SHOWMAXIMIZED
             } else {
                 SW_SHOW
@@ -1770,6 +1780,9 @@ mod win32 {
         );
         state.scale_factor = window.scale_factor();
         state.visible = window.is_visible().unwrap_or(true);
+        if config.floating_policy.no_activate {
+            state.focused = false;
+        }
 
         Ok(WindowEntry {
             window,
@@ -1828,6 +1841,7 @@ mod win32 {
             decorations: false,
             resizable: false,
             is_popup: true,
+            no_activate: true,
             min_width: 0,
             min_height: 0,
             frame_extra_w: std::cell::Cell::new(0),

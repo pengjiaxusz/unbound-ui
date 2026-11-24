@@ -9,8 +9,8 @@ pub use crate::appearance::{
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::multi_window::{
-    run_multi_window, run_multi_window_with_config, MultiWindowConfig, MultiWindowCoordinator,
-    MultiWindowFactory, WindowContext, WindowCreatedHook,
+    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute, MultiWindowConfig,
+    MultiWindowCoordinator, MultiWindowFactory, WindowContext, WindowCreatedHook,
 };
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};
@@ -114,3 +114,5 @@ pub use unbound_widgets::{
     MENU_SEPARATOR_HEIGHT,
 };
 pub use unbound_world::{NodeId, TreeRow};
+
+pub use unbound_anim::{DurationToken, EasingToken, MotionPolicy, MotionToken, Tween};

@@ -9,7 +9,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeSnapshotKey, ThemeTransitionDriver};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use unbound_asset::{
+    decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
+    BC7_ATLAS_PAGE_SIZE,
+};
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::is_device_lost;
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -22,17 +26,20 @@ use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
-    PlatformState, SurfaceAlpha, WindowConfig,
+    PlatformState, ScreenRect, SurfaceAlpha, WindowConfig, WindowPosition,
 };
 use unbound_platform::{
-    begin_outbound_file_drag, FramePacer, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
-    PopupWindowConfig, WindowId, WindowRegistry,
+    begin_outbound_file_drag, clamp_rect_to_work_area, resolve_floating_placement, solve_edge_snap,
+    FloatingPlacementStrategy, FloatingWindowCapabilities, FloatingWindowPolicy, FramePacer,
+    MonitorWorkArea, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry, PopupWindowConfig,
+    RelativeMonitorAnchor, WindowId, WindowRegistry, WindowRole,
 };
 use unbound_theme::ThemeSet;
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
+use crate::floating_host::FloatingHost;
 use crate::{
-    AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
+    AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind, WindowCommand,
 };
 
@@ -195,6 +202,8 @@ pub struct WindowContext<A: Application> {
     theme_driver: ThemeTransitionDriver,
     appearance: WindowAppearance,
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    bc7_fallback_pages: FxHashMap<AtlasPageId, (u32, Vec<u8>)>,
+    bc7_fallback_standalone: FxHashMap<AssetId, u32>,
     popup_host: PopupHostRegistry,
     screen_origin: (i32, i32),
     was_suspended: bool,
@@ -244,10 +253,67 @@ impl<A: Application> WindowContext<A> {
             theme_driver,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            bc7_fallback_pages: FxHashMap::default(),
+            bc7_fallback_standalone: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
             screen_origin: (0, 0),
             was_suspended: false,
         }
+    }
+
+    /// 返回窗口客户区左上角在屏幕物理坐标系中的原点。
+    #[must_use]
+    pub const fn screen_origin(&self) -> (i32, i32) {
+        self.screen_origin
+    }
+
+    /// 设置窗口客户区左上角在屏幕物理坐标系中的原点（供无头多窗与原生窗口移动事件同步）。
+    pub fn set_screen_origin(&mut self, origin: (i32, i32)) {
+        self.screen_origin = origin;
+    }
+
+    /// 设置窗口操作系统 DPI 缩放比例并同步至内部 [`AppRuntime`]。
+    pub fn set_os_scale(&mut self, os_scale: f32) {
+        let clamped = if os_scale.is_finite() && os_scale > 0.0 {
+            os_scale
+        } else {
+            1.0
+        };
+        self.os_scale = clamped;
+        self.runtime.context_mut().set_os_scale(clamped);
+    }
+
+    /// 计算窗口客户区在屏幕物理坐标系中的包围矩形。
+    #[must_use]
+    pub fn screen_bounds_physical(&self) -> unbound_math::Rect {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        let vp = self.runtime.context().viewport;
+        unbound_math::Rect::new(
+            self.screen_origin.0 as f32,
+            self.screen_origin.1 as f32,
+            vp.x * scale,
+            vp.y * scale,
+        )
+    }
+
+    /// 将本窗口局部逻辑坐标映射为屏幕物理坐标。
+    #[must_use]
+    pub fn local_to_screen_physical(&self, local_logical: Vec2) -> Vec2 {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        Vec2::new(
+            self.screen_origin.0 as f32 + local_logical.x * scale,
+            self.screen_origin.1 as f32 + local_logical.y * scale,
+        )
+    }
+
+    /// 将屏幕物理坐标映射为本窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_local(&self, screen_physical: Vec2) -> Vec2 {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        Vec2::new(
+            (screen_physical.x - self.screen_origin.0 as f32) / scale,
+            (screen_physical.y - self.screen_origin.1 as f32) / scale,
+        )
     }
 
     /// 访问当前窗口渲染器持有的共享 [`Gpu`] 引用计数句柄（若已初始化）。
@@ -329,7 +395,7 @@ impl<A: Application> WindowContext<A> {
     }
 
     fn sync_theme_at(&mut self, window: &NativeWindow, now_secs: f64, shared_trigger_secs: f64) {
-        let reduced_motion = unbound_platform::prefers_reduced_motion();
+        let reduced_motion = self.runtime.motion_policy().reduced_motion;
         let needs_upload = self.sync_theme_state_at(now_secs, shared_trigger_secs, reduced_motion);
         if !needs_upload {
             return;
@@ -475,12 +541,241 @@ impl<A: Application> WindowContext<A> {
         }
     }
 
+    fn process_bc7_ops(&mut self, ops: Vec<Bc7GpuOp>, window: &NativeWindow) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
+        let mut needs_redraw = false;
+        let mut dirty_fallback_pages: FxHashSet<AtlasPageId> = FxHashSet::default();
+
+        for op in ops {
+            match op {
+                Bc7GpuOp::CreateAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        match renderer.create_bc7_atlas_page(page_id.0) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create BC7 atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        let page_bytes =
+                            (BC7_ATLAS_PAGE_SIZE as usize) * (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                        let canvas = vec![0u8; page_bytes];
+                        let desc = ManagedExternalTextureDesc::new(
+                            BC7_ATLAS_PAGE_SIZE,
+                            BC7_ATLAS_PAGE_SIZE,
+                            false,
+                        );
+                        match renderer.upload_external_rgba8(desc, &canvas) {
+                            Ok(slot) => {
+                                self.bc7_fallback_pages.insert(page_id, (slot, canvas));
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadAtlasRegion {
+                    page_id,
+                    x,
+                    y,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer
+                            .stage_bc7_atlas_subregion(page_id.0, x, y, width, height, &bytes)
+                        {
+                            eprintln!(
+                                "[unbound-app] Could not stage BC7 atlas region on {page_id:?} ({x}, {y}, {width}x{height}): {error:?}"
+                            );
+                        } else {
+                            needs_redraw = true;
+                        }
+                    } else if let Some((_, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let page_stride = (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                                let row_bytes = (width as usize) * 4;
+                                for row in 0..(height as usize) {
+                                    let dst_offset =
+                                        ((y as usize) + row) * page_stride + (x as usize) * 4;
+                                    let src_offset = row * row_bytes;
+                                    if dst_offset + row_bytes <= canvas.len()
+                                        && src_offset + row_bytes <= rgba.len()
+                                    {
+                                        canvas[dst_offset..dst_offset + row_bytes].copy_from_slice(
+                                            &rgba[src_offset..src_offset + row_bytes],
+                                        );
+                                    }
+                                }
+                                dirty_fallback_pages.insert(page_id);
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid BC7 payload for RGBA8 fallback page {page_id:?}: {error}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_bc7_atlas_page(page_id.0) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy BC7 atlas page {page_id:?}: {error:?}"
+                            );
+                        }
+                    } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        dirty_fallback_pages.remove(&page_id);
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadStandalone {
+                    asset_id,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        match renderer.upload_external_bc7(width, height, &bytes) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not upload standalone BC7 texture {asset_id:?} ({width}x{height}): {error:?}"
+                                );
+                                self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                    asset_id,
+                                    Err(format!("{error:?}")),
+                                );
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let desc = ManagedExternalTextureDesc::new(width, height, false);
+                                match renderer.upload_external_rgba8(desc, &rgba) {
+                                    Ok(slot) => {
+                                        self.bc7_fallback_standalone.insert(asset_id, slot);
+                                        self.runtime
+                                            .asset_hub_mut()
+                                            .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                        needs_redraw = true;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[unbound-app] Could not upload standalone RGBA8 fallback texture {asset_id:?}: {error:?}"
+                                        );
+                                        self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                            asset_id,
+                                            Err(format!("{error:?}")),
+                                        );
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid standalone BC7 payload for {asset_id:?}: {error}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Err(error.to_string()));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyStandalone { asset_id, slot } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_external_bc7(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone BC7 texture {asset_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    } else {
+                        let target_slot = self
+                            .bc7_fallback_standalone
+                            .remove(&asset_id)
+                            .unwrap_or(slot);
+                        if let Err(error) = renderer.destroy_external_texture(target_slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone RGBA8 fallback texture {asset_id:?} (slot {target_slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        for page_id in dirty_fallback_pages {
+            if let Some((slot, canvas)) = self.bc7_fallback_pages.get(&page_id) {
+                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                    eprintln!(
+                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                    );
+                } else {
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     /// 严格按“先停用交换链与表面、再释放窗口级 `Renderer`”的顺序回收本窗口 GPU 资源。
     pub fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -536,6 +831,34 @@ impl MultiWindowConfig {
     }
 }
 
+/// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
+#[derive(Clone, Copy, Debug, Default)]
+struct FloatingLiveSync {
+    visible: Option<bool>,
+    topmost: Option<bool>,
+    click_through: Option<bool>,
+    outer_rect: Option<ScreenRect>,
+}
+
+/// 跨窗拖拽单帧坐标映射与停靠目标仲裁结果。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossWindowDragRoute {
+    /// 发起拖拽的源窗口标识。
+    pub source_window: WindowId,
+    /// 指针在桌面屏幕物理坐标系中的位置。
+    pub screen_physical: Vec2,
+    /// 命中的目标窗口标识（`None` 表示位于窗外自由空间 `TearOut`）。
+    pub target_window: Option<WindowId>,
+    /// 命中目标窗口内的局部逻辑坐标（`TearOut` 时为 `None`）。
+    pub target_local_logical: Option<Vec2>,
+    /// 当前是否处于窗外自由空间（`TearOut`）。
+    pub tear_out: bool,
+    /// 当前可见的宿主停靠预览目标（未满整窗 500ms 驻留防抖或 `TearOut` 时为 `None`）。
+    pub target: Option<unbound_widgets::DockDropTarget>,
+    /// 外部拖拽代理描述（含 `detached` 状态与语义提示）。
+    pub proxy: Option<unbound_widgets::DockDragProxy>,
+}
+
 /// 多窗口共享 `VkDevice` 与共享基础图集的运行时协调器。
 pub struct MultiWindowCoordinator<A: Application> {
     registry: WindowRegistry<WindowContext<A>>,
@@ -547,6 +870,10 @@ pub struct MultiWindowCoordinator<A: Application> {
     pending_popup_syncs: Vec<(u64, PopupWindowConfig)>,
     pending_popup_closes: Vec<u64>,
     native_popup_owners: FxHashMap<WindowId, (u64, WindowId)>,
+    floating_host: FloatingHost,
+    focused_window_id: Option<WindowId>,
+    headless_work_areas: Vec<MonitorWorkArea>,
+    pending_floating_live_syncs: FxHashMap<WindowId, FloatingLiveSync>,
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
     on_window_created: Option<WindowCreatedHook>,
@@ -574,6 +901,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
             native_popup_owners: FxHashMap::default(),
+            floating_host: FloatingHost::with_current_platform(),
+            focused_window_id: None,
+            headless_work_areas: Vec::new(),
+            pending_floating_live_syncs: FxHashMap::default(),
             primary_config,
             factory: Box::new(factory),
             on_window_created: None,
@@ -622,8 +953,142 @@ impl<A: Application> MultiWindowCoordinator<A> {
         self.pending_windows.push_back(config);
     }
 
+    fn default_fallback_work_area() -> MonitorWorkArea {
+        MonitorWorkArea {
+            monitor_bounds: ScreenRect::new(0, 0, 1920, 1080),
+            work_area: ScreenRect::new(0, 0, 1920, 1040),
+            scale_factor: 1.0,
+            is_primary: true,
+        }
+    }
+
+    fn select_work_area_for_rect(&self, desired: ScreenRect) -> MonitorWorkArea {
+        if self.headless_work_areas.is_empty() {
+            return Self::default_fallback_work_area();
+        }
+        let cx = i64::from(desired.x) + i64::from(desired.width) / 2;
+        let cy = i64::from(desired.y) + i64::from(desired.height) / 2;
+        if let Some(hit) = self.headless_work_areas.iter().find(|m| {
+            let b = m.monitor_bounds;
+            cx >= i64::from(b.x)
+                && cx < i64::from(b.x) + i64::from(b.width)
+                && cy >= i64::from(b.y)
+                && cy < i64::from(b.y) + i64::from(b.height)
+        }) {
+            return *hit;
+        }
+        // 中心点越出所有显示器时，优先选择距离最近的显示器，避免辅屏越界被弹回主屏。
+        *self
+            .headless_work_areas
+            .iter()
+            .min_by_key(|m| {
+                let b = m.monitor_bounds;
+                let min_x = i64::from(b.x);
+                let max_x = min_x + i64::from(b.width.max(1)) - 1;
+                let min_y = i64::from(b.y);
+                let max_y = min_y + i64::from(b.height.max(1)) - 1;
+                let dx = if cx < min_x {
+                    min_x - cx
+                } else if cx > max_x {
+                    cx - max_x
+                } else {
+                    0
+                };
+                let dy = if cy < min_y {
+                    min_y - cy
+                } else if cy > max_y {
+                    cy - max_y
+                } else {
+                    0
+                };
+                dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
+            })
+            .unwrap_or(&self.headless_work_areas[0])
+    }
+
+    fn resolve_open_floating_config(
+        &self,
+        mut config: WindowConfig,
+        placement: Option<FloatingPlacementStrategy>,
+    ) -> WindowConfig {
+        config.decorations = false;
+        config.surface_alpha = SurfaceAlpha::PreMultiplied;
+        if let Some(strategy) = placement {
+            let target_rect = match strategy {
+                FloatingPlacementStrategy::CursorMonitorAvoid { cursor, size, .. } => {
+                    ScreenRect::new(cursor.0, cursor.1, size.0, size.1)
+                }
+                FloatingPlacementStrategy::AnchorRectAvoid { anchor, .. } => anchor,
+                FloatingPlacementStrategy::EdgeSnap { desired, .. } => desired,
+            };
+            let work_area = self.select_work_area_for_rect(target_rect).work_area;
+            let rect = resolve_floating_placement(&strategy, work_area);
+            config.position = WindowPosition::Physical {
+                x: rect.x,
+                y: rect.y,
+            };
+            config.width = rect.width.max(1);
+            config.height = rect.height.max(1);
+        }
+        config
+    }
+
+    fn initial_rect_from_config(config: &WindowConfig) -> ScreenRect {
+        match config.position {
+            WindowPosition::Physical { x, y } | WindowPosition::Logical { x, y } => {
+                ScreenRect::new(x, y, config.width.max(1), config.height.max(1))
+            }
+            _ => ScreenRect::new(0, 0, config.width.max(1), config.height.max(1)),
+        }
+    }
+
+    fn is_window_no_activate(&self, id: WindowId) -> bool {
+        if let Some(state) = self.floating_host.get(id) {
+            return state.effective_policy.no_activate;
+        }
+        self.registry.get(id).is_some_and(|ctx| {
+            ctx.config.role != WindowRole::Standard && ctx.config.floating_policy.no_activate
+        })
+    }
+
     /// 无头注册一个窗口上下文（主要用于无头多窗口测试与集成验证）。
     pub fn register_headless_window(&mut self, id: WindowId, config: WindowConfig) {
+        if config.role != WindowRole::Standard {
+            self.register_headless_floating_window(id, config);
+            return;
+        }
+        let app = self.factory.create(id, &config);
+        let mut ctx = WindowContext::new(app, &config);
+        if let Some(waker) = &self.waker {
+            ctx.runtime
+                .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
+        }
+        let visible = config.visible;
+        let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        if self.focused_window_id.is_none() && visible {
+            self.focused_window_id = Some(id);
+        }
+    }
+
+    /// 无头注册一个幽灵窗或悬浮浮岛上下文（含策略、初始外框与焦点隔离初始化）。
+    pub fn register_headless_floating_window(&mut self, id: WindowId, mut config: WindowConfig) {
+        config.decorations = false;
+        config.surface_alpha = SurfaceAlpha::PreMultiplied;
+        let mut outer_rect = Self::initial_rect_from_config(&config);
+        if self
+            .floating_host
+            .capabilities()
+            .supports_global_positioning
+            && !self.headless_work_areas.is_empty()
+        {
+            let area = self.select_work_area_for_rect(outer_rect);
+            outer_rect = clamp_rect_to_work_area(outer_rect, area.work_area);
+        }
+        let role = config.role;
+        let policy = config.floating_policy;
+        let visible = config.visible;
+
         let app = self.factory.create(id, &config);
         let mut ctx = WindowContext::new(app, &config);
         if let Some(waker) = &self.waker {
@@ -631,10 +1096,249 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
         }
         let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        let state = self
+            .floating_host
+            .register(id, role, policy, outer_rect, visible);
+        // 绝不将 Ghost 提升为主窗口；若当前主窗口是非 Standard，则尝试保持首个 Standard 为主窗口。
+        if let Some(primary) = self.registry.primary() {
+            if primary == id && role == WindowRole::Ghost {
+                let std_id = self
+                    .registry
+                    .iter()
+                    .find(|s| s.context.config.role == WindowRole::Standard)
+                    .map(|s| s.id);
+                if let Some(std_id) = std_id {
+                    let _ = self.registry.set_primary(std_id);
+                }
+            }
+        }
+        if !state.effective_policy.no_activate && visible && self.focused_window_id.is_none() {
+            self.focused_window_id = Some(id);
+        }
     }
 
-    /// 按严格回收顺序关闭并移除指定窗口；若全部窗口均已关闭则释放共享图集与设备引用。
+    /// 无头模拟窗口焦点事件，验证 `no_activate` 浮窗绝不抢占宿主焦点。
+    pub fn simulate_window_focus_event(&mut self, id: WindowId, focused: bool) {
+        if self.is_window_no_activate(id) {
+            if let Some(ctx) = self.registry.get_mut(id) {
+                ctx.runtime.set_window_focused(false);
+            }
+            return;
+        }
+        if focused {
+            self.focused_window_id = Some(id);
+        } else if self.focused_window_id == Some(id) {
+            self.focused_window_id = None;
+        }
+        if let Some(ctx) = self.registry.get_mut(id) {
+            ctx.pacer.set_focused(focused);
+            ctx.runtime.set_window_focused(focused);
+        }
+    }
+
+    /// 查询指定窗口的角色。
+    #[must_use]
+    pub fn window_role(&self, id: WindowId) -> Option<WindowRole> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.role)
+            .or_else(|| self.registry.get(id).map(|c| c.config.role))
+    }
+
+    /// 查询指定浮窗当前生效的策略。
+    #[must_use]
+    pub fn floating_policy(&self, id: WindowId) -> Option<FloatingWindowPolicy> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.effective_policy)
+            .or_else(|| self.registry.get(id).map(|c| c.config.floating_policy))
+    }
+
+    /// 查询指定浮窗当前记录的屏幕物理外框矩形。
+    #[must_use]
+    pub fn window_outer_rect(&self, id: WindowId) -> Option<ScreenRect> {
+        self.floating_host.get(id).map(|s| s.outer_rect)
+    }
+
+    /// 查询指定窗口当前是否可见。
+    #[must_use]
+    pub fn window_visible(&self, id: WindowId) -> Option<bool> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.visible)
+            .or_else(|| self.registry.iter().find(|s| s.id == id).map(|s| s.visible))
+    }
+
+    /// 查询指定浮窗的实例代次（仅销毁重建时递增，热切换保持不变）。
+    #[must_use]
+    pub fn window_generation(&self, id: WindowId) -> Option<u64> {
+        self.floating_host.get(id).map(|s| s.generation)
+    }
+
+    /// 查询指定浮窗最近一次边缘磁吸记录的相对显示器锚点。
+    #[must_use]
+    pub fn last_snap_anchor(&self, id: WindowId) -> Option<RelativeMonitorAnchor> {
+        self.floating_host.get(id).and_then(|s| s.last_snap_anchor)
+    }
+
+    /// 查询当前拥有键盘焦点的窗口 ID。
+    #[must_use]
+    pub const fn focused_window_id(&self) -> Option<WindowId> {
+        self.focused_window_id
+    }
+
+    /// 获取当前协调器持有的浮窗平台能力矩阵。
+    #[must_use]
+    pub const fn floating_capabilities(&self) -> FloatingWindowCapabilities {
+        self.floating_host.capabilities()
+    }
+
+    /// 在无头模式下注入平台能力矩阵（用于测试 Win32 / X11 / Wayland 降级路径）。
+    pub fn set_headless_capabilities(&mut self, caps: FloatingWindowCapabilities) {
+        self.floating_host.set_capabilities(caps);
+    }
+
+    /// 在无头模式下注入多显示器工作区列表（用于测试负坐标辅屏、避让与边缘磁吸）。
+    pub fn set_headless_work_areas(&mut self, areas: Vec<MonitorWorkArea>) {
+        self.headless_work_areas = areas;
+    }
+
+    /// 配置指定窗口的屏幕物理坐标原点（供无头多窗测试与原生窗口移动事件同步）。
+    pub fn set_window_screen_origin(&mut self, id: WindowId, origin: (i32, i32)) -> bool {
+        let Some(ctx) = self.registry.get_mut(id) else {
+            return false;
+        };
+        ctx.set_screen_origin(origin);
+        true
+    }
+
+    /// 配置指定窗口的操作系统 DPI 缩放比例。
+    pub fn set_window_os_scale(&mut self, id: WindowId, os_scale: f32) -> bool {
+        let Some(ctx) = self.registry.get_mut(id) else {
+            return false;
+        };
+        ctx.set_os_scale(os_scale);
+        true
+    }
+
+    /// 将统一的 [`unbound_anim::MotionPolicy`] 透传至全部已注册窗口运行时。
+    pub fn set_motion_policy_all(&mut self, policy: unbound_anim::MotionPolicy) {
+        for slot in self.registry.iter_mut() {
+            slot.context.runtime.set_motion_policy(policy);
+        }
+    }
+
+    /// 将源窗口局部逻辑坐标映射为屏幕物理坐标。
+    #[must_use]
+    pub fn local_to_screen_physical(
+        &self,
+        source_id: WindowId,
+        local_logical: Vec2,
+    ) -> Option<Vec2> {
+        self.registry
+            .get(source_id)
+            .map(|ctx| ctx.local_to_screen_physical(local_logical))
+    }
+
+    /// 将屏幕物理坐标映射为目标窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_window_local(
+        &self,
+        target_id: WindowId,
+        screen_physical: Vec2,
+    ) -> Option<Vec2> {
+        self.registry
+            .get(target_id)
+            .map(|ctx| ctx.screen_physical_to_local(screen_physical))
+    }
+
+    /// 在全部已注册窗口中按屏幕物理坐标命中目标窗口，并返回 `(target_window, target_local_logical)`。
+    #[must_use]
+    pub fn hit_test_screen_window(&self, screen_physical: Vec2) -> Option<(WindowId, Vec2)> {
+        for slot in self.registry.iter() {
+            if slot
+                .context
+                .screen_bounds_physical()
+                .contains_point(screen_physical)
+            {
+                return Some((
+                    slot.id,
+                    slot.context.screen_physical_to_local(screen_physical),
+                ));
+            }
+        }
+        None
+    }
+
+    /// 执行单帧跨窗拖拽坐标映射与候选路由：
+    /// `source_local_logical` → 屏幕物理坐标 → 命中目标 `WindowId` → 目标窗局部逻辑坐标，
+    /// 并驱动 [`unbound_widgets::DockOverlayState`] 与 `TearOut` 拖拽代理协同。
+    pub fn route_cross_window_drag(
+        &self,
+        source_id: WindowId,
+        source_local_logical: Vec2,
+        overlay: &mut unbound_widgets::DockOverlayState,
+        window_panes: &[(WindowId, Vec<unbound_widgets::DockCandidatePane>)],
+        dt: f32,
+        proxy_title: &str,
+    ) -> Option<CrossWindowDragRoute> {
+        let screen_physical = self.local_to_screen_physical(source_id, source_local_logical)?;
+        let hit = self.hit_test_screen_window(screen_physical);
+
+        if let Some((target_id, target_local)) = hit {
+            let target_ctx = self.registry.get(target_id)?;
+            let policy = target_ctx.runtime.motion_policy();
+            let vp = target_ctx.runtime.context().viewport;
+            let panes = window_panes
+                .iter()
+                .find(|(id, _)| *id == target_id)
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default();
+            let candidate = unbound_widgets::DockCandidateWindow::new(
+                target_id.0,
+                unbound_math::Rect::new(0.0, 0.0, vp.x, vp.y),
+                panes,
+            );
+            overlay.update(target_local, &[candidate], dt, policy);
+            let target = overlay.visible_target().cloned();
+            let proxy = overlay.drag_proxy(proxy_title, None);
+            Some(CrossWindowDragRoute {
+                source_window: source_id,
+                screen_physical,
+                target_window: Some(target_id),
+                target_local_logical: Some(target_local),
+                tear_out: overlay.is_tear_out(),
+                target,
+                proxy,
+            })
+        } else {
+            let policy = self
+                .registry
+                .get(source_id)
+                .map(|ctx| ctx.runtime.motion_policy())
+                .unwrap_or_default();
+            overlay.update(screen_physical, &[], dt, policy);
+            let proxy = overlay.drag_proxy(proxy_title, Some("Tear Out".to_owned()));
+            Some(CrossWindowDragRoute {
+                source_window: source_id,
+                screen_physical,
+                target_window: None,
+                target_local_logical: None,
+                tear_out: true,
+                target: None,
+                proxy,
+            })
+        }
+    }
+
+    /// 按严格回收顺序关闭并移除指定窗口；若无任何 `Standard` 窗口存活则级联关闭全部浮窗并释放共享 GPU。
     pub fn close_window(&mut self, id: WindowId) -> bool {
+        let _ = self.floating_host.unregister(id);
+        self.pending_floating_live_syncs.remove(&id);
+        if self.focused_window_id == Some(id) {
+            self.focused_window_id = None;
+        }
         let Some(mut ctx) = self.registry.remove(id) else {
             return false;
         };
@@ -645,10 +1349,151 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
         ctx.destroy_vulkan();
         drop(ctx);
+
+        // 绝不将 Ghost 提升为主窗口；若不再有 Standard 窗口存活，级联关闭所有剩余浮窗。
+        let next_standard = self
+            .registry
+            .iter()
+            .find(|slot| slot.context.config.role == WindowRole::Standard)
+            .map(|slot| slot.id);
+        if let Some(std_id) = next_standard {
+            if let Some(primary_id) = self.registry.primary() {
+                if self
+                    .registry
+                    .get(primary_id)
+                    .is_some_and(|c| c.config.role == WindowRole::Ghost)
+                {
+                    let _ = self.registry.set_primary(std_id);
+                }
+            }
+        } else if !self.registry.is_empty() {
+            let remaining_ids: Vec<WindowId> = self.registry.iter().map(|slot| slot.id).collect();
+            for rem_id in remaining_ids {
+                let _ = self.floating_host.unregister(rem_id);
+                self.pending_floating_live_syncs.remove(&rem_id);
+                if self.focused_window_id == Some(rem_id) {
+                    self.focused_window_id = None;
+                }
+                if let Some(mut rem_ctx) = self.registry.remove(rem_id) {
+                    for action in rem_ctx.popup_host.close_for_owner(rem_id) {
+                        if let unbound_platform::PopupSyncAction::Close { id: popup_id, .. } =
+                            action
+                        {
+                            self.pending_popup_closes.push(popup_id);
+                        }
+                    }
+                    rem_ctx.destroy_vulkan();
+                    drop(rem_ctx);
+                    self.pending_window_close_requests.push(rem_id);
+                }
+            }
+        }
+
         if self.registry.is_empty() {
             self.release_shared_gpu();
         }
         true
+    }
+
+    fn apply_floating_command_state(&mut self, cmd: &WindowCommand) {
+        match cmd {
+            WindowCommand::UpdateFloatingPolicy { id, policy } => {
+                if let Some(eff) = self.floating_host.update_policy(*id, *policy) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy = *policy;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.topmost = Some(eff.always_on_top);
+                    sync.click_through = Some(eff.click_through);
+                }
+            }
+            WindowCommand::SetWindowVisibleNoActivate { id, visible } => {
+                if self.floating_host.set_visible(*id, *visible) {
+                    self.registry.set_visible(*id, *visible);
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.visible = Some(*visible);
+                }
+            }
+            WindowCommand::SetWindowAlwaysOnTop { id, topmost } => {
+                if let Some(eff_topmost) = self.floating_host.set_always_on_top(*id, *topmost) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy.always_on_top = *topmost;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.topmost = Some(eff_topmost);
+                }
+            }
+            WindowCommand::SetWindowClickThrough { id, click_through } => {
+                if let Some(eff_ct) = self.floating_host.set_click_through(*id, *click_through) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy.click_through = *click_through;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.click_through = Some(eff_ct);
+                }
+            }
+            WindowCommand::SetWindowOuterRect { id, rect } => {
+                let target_rect = if self
+                    .floating_host
+                    .capabilities()
+                    .supports_global_positioning
+                    && !self.headless_work_areas.is_empty()
+                {
+                    let area = self.select_work_area_for_rect(*rect);
+                    clamp_rect_to_work_area(*rect, area.work_area)
+                } else {
+                    *rect
+                };
+                if let Some(applied) = self.floating_host.set_outer_rect(*id, target_rect) {
+                    if self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
+                    {
+                        let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                        sync.outer_rect = Some(applied);
+                    }
+                }
+            }
+            WindowCommand::SnapFloatingWindow {
+                id,
+                desired,
+                snap_threshold,
+            } => {
+                let area = self.select_work_area_for_rect(*desired);
+                let snap = solve_edge_snap(*desired, area.work_area, *snap_threshold);
+                if self
+                    .floating_host
+                    .set_snap_anchor(*id, snap.rect, Some(snap.anchor))
+                    && self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
+                {
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.outer_rect = Some(snap.rect);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn flush_floating_live_sync(&mut self, id: WindowId, window: &NativeWindow) {
+        let Some(sync) = self.pending_floating_live_syncs.remove(&id) else {
+            return;
+        };
+        if let Some(visible) = sync.visible {
+            window.set_visible_no_activate(visible);
+        }
+        if let Some(topmost) = sync.topmost {
+            window.set_always_on_top(topmost);
+        }
+        if let Some(click_through) = sync.click_through {
+            window.set_click_through(click_through);
+        }
+        if let Some(rect) = sync.outer_rect {
+            window.set_outer_rect(rect);
+        }
     }
 
     /// 排空指定窗口上下文产出的命令（无头安全路径：不依赖原生 `Window` 句柄）。
@@ -656,34 +1501,55 @@ impl<A: Application> MultiWindowCoordinator<A> {
     /// 返回需要关闭的目标窗口 ID 列表。
     pub fn route_window_commands(&mut self, source_id: WindowId) -> Vec<WindowId> {
         let mut to_close = Vec::new();
-        let Some(ctx) = self.registry.get_mut(source_id) else {
+        let Some(cmds) = self
+            .registry
+            .get_mut(source_id)
+            .map(|ctx| ctx.runtime.drain_window_commands())
+        else {
             return to_close;
         };
-        let cmds = ctx.runtime.drain_window_commands();
         for cmd in cmds {
             match cmd {
                 WindowCommand::OpenWindow(mut config) => {
                     config.decorations = false;
                     self.pending_windows.push_back(config);
                 }
-                WindowCommand::CloseWindow(target) => {
+                WindowCommand::OpenFloatingWindow { config, placement } => {
+                    let resolved = self.resolve_open_floating_config(config, placement);
+                    self.pending_windows.push_back(resolved);
+                }
+                WindowCommand::CloseWindow(target) | WindowCommand::CloseFloatingWindow(target) => {
                     to_close.push(target);
                 }
                 WindowCommand::Close => {
                     to_close.push(source_id);
                 }
                 WindowCommand::SetThrottlePolicy(policy) => {
-                    ctx.pacer.set_throttle_policy(policy);
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        ctx.pacer.set_throttle_policy(policy);
+                    }
                 }
                 WindowCommand::SyncNativePopup { id, config } => {
-                    if ctx.popup_host.sync_popup(id, config).is_some() {
-                        self.pending_popup_syncs.push((id, config));
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        if ctx.popup_host.sync_popup(id, config).is_some() {
+                            self.pending_popup_syncs.push((id, config));
+                        }
                     }
                 }
                 WindowCommand::CloseNativePopup { id } => {
-                    if ctx.popup_host.close_popup(id).is_some() {
-                        self.pending_popup_closes.push(id);
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        if ctx.popup_host.close_popup(id).is_some() {
+                            self.pending_popup_closes.push(id);
+                        }
                     }
+                }
+                cmd @ (WindowCommand::UpdateFloatingPolicy { .. }
+                | WindowCommand::SetWindowVisibleNoActivate { .. }
+                | WindowCommand::SetWindowAlwaysOnTop { .. }
+                | WindowCommand::SetWindowClickThrough { .. }
+                | WindowCommand::SetWindowOuterRect { .. }
+                | WindowCommand::SnapFloatingWindow { .. }) => {
+                    self.apply_floating_command_state(&cmd);
                 }
                 WindowCommand::StartDrag
                 | WindowCommand::Minimize
@@ -706,7 +1572,21 @@ impl<A: Application> MultiWindowCoordinator<A> {
         to_close
     }
 
+    /// 在共享设备丢失或释放时，同步失效所有已注册窗口的 BC7 图集与降级缓存并标记重绘。
+    fn invalidate_all_windows_bc7(&mut self) {
+        for slot in self.registry.iter_mut() {
+            slot.context.bc7_fallback_pages.clear();
+            slot.context.bc7_fallback_standalone.clear();
+            slot.context
+                .runtime
+                .asset_hub_mut()
+                .invalidate_all_bc7_pages();
+            slot.context.runtime.invalidate();
+        }
+    }
+
     fn release_shared_gpu(&mut self) {
+        self.invalidate_all_windows_bc7();
         if let Some(atlases) = self.shared_atlases.take() {
             if let Some(gpu) = &self.shared_gpu {
                 gpu.wait_idle();
@@ -863,6 +1743,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
             Vec2::new(chain_w.max(1) as f32, chain_h.max(1) as f32),
             os_scale,
         );
+        let bc7_caps = renderer.compressed_texture_capabilities();
+        ctx.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+        ctx.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         ctx.swapchain = Some(swapchain);
         ctx.surface = Some(surface);
         ctx.renderer = Some(renderer);
@@ -893,7 +1776,28 @@ impl<A: Application> MultiWindowCoordinator<A> {
         ctx.sync_appearance(window);
         ctx.last_frame = Instant::now();
 
+        let caps = window.capabilities();
+        self.floating_host.set_capabilities(caps);
+        let role = config.role;
+        let policy = config.floating_policy;
+        let visible = config.visible;
+        let outer_rect = ScreenRect::new(client_screen.x, client_screen.y, width, height);
         let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        if role != WindowRole::Standard {
+            let state = self
+                .floating_host
+                .register(id, role, policy, outer_rect, visible);
+            let eff = state.effective_policy;
+            window.set_always_on_top(eff.always_on_top);
+            window.set_click_through(eff.click_through);
+            window.set_visible_no_activate(visible);
+            if !eff.no_activate && visible && self.focused_window_id.is_none() {
+                self.focused_window_id = Some(id);
+            }
+        } else if visible && self.focused_window_id.is_none() {
+            self.focused_window_id = Some(id);
+        }
         if let Some(hook) = self.on_window_created.as_mut() {
             hook(id, window);
         }
@@ -903,6 +1807,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let mut outbound_drag = None;
         let mut close_targets = Vec::new();
         let mut close_self = false;
+        let mut deferred_floating = Vec::new();
 
         if let Some(ctx) = self.registry.get_mut(id) {
             for cmd in ctx.runtime.drain_window_commands() {
@@ -942,7 +1847,12 @@ impl<A: Application> MultiWindowCoordinator<A> {
                         config.decorations = false;
                         self.pending_windows.push_back(config);
                     }
-                    WindowCommand::CloseWindow(target) => {
+                    WindowCommand::OpenFloatingWindow { config, placement } => {
+                        deferred_floating
+                            .push(WindowCommand::OpenFloatingWindow { config, placement });
+                    }
+                    WindowCommand::CloseWindow(target)
+                    | WindowCommand::CloseFloatingWindow(target) => {
                         if target == id {
                             close_self = true;
                         } else {
@@ -991,6 +1901,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             );
                         }
                     }
+                    other @ (WindowCommand::UpdateFloatingPolicy { .. }
+                    | WindowCommand::SetWindowVisibleNoActivate { .. }
+                    | WindowCommand::SetWindowAlwaysOnTop { .. }
+                    | WindowCommand::SetWindowClickThrough { .. }
+                    | WindowCommand::SetWindowOuterRect { .. }
+                    | WindowCommand::SnapFloatingWindow { .. }) => {
+                        deferred_floating.push(other);
+                    }
                 }
             }
             if let Some(request) = outbound_drag {
@@ -1007,6 +1925,60 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 window.request_redraw();
             }
         }
+
+        if !deferred_floating.is_empty() {
+            self.floating_host.set_capabilities(window.capabilities());
+            let live_work_area = window.work_area();
+            for cmd in deferred_floating {
+                match cmd {
+                    WindowCommand::OpenFloatingWindow { config, placement } => {
+                        let resolved = if let Some(area) = &live_work_area {
+                            let mut c = config;
+                            c.decorations = false;
+                            c.surface_alpha = SurfaceAlpha::PreMultiplied;
+                            if let Some(strategy) = placement {
+                                let rect = resolve_floating_placement(&strategy, area.work_area);
+                                c.position = WindowPosition::Physical {
+                                    x: rect.x,
+                                    y: rect.y,
+                                };
+                                c.width = rect.width.max(1);
+                                c.height = rect.height.max(1);
+                            }
+                            c
+                        } else {
+                            self.resolve_open_floating_config(config, placement)
+                        };
+                        self.pending_windows.push_back(resolved);
+                    }
+                    WindowCommand::SnapFloatingWindow {
+                        id: target,
+                        desired,
+                        snap_threshold,
+                    } => {
+                        let work_area = live_work_area
+                            .as_ref()
+                            .map(|m| m.work_area)
+                            .unwrap_or_else(|| self.select_work_area_for_rect(desired).work_area);
+                        let snap = solve_edge_snap(desired, work_area, snap_threshold);
+                        if self
+                            .floating_host
+                            .set_snap_anchor(target, snap.rect, Some(snap.anchor))
+                            && self
+                                .floating_host
+                                .capabilities()
+                                .supports_global_positioning
+                        {
+                            let sync = self.pending_floating_live_syncs.entry(target).or_default();
+                            sync.outer_rect = Some(snap.rect);
+                        }
+                    }
+                    other => self.apply_floating_command_state(&other),
+                }
+            }
+        }
+
+        self.flush_floating_live_sync(id, window);
 
         for target in close_targets {
             if self.close_window(target) {
@@ -1234,6 +2206,11 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             return Flow::Continue;
         };
         let os_scale = ctx.sync_os_scale(window);
+        let focused_event = if let PlatformEvent::Focused(focused) = &event {
+            Some(*focused)
+        } else {
+            None
+        };
         match event {
             PlatformEvent::Resized(_) => {
                 let size = window.inner_size();
@@ -1369,11 +2346,17 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 ctx.runtime.file_hover_cancelled();
             }
             PlatformEvent::Focused(focused) => {
-                ctx.pacer.set_focused(focused);
-                if focused {
-                    ctx.pacer.note_activity(Instant::now());
+                let no_activate = ctx.config.role != WindowRole::Standard
+                    && ctx.config.floating_policy.no_activate;
+                if no_activate {
+                    ctx.runtime.set_window_focused(false);
+                } else {
+                    ctx.pacer.set_focused(focused);
+                    if focused {
+                        ctx.pacer.note_activity(Instant::now());
+                    }
+                    ctx.runtime.set_window_focused(focused);
                 }
-                ctx.runtime.set_window_focused(focused);
             }
             PlatformEvent::Minimized(minimized) => {
                 ctx.pacer.set_minimized(minimized);
@@ -1408,6 +2391,16 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
         let dirty = ctx.runtime.dirty() != crate::DirtyFlags::NONE;
         let suspended = ctx.pacer.is_suspended();
+        if let Some(focused) = focused_event {
+            if !self.is_window_no_activate(id) {
+                if focused {
+                    self.focused_window_id = Some(id);
+                } else if self.focused_window_id == Some(id) {
+                    self.focused_window_id = None;
+                }
+            }
+        }
+        self.flush_floating_live_sync(id, window);
         if self.drain_window_commands_live(id, window) == Flow::Exit {
             return Flow::Exit;
         }
@@ -1500,7 +2493,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         ctx.sync_theme_at(window, now_secs, trigger_secs);
         ctx.sync_appearance(window);
         ctx.process_external_texture_ops(report.external_texture_ops, window);
+        ctx.process_bc7_ops(report.bc7_ops, window);
 
+        let mut device_lost = false;
         if let (Some(renderer), Some(atlases)) = (&mut ctx.renderer, &shared_atlases) {
             if !report.atlas_uploads.is_empty() {
                 if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
@@ -1553,29 +2548,42 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                                 eprintln!(
                                     "[unbound-app] Shared GPU device lost during render on {id:?}"
                                 );
-                                return Flow::Continue;
+                                device_lost = true;
+                            } else {
+                                eprintln!("[unbound-app] multi-window render failed: {err:?}");
                             }
-                            eprintln!("[unbound-app] multi-window render failed: {err:?}");
                         } else {
                             ctx.frame_dropped = false;
                         }
-                        match swapchain.present_outcome(
-                            &renderer.gpu,
-                            image.index,
-                            image.render_finished,
-                        ) {
-                            Ok(PresentOutcome::Optimal) => {}
-                            Ok(PresentOutcome::Recreate) => {
-                                ctx.swapchain_dirty = true;
-                                state.resize.mark_out_of_date(unbound_platform::Extent::new(
-                                    actual_w, actual_h,
-                                ));
+                        if !device_lost {
+                            match swapchain.present_outcome(
+                                &renderer.gpu,
+                                image.index,
+                                image.render_finished,
+                            ) {
+                                Ok(PresentOutcome::Optimal) => {}
+                                Ok(PresentOutcome::Recreate) => {
+                                    ctx.swapchain_dirty = true;
+                                    state.resize.mark_out_of_date(unbound_platform::Extent::new(
+                                        actual_w, actual_h,
+                                    ));
+                                }
+                                Err(ref err) => {
+                                    if is_device_lost(err) {
+                                        eprintln!(
+                                            "[unbound-app] Shared GPU device lost during present on {id:?}"
+                                        );
+                                        ctx.frame_dropped = true;
+                                        device_lost = true;
+                                    } else {
+                                        ctx.swapchain_dirty = true;
+                                    }
+                                }
                             }
-                            Err(_) => {
-                                ctx.swapchain_dirty = true;
+                            if !device_lost {
+                                ctx.pacer.on_present(Instant::now());
                             }
                         }
-                        ctx.pacer.on_present(Instant::now());
                     }
                     Ok(AcquireOutcome::OutOfDate) => {
                         ctx.swapchain_dirty = true;
@@ -1584,11 +2592,21 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                             .resize
                             .mark_out_of_date(unbound_platform::Extent::new(width, height));
                     }
+                    Err(ref err) if is_device_lost(err) => {
+                        eprintln!("[unbound-app] Shared GPU device lost during acquire on {id:?}");
+                        ctx.frame_dropped = true;
+                        device_lost = true;
+                    }
                     _ => {
                         ctx.frame_dropped = true;
                     }
                 }
             }
+        }
+
+        if device_lost {
+            self.invalidate_all_windows_bc7();
+            return Flow::Continue;
         }
 
         let keep_animating =
@@ -1963,5 +2981,397 @@ mod tests {
         assert!(!win.theme_driver.is_active());
         assert_eq!(win.theme_driver.target_kind(), ThemeKind::Light);
         assert_eq!(win.theme_driver.progress(), 1.0);
+    }
+
+    #[test]
+    fn ghost_and_floating_island_lifecycle_and_focus_isolation() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Hover Ghost", 280, 160).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+        assert_eq!(coord.window_role(WindowId(2)), Some(WindowRole::Ghost));
+        assert_eq!(coord.window_visible(WindowId(2)), Some(false));
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        // 无激活显示幽灵窗与模拟焦点事件均不得抢占主窗口焦点。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_visible_no_activate(WindowId(2), true);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert_eq!(coord.window_visible(WindowId(2)), Some(true));
+        coord.simulate_window_focus_event(WindowId(2), true);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        // 注册悬浮浮岛同样不抢占主窗口焦点。
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Media Island", 320, 88).build();
+        coord.register_headless_floating_window(WindowId(3), island_cfg);
+        assert_eq!(
+            coord.window_role(WindowId(3)),
+            Some(WindowRole::FloatingIsland)
+        );
+        assert_eq!(coord.window_visible(WindowId(3)), Some(true));
+        coord.simulate_window_focus_event(WindowId(3), true);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+    }
+
+    #[test]
+    fn floating_hot_toggles_preserve_generation_and_never_recreate() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg);
+
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Island", 300, 100).build();
+        coord.register_headless_floating_window(WindowId(2), island_cfg);
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+
+        let rt = &mut coord.registry_mut().get_mut(WindowId(1)).unwrap().runtime;
+        rt.set_window_click_through(WindowId(2), true);
+        rt.set_window_always_on_top(WindowId(2), false);
+        rt.set_window_visible_no_activate(WindowId(2), false);
+        let target_rect = ScreenRect::new(200, 150, 340, 120);
+        rt.set_window_outer_rect(WindowId(2), target_rect);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+
+        // 全部运行期热切换不得销毁重建窗口（generation 保持为 1）。
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+        let policy = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(policy.click_through);
+        assert!(!policy.always_on_top);
+        assert_eq!(coord.window_visible(WindowId(2)), Some(false));
+        assert_eq!(coord.window_outer_rect(WindowId(2)), Some(target_rect));
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+    }
+
+    #[test]
+    fn multi_monitor_negative_coordinates_edge_snap_and_clamping() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.set_headless_work_areas(vec![
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(0, 0, 1920, 1080),
+                work_area: ScreenRect::new(0, 0, 1920, 1040),
+                scale_factor: 1.0,
+                is_primary: true,
+            },
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(-1920, 0, 1920, 1080),
+                work_area: ScreenRect::new(-1920, 0, 1920, 1040),
+                scale_factor: 1.25,
+                is_primary: false,
+            },
+        ]);
+        coord.register_headless_window(WindowId(1), primary_cfg);
+
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Left Monitor Island", 300, 100).build();
+        coord.register_headless_floating_window(WindowId(2), island_cfg);
+
+        // 越界矩形应钳制到负坐标辅屏工作区内。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_outer_rect(WindowId(2), ScreenRect::new(-2100, -50, 300, 100));
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert_eq!(
+            coord.window_outer_rect(WindowId(2)),
+            Some(ScreenRect::new(-1920, 0, 300, 100))
+        );
+
+        // 靠近负坐标辅屏左边缘（阈值 24px 内）应自动磁吸至 x = -1920 并记录相对锚点。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .snap_floating_window(WindowId(2), ScreenRect::new(-1908, 220, 300, 100), 24);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        let snapped = coord.window_outer_rect(WindowId(2)).unwrap();
+        assert_eq!(snapped.x, -1920);
+        assert!(coord.last_snap_anchor(WindowId(2)).is_some());
+    }
+
+    #[test]
+    fn closing_last_standard_window_cascade_closes_floating_windows_and_never_promotes_ghost() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg.clone());
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Ghost", 240, 120).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+        coord.register_headless_window(WindowId(3), primary_cfg);
+        let (island_cfg, _) = crate::FloatingWindowSpec::floating_island("Island", 260, 80).build();
+        coord.register_headless_floating_window(WindowId(4), island_cfg);
+
+        // 关闭主 Standard 窗口 1 时，绝不将 Ghost(2) 提升为主窗口，而应提升 Standard(3)。
+        assert!(coord.close_window(WindowId(1)));
+        assert_eq!(coord.registry().primary(), Some(WindowId(3)));
+
+        // 关闭最后一个 Standard 窗口 3 时，应级联关闭剩余全部 Ghost(2) 与 FloatingIsland(4)。
+        assert!(coord.close_window(WindowId(3)));
+        assert!(coord.registry().is_empty());
+        assert_eq!(coord.registry().primary(), None);
+        let closed_reqs = coord.take_window_close_requests();
+        assert!(closed_reqs.contains(&WindowId(2)));
+        assert!(closed_reqs.contains(&WindowId(4)));
+    }
+
+    #[test]
+    fn floating_capabilities_degrade_deterministically_across_backends() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Ghost", 260, 140).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+
+        // Win32 全量能力。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        let win32 = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(
+            win32.no_activate && win32.always_on_top && win32.skip_taskbar && win32.click_through
+        );
+
+        // X11 默认能力。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::x11_default());
+        let x11 = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(x11.always_on_top && x11.skip_taskbar && x11.click_through);
+
+        // Wayland xdg_toplevel 回退能力：保留 click_through，降级 always_on_top 与 no_activate。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::wayland_xdg_fallback());
+        let wayland = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(!wayland.always_on_top);
+        assert!(!wayland.no_activate);
+        assert!(wayland.click_through);
+    }
+
+    #[test]
+    fn cross_window_drag_maps_coordinates_routes_target_and_handles_tear_out() {
+        struct EmptyApp;
+        impl Application for EmptyApp {
+            type State = ();
+            fn init(&mut self, _ctx: &mut crate::AppContext) {}
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+            fn view(&mut self, _state: &Self::State, _view: &mut crate::ViewBuilder<'_>) {}
+        }
+
+        let primary_cfg = WindowConfig {
+            title: "Primary".to_owned(),
+            width: 400,
+            height: 300,
+            ..WindowConfig::default()
+        };
+        let secondary_cfg = WindowConfig {
+            title: "Secondary".to_owned(),
+            width: 400,
+            height: 300,
+            ..WindowConfig::default()
+        };
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |_: WindowId, _: &WindowConfig| {
+                EmptyApp
+            });
+
+        let win_a = WindowId(1);
+        let win_b = WindowId(2);
+        coord.register_headless_window(win_a, primary_cfg);
+        coord.register_headless_window(win_b, secondary_cfg);
+
+        // 窗口 A 位于 (0, 0) 1x 缩放；窗口 B 位于 (500, 100) 2x 缩放。
+        assert!(coord.set_window_screen_origin(win_a, (0, 0)));
+        assert!(coord.set_window_screen_origin(win_b, (500, 100)));
+        assert!(coord.set_window_os_scale(win_b, 2.0));
+
+        // 统一透传减弱动画策略到全部窗口。
+        coord.set_motion_policy_all(unbound_anim::MotionPolicy::reduced());
+        assert!(
+            coord
+                .registry()
+                .get(win_a)
+                .unwrap()
+                .runtime
+                .motion_policy()
+                .reduced_motion
+        );
+        assert!(
+            coord
+                .registry()
+                .get(win_b)
+                .unwrap()
+                .runtime
+                .motion_policy()
+                .reduced_motion
+        );
+
+        let pane_b = unbound_widgets::DockCandidatePane::new(
+            20,
+            unbound_math::Rect::new(0.0, 0.0, 200.0, 150.0),
+        );
+        let window_panes = vec![(win_b, vec![pane_b])];
+
+        let mut overlay = unbound_widgets::DockOverlayState::new();
+        overlay.begin_drag(
+            unbound_widgets::DockDragSource::Tab {
+                window_id: win_a.0,
+                pane_id: 10,
+                tab_id: 1,
+            },
+            Vec2::new(50.0, 50.0),
+        );
+
+        // 从窗口 A 拖到相对 A 的 (700, 250) -> 屏幕物理 (700, 250) -> 落在窗口 B 内 (100, 75) 逻辑坐标。
+        let route = coord
+            .route_cross_window_drag(
+                win_a,
+                Vec2::new(700.0, 250.0),
+                &mut overlay,
+                &window_panes,
+                1.0 / 120.0,
+                "Inspector",
+            )
+            .expect("route");
+        assert_eq!(route.target_window, Some(win_b));
+        assert_eq!(route.target_local_logical, Some(Vec2::new(100.0, 75.0)));
+        assert!(!route.tear_out);
+        assert!(route.target.is_some());
+        assert_eq!(
+            route.target.as_ref().unwrap().kind,
+            unbound_widgets::DockDropKind::Center
+        );
+        // 减弱动画模式下单步即刻收敛到 1.0，零中间帧闪烁。
+        assert_eq!(overlay.preview_opacity(), 1.0);
+        assert!(!route.proxy.as_ref().unwrap().detached);
+
+        // 拖到两窗之外的自由空间 (450, 50) -> 进入 TearOut，无宿主预览框，代理标记 detached。
+        let tear = coord
+            .route_cross_window_drag(
+                win_a,
+                Vec2::new(450.0, 50.0),
+                &mut overlay,
+                &window_panes,
+                1.0 / 120.0,
+                "Inspector",
+            )
+            .expect("tear out route");
+        assert_eq!(tear.target_window, None);
+        assert!(tear.tear_out);
+        assert!(tear.target.is_none());
+        assert!(tear.proxy.as_ref().unwrap().detached);
+    }
+
+    #[test]
+    fn view_builder_docking_overlay_is_non_interactive_and_preserves_focus() {
+        struct OverlayTestApp {
+            overlay: unbound_widgets::DockOverlayState,
+        }
+        impl Application for OverlayTestApp {
+            type State = bool;
+
+            fn init(&mut self, _ctx: &mut crate::AppContext) -> Self::State {
+                true
+            }
+
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+
+            fn view(&mut self, _state: &Self::State, ui: &mut crate::ViewBuilder<'_>) {
+                // 确认 ViewContext 已透传 AppContext 的 MotionPolicy。
+                assert!(ui.ctx.motion_policy.reduced_motion);
+                ui.docking_overlay(
+                    9001,
+                    &self.overlay,
+                    unbound_widgets::DockOverlayTokens::standard(),
+                );
+            }
+        }
+
+        let win = unbound_widgets::DockCandidateWindow::new(
+            1,
+            unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            vec![unbound_widgets::DockCandidatePane::new(
+                10,
+                unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            )],
+        );
+        let mut overlay = unbound_widgets::DockOverlayState::new();
+        overlay.begin_drag(
+            unbound_widgets::DockDragSource::Tab {
+                window_id: 2,
+                pane_id: 99,
+                tab_id: 5,
+            },
+            Vec2::new(200.0, 150.0),
+        );
+        overlay.update(
+            Vec2::new(200.0, 150.0),
+            &[win],
+            1.0 / 120.0,
+            unbound_anim::MotionPolicy::reduced(),
+        );
+
+        let mut rt = AppRuntime::new(OverlayTestApp { overlay }, Vec2::new(400.0, 300.0));
+        rt.set_reduced_motion(true);
+        let _ = rt.frame(1.0 / 60.0);
+
+        // 停靠预览已发射图元，但不抢占焦点、不加入覆盖层轻关闭栈、且点击命中为空。
+        assert!(!rt.scene().primitives.is_empty());
+        assert_eq!(rt.focus().focused(), None);
+        assert!(rt.scene().regions.is_empty());
+        assert!(rt.overlays().stack().is_empty());
     }
 }

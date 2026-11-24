@@ -32,6 +32,7 @@ fn main() {
         "catalog",
         "column_header_bar",
         "diff",
+        "docking_overlay",
         "ergonomics",
         "primitive",
         "shell",
