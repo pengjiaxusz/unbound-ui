@@ -788,7 +788,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
     fn next_wake(&self) -> Option<Instant> {
         self.runtime
             .next_wake_in()
-            .map(|delay| Instant::now() + delay)
+            .map(|delay| self.last_frame + delay)
     }
 
     fn take_popup_sync_requests(&mut self) -> Vec<(u64, PopupWindowConfig)> {
@@ -1229,7 +1229,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         let (width, height) = (size.width.max(1), size.height.max(1));
         let os_scale = self.sync_os_scale(window);
         let now = Instant::now();
-        let dt = (now - self.last_frame).as_secs_f32().min(0.1);
+        let raw_dt = now.saturating_duration_since(self.last_frame).as_secs_f32();
+        let dt = raw_dt.min(0.1);
         self.last_frame = now;
 
         // 1. 在构建场景与求解布局*之前*先检查并重建交换链（对齐 `Showcase::frame_impl`）：
@@ -1282,7 +1283,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             callback(&mut self.runtime);
         }
 
-        let _ = self.runtime.tick(dt);
+        let _ = self.runtime.tick_with_clock(dt, raw_dt);
         let report = self.runtime.frame(0.0);
         if self.drain_runtime_commands(state, window) == Flow::Exit {
             return Flow::Exit;

@@ -57,7 +57,10 @@ impl Application for GalleryApp {
         ctx: &mut AppContext,
     ) -> EventOutcome {
         match event {
-            AppEvent::PointerMove { pos, .. } => self.pointer_move(pos),
+            AppEvent::PointerMove { pos, .. } => {
+                self.pointer_move(pos);
+                self.sync_tooltip_hover(ctx.hovered, ctx);
+            }
             AppEvent::PointerDown {
                 pos,
                 target,
@@ -162,8 +165,10 @@ impl Application for GalleryApp {
             AppEvent::Custom { id, .. } if unbound_app::is_mica_ready_event(id) => {
                 self.state.bump();
             }
-            AppEvent::Timer { .. }
-            | AppEvent::FileHover(_)
+            AppEvent::Timer { token } => {
+                let _ = self.handle_tooltip_timer(token);
+            }
+            AppEvent::FileHover(_)
             | AppEvent::FileDrop(_)
             | AppEvent::FileHoverCancelled
             | AppEvent::ExternalFileDragFinished(_)
@@ -183,6 +188,7 @@ impl Application for GalleryApp {
         if self.take_blur_request() {
             ctx.request_blur = true;
         }
+        self.sync_tooltip_timer(ctx);
         // 外壳会绘制被请求的每一帧；`view` 根据交互快照决定是否需要重建场景。
         //
         EventOutcome::new(DirtyFlags::LAYOUT)
