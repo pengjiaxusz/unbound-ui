@@ -294,6 +294,10 @@ pub struct GalleryApp {
     clipboard_has_text: bool,
     /// 顶栏工具按钮与页脚入口的悬停 Tooltip 延迟状态机。
     tooltip: unbound_widgets::tooltip::TooltipState,
+    /// 已向运行时 `TimerQueue` 注册的 Tooltip 一次性延迟定时器令牌（ADR-0035）。
+    tooltip_timer: Option<unbound_app::TimerToken>,
+    /// 当前已调度定时器对应的悬停目标节点键。
+    tooltip_timer_anchor: Option<u64>,
 }
 
 /// 等待宿主执行的剪贴板动作。
@@ -416,7 +420,10 @@ impl GalleryApp {
             pending_clipboard: None,
             drag_editor: None,
             clipboard_has_text: false,
-            tooltip: unbound_widgets::tooltip::TooltipState::new(),
+            tooltip: unbound_widgets::tooltip::TooltipState::new()
+                .with_warmup_ms(unbound_widgets::tooltip::TOOLTIP_WARMUP_MS),
+            tooltip_timer: None,
+            tooltip_timer_anchor: None,
         }
     }
 
@@ -1475,6 +1482,88 @@ impl GalleryApp {
         nav_moving || demo_moving || tooltip_changed || tooltip_pending
     }
 
+    /// 根据最新悬停节点同步壳层 Tooltip 延迟状态机与 `TimerQueue` 单次唤醒定时器（ADR-0035）。
+    pub fn sync_tooltip_hover(&mut self, hovered: Option<u64>, ctx: &mut unbound_app::AppContext) {
+        let tooltip_hover = if !self.state.search.focused
+            && !self.state.lang_dropdown_open
+            && !self.state.zoom_dropdown_open
+            && !self.editor_menu_open()
+        {
+            tooltip_target_of(
+                &self.state,
+                &self.layout,
+                &self.nav_layout,
+                self.page_layout.as_ref(),
+                self.window_maximized,
+                &mut self.labels,
+                hovered,
+            )
+            .and(hovered)
+        } else {
+            None
+        };
+        let tooltip_desc = unbound_widgets::tooltip::TooltipDesc::new(
+            Rect::ZERO,
+            self.layout.viewport,
+            Vec2::ZERO,
+        );
+        if self.tooltip.update(&tooltip_desc, tooltip_hover, 0.0) {
+            self.state.bump();
+        }
+        self.sync_tooltip_timer(ctx);
+    }
+
+    /// 同步当前 Tooltip 延迟状态与 `AppContext` 一次性定时器。
+    pub fn sync_tooltip_timer(&mut self, ctx: &mut unbound_app::AppContext) {
+        let pending = self
+            .tooltip
+            .remaining_delay_ms()
+            .filter(|ms| *ms > 0.0)
+            .zip(self.tooltip.hovered_anchor());
+        match pending {
+            Some((remaining_ms, anchor)) => {
+                if self.tooltip_timer_anchor != Some(anchor) || self.tooltip_timer.is_none() {
+                    if let Some(old) = self.tooltip_timer.take() {
+                        ctx.cancel_timer(old);
+                    }
+                    let delay = std::time::Duration::from_millis(remaining_ms.ceil().max(1.0) as u64);
+                    let token = ctx.set_timeout(delay, |token| unbound_app::AppEvent::Timer { token });
+                    self.tooltip_timer = Some(token);
+                    self.tooltip_timer_anchor = Some(anchor);
+                }
+            }
+            None => {
+                if let Some(old) = self.tooltip_timer.take() {
+                    ctx.cancel_timer(old);
+                }
+                self.tooltip_timer_anchor = None;
+            }
+        }
+    }
+
+    /// 处理到期的一次性 Tooltip 延迟定时器并立即点亮气泡。
+    pub fn handle_tooltip_timer(&mut self, token: unbound_app::TimerToken) -> bool {
+        if self.tooltip_timer != Some(token) {
+            return false;
+        }
+        self.tooltip_timer = None;
+        self.tooltip_timer_anchor = None;
+        let remaining_ms = self.tooltip.remaining_delay_ms().unwrap_or(0.0);
+        let anchor = self.tooltip.hovered_anchor();
+        let tooltip_desc = unbound_widgets::tooltip::TooltipDesc::new(
+            Rect::ZERO,
+            self.layout.viewport,
+            Vec2::ZERO,
+        );
+        if self
+            .tooltip
+            .update(&tooltip_desc, anchor, remaining_ms + 1.0)
+        {
+            self.state.bump();
+        }
+        true
+    }
+
     /// 移动指针（逻辑像素）。
     ///
     /// 仅外壳正在运行的拖拽会跟随指针；悬停本身由运行时负责，此处无需路由。
@@ -1697,6 +1786,7 @@ impl GalleryApp {
     /// 否则外壳会一直保留幽灵拖拽，直到用户恰好点击别处。
     ///
     pub fn cancel_interactions(&mut self) {
+        self.tooltip.hide();
         if self.nav_view.handle_pointer_up(self.pointer) {
             self.state.bump();
         }
@@ -1724,6 +1814,7 @@ impl GalleryApp {
 
     /// 外壳上的滚轮事件。
     pub fn wheel(&mut self, delta_y: f32) {
+        self.tooltip.hide();
         // 菜单打开时滚轮只负责关闭菜单：不滚动其下方的页面，也不进入任何拖拽。
         if self.menu.is_open() {
             self.close_editor_menu(unbound_widgets::context_menu::ContextClose::Scroll);
@@ -1924,6 +2015,7 @@ impl GalleryApp {
     /// `Tab` 绝不会到达此方法——运行时的 `FocusManager` 在派发前已步进焦点顺序。
     pub fn key(&mut self, key: &PlatformKey, modifiers: Modifiers, focused: Option<u64>) {
         use unbound_widgets::context_menu::ContextKey;
+        self.tooltip.hide();
 
         if self.menu.is_open() {
             let context_key = match key {

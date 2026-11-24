@@ -34,6 +34,9 @@ use crate::{ControlState, WidgetDesc, WidgetOutput};
 
 /// 工具提示出现前指针必须停留的时长（毫秒）。
 pub const TOOLTIP_DELAY_MS: f32 = 400.0;
+/// 上一个工具提示关闭后的悬停预热窗口（毫秒，ADR-0035）。
+/// 在此窗口内移至相邻触发器时跳过常规延迟立即显示。
+pub const TOOLTIP_WARMUP_MS: f32 = 300.0;
 /// 自动换行后工具提示的最大宽度。对齐 WinUI `ToolTipMaxWidth = 320`。
 pub const TOOLTIP_MAX_WIDTH: f32 = 320.0;
 /// 工具提示轻量阴影模糊半径（逻辑像素），轻于 `Popover`（24px）与 `HoverCard`（22px）。
@@ -562,12 +565,24 @@ pub struct TooltipState {
     hovered_anchor: Option<u64>,
     now_ms: f32,
     deadline: Option<TooltipDelay>,
+    /// 悬停预热窗口时长（毫秒）；大于 0 时支持相邻触发器连续浏览免延迟（ADR-0035）。
+    warmup_ms: f32,
+    /// 最近一次已显示工具提示关闭的时钟值（毫秒）。
+    last_hidden_ms: Option<f32>,
 }
 
 impl TooltipState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 启用悬停预热窗口（ADR-0035）：上一个工具提示关闭后 `warmup_ms` 毫秒内
+    /// 移至相邻触发器时跳过常规延迟立即显示。
+    #[must_use]
+    pub fn with_warmup_ms(mut self, warmup_ms: f32) -> Self {
+        self.warmup_ms = warmup_ms.max(0.0);
+        self
     }
 
     /// 气泡当前是否处于显示状态。
@@ -582,10 +597,37 @@ impl TooltipState {
         self.hovered_ms
     }
 
+    /// 当前追踪的悬停锚点节点。
+    #[must_use]
+    pub const fn hovered_anchor(&self) -> Option<u64> {
+        self.hovered_anchor
+    }
+
     /// 若指针正停留在触发器上，返回已注册的截止时间。
     #[must_use]
     pub const fn delay(&self) -> Option<TooltipDelay> {
         self.deadline
+    }
+
+    /// 若气泡正处于等待延迟状态，返回距离显示的剩余毫秒数。
+    #[must_use]
+    pub fn remaining_delay_ms(&self) -> Option<f32> {
+        if self.visible {
+            return None;
+        }
+        self.deadline.map(|d| d.remaining(self.now_ms))
+    }
+
+    /// 判断 `now_ms` 时刻是否处于悬停预热窗口内。
+    fn in_warmup(&self, now_ms: f32) -> bool {
+        if self.warmup_ms <= 0.0 {
+            return false;
+        }
+        if self.visible {
+            return true;
+        }
+        self.last_hidden_ms
+            .is_some_and(|hidden_at| now_ms >= hidden_at && (now_ms - hidden_at) <= self.warmup_ms)
     }
 
     /// 在调用方时钟下为 `hovered` 注册悬停延迟。
@@ -597,13 +639,21 @@ impl TooltipState {
         match hovered {
             Some(node) => {
                 if self.hovered_anchor != Some(node) {
+                    let warm = self.in_warmup(now_ms);
+                    if self.visible {
+                        self.last_hidden_ms = Some(now_ms);
+                    }
                     self.hovered_anchor = Some(node);
                     self.hovered_ms = 0.0;
-                    self.visible = false;
-                    self.deadline = Some(TooltipDelay::start(now_ms, desc.delay_ms));
+                    let delay = if warm { 0.0 } else { desc.delay_ms };
+                    self.visible = delay <= 0.0;
+                    self.deadline = Some(TooltipDelay::start(now_ms, delay));
                 }
             }
             None => {
+                if self.visible {
+                    self.last_hidden_ms = Some(now_ms);
+                }
                 self.hovered_anchor = None;
                 self.hovered_ms = 0.0;
                 self.deadline = None;
@@ -634,7 +684,8 @@ impl TooltipState {
     /// 为仅有增量而非帧时钟的调用方保留；内部驱动与定时器队列风格 API 相同的截止时间。
     ///
     /// `hovered` 为指针下的节点（未悬停任何节点时为 `None`）。移动到不同节点会重启计时器，
-    /// 从而防止扫过一排按钮时每个按钮都弹出气泡。返回可见性是否发生变化。
+    /// 从而防止扫过一排按钮时每个按钮都弹出气泡；启用悬停预热窗口且刚关闭/切换时立即显示。
+    /// 返回可见性是否发生变化。
     pub fn update(&mut self, desc: &TooltipDesc, hovered: Option<u64>, dt_ms: f32) -> bool {
         let dt = dt_ms.max(0.0);
         let now = self.now_ms + dt;
@@ -642,12 +693,20 @@ impl TooltipState {
         match hovered {
             Some(node) if self.hovered_anchor == Some(node) => {}
             Some(node) => {
+                let warm = self.in_warmup(now);
+                if self.visible {
+                    self.last_hidden_ms = Some(now);
+                }
                 self.hovered_anchor = Some(node);
                 self.hovered_ms = 0.0;
+                let delay = if warm { 0.0 } else { desc.delay_ms };
                 // 指针在本次 tick 前已停留了 `dt`，因此截止时间从过去一个增量处开始。
-                self.deadline = Some(TooltipDelay::start(now - dt, desc.delay_ms));
+                self.deadline = Some(TooltipDelay::start(now - dt, delay));
             }
             None => {
+                if self.visible {
+                    self.last_hidden_ms = Some(now);
+                }
                 self.hovered_anchor = None;
                 self.hovered_ms = 0.0;
                 self.deadline = None;
@@ -659,8 +718,11 @@ impl TooltipState {
         self.poll(now)
     }
 
-    /// 立即隐藏气泡（例如发生按下事件时）。
+    /// 立即隐藏气泡（例如发生按下、滚轮或按键事件时）。
     pub fn hide(&mut self) {
+        if self.visible {
+            self.last_hidden_ms = Some(self.now_ms);
+        }
         self.visible = false;
         self.hovered_ms = 0.0;
         self.deadline = None;
@@ -912,5 +974,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn warmup_window_skips_delay_for_adjacent_trigger_and_expires() {
+        let desc = desc();
+        let mut state = TooltipState::new().with_warmup_ms(TOOLTIP_WARMUP_MS);
+        // 首次悬停需等待完整 400ms。
+        assert!(!state.update(&desc, Some(7), 200.0));
+        assert!(!state.visible());
+        assert_eq!(state.remaining_delay_ms(), Some(200.0));
+        assert!(state.update(&desc, Some(7), 200.0));
+        assert!(state.visible());
+        assert_eq!(state.remaining_delay_ms(), None);
+
+        // 离开触发器后 150ms 内移至相邻触发器：命中 300ms 预热窗口，立即显示。
+        assert!(state.update(&desc, None, 16.0));
+        assert!(!state.visible());
+        assert!(state.update(&desc, Some(8), 150.0));
+        assert!(state.visible());
+
+        // 离开触发器并超过 300ms 后移至新触发器：预热窗口失效，恢复 400ms 延迟。
+        assert!(state.update(&desc, None, 16.0));
+        assert!(!state.visible());
+        assert!(!state.update(&desc, None, 350.0));
+        assert!(!state.update(&desc, Some(9), 16.0));
+        assert!(!state.visible());
+        assert!(state.update(&desc, Some(9), 390.0));
+        assert!(state.visible());
     }
 }

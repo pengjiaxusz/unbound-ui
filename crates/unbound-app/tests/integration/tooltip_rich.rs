@@ -167,3 +167,137 @@ fn tooltip_with_mounts_tooltip_overlay_and_keeps_pointer_passthrough_and_non_foc
         "tooltip overlay should be pruned when its anchor vanishes"
     );
 }
+
+// --- ADR-0035: 运行时全局托管 ToolTip（tooltip_for / tooltip_for_with）集成测试 ---
+
+const MANAGED_BTN_A: u64 = 3101;
+const MANAGED_BTN_B: u64 = 3102;
+
+struct ManagedTooltipState {
+    rich_builds: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+#[derive(Default)]
+struct ManagedTooltipApp;
+
+impl Application for ManagedTooltipApp {
+    type State = ManagedTooltipState;
+
+    fn init(&mut self, _ctx: &mut AppContext) -> Self::State {
+        ManagedTooltipState {
+            rich_builds: std::rc::Rc::new(std::cell::Cell::new(0)),
+        }
+    }
+
+    fn reduce(
+        &mut self,
+        _state: &mut Self::State,
+        _event: AppEvent,
+        _ctx: &mut AppContext,
+    ) -> EventOutcome {
+        EventOutcome::new(DirtyFlags::NONE)
+    }
+
+    fn view(&mut self, state: &Self::State, view: &mut ViewBuilder) {
+        let viewport = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let rect_a = Rect::new(80.0, 200.0, 100.0, 32.0);
+        let rect_b = Rect::new(220.0, 200.0, 100.0, 32.0);
+
+        let desc_a = ButtonDesc::new(rect_a, "Action A");
+        let ctrl_a = view.ctx.control_state(MANAGED_BTN_A, false, false);
+        view.push(
+            MANAGED_BTN_A,
+            emit_button(MANAGED_BTN_A, &desc_a, ctrl_a, &mut []),
+        );
+
+        let desc_b = ButtonDesc::new(rect_b, "Action B");
+        let ctrl_b = view.ctx.control_state(MANAGED_BTN_B, false, false);
+        view.push(
+            MANAGED_BTN_B,
+            emit_button(MANAGED_BTN_B, &desc_b, ctrl_b, &mut []),
+        );
+
+        view.tooltip_for(
+            MANAGED_BTN_A,
+            TooltipDesc::labeled(rect_a, viewport, "Tooltip A"),
+        );
+
+        let builds = std::rc::Rc::clone(&state.rich_builds);
+        let rich_desc = TooltipDesc::rich(rect_b, viewport, Vec2::new(140.0, 32.0))
+            .with_label("Tooltip B");
+        view.tooltip_for_with(MANAGED_BTN_B, rich_desc, move |tip| {
+            builds.set(builds.get() + 1);
+            tip.text_primary(ui_key!("managed_b_title"), "Tooltip B", 12.0, 600);
+        });
+    }
+}
+
+#[test]
+fn managed_tooltip_waits_for_timer_wake_uses_warmup_and_builds_rich_lazily() {
+    let mut rt = AppRuntime::new(ManagedTooltipApp, Vec2::new(800.0, 600.0));
+    rt.frame(0.0);
+
+    // 初始未悬停：不显示任何托管 Tooltip，且富内容闭包未执行。
+    assert_eq!(rt.active_managed_tooltip(), None);
+    assert_eq!(rt.state().rich_builds.get(), 0);
+    assert!(rt.next_wake_in().is_none());
+
+    // 悬停到按钮 A：注册 400ms 一次性定时器，尚未显示。
+    rt.pointer_move(Vec2::new(120.0, 216.0));
+    assert_eq!(rt.active_managed_tooltip(), None);
+    let wake = rt
+        .next_wake_in()
+        .expect("hovering a managed tooltip anchor must schedule TimerQueue wake");
+    assert!(wake >= std::time::Duration::from_millis(390));
+    assert!(wake <= std::time::Duration::from_millis(410));
+
+    // 单次真实时钟唤醒推进 400ms：即使动画步长钳制为 100ms，定时器也应一次精确触发。
+    let dirty = rt.tick_with_clock(0.1, 0.4);
+    assert_ne!(dirty, DirtyFlags::NONE);
+    assert_eq!(rt.active_managed_tooltip(), Some(MANAGED_BTN_A));
+    rt.frame(0.0);
+    assert!(rt
+        .overlays()
+        .stack()
+        .entries()
+        .iter()
+        .any(|e| e.kind == OverlayKind::Tooltip && e.anchor == Some(MANAGED_BTN_A)));
+    assert_eq!(rt.state().rich_builds.get(), 0);
+
+    // 在 300ms 悬停预热窗口内直接移到按钮 B：免延迟立即切换，且富内容闭包按需执行。
+    rt.pointer_move(Vec2::new(260.0, 216.0));
+    assert_eq!(rt.active_managed_tooltip(), Some(MANAGED_BTN_B));
+    rt.frame(0.0);
+    assert_eq!(rt.state().rich_builds.get(), 1);
+
+    // 滚轮滚动或鼠标按下立即隐藏。
+    rt.wheel(Vec2::new(260.0, 216.0), Vec2::new(0.0, -1.0));
+    assert_eq!(rt.active_managed_tooltip(), None);
+}
+
+#[test]
+fn managed_tooltip_keyboard_focus_shows_immediately_and_escape_suppresses_reopen() {
+    let mut rt = AppRuntime::new(ManagedTooltipApp, Vec2::new(800.0, 600.0));
+    rt.frame(0.0);
+
+    // Tab 键盘导航聚焦按钮 A：0ms 立即显示。
+    rt.key(AppKey::Tab, true, Modifiers::default());
+    assert_eq!(rt.context().focused, Some(MANAGED_BTN_A));
+    assert!(rt.context().focus_visible);
+    assert_eq!(rt.active_managed_tooltip(), Some(MANAGED_BTN_A));
+
+    // 按任意操作键关闭后，对当前焦点锚点抑制重弹，直到焦点移走。
+    rt.key(AppKey::Enter, true, Modifiers::default());
+    assert_eq!(rt.active_managed_tooltip(), None);
+    rt.frame(0.0);
+    assert_eq!(rt.active_managed_tooltip(), None);
+
+    // Tab 切换到按钮 B：新焦点锚点立即显示。
+    rt.key(AppKey::Tab, true, Modifiers::default());
+    assert_eq!(rt.context().focused, Some(MANAGED_BTN_B));
+    assert_eq!(rt.active_managed_tooltip(), Some(MANAGED_BTN_B));
+
+    // 窗口失焦立即隐藏。
+    rt.set_window_focused(false);
+    assert_eq!(rt.active_managed_tooltip(), None);
+}
