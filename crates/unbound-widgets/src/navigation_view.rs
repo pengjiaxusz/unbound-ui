@@ -3481,7 +3481,7 @@ mod tests {
             .primitives
             .iter()
             .find(|p| {
-                p.prim_type() == PrimType::Rect
+                p.prim_type() == PrimType::RoundedRect
                     && (p.size[0] - NAVIGATION_VIEW_TOP_INDICATOR_WIDTH).abs() < 1e-3
                     && (p.size[1] - NAVIGATION_VIEW_TOP_INDICATOR_HEIGHT).abs() < 1e-3
                     && p.opacity() > 0.5
@@ -3558,7 +3558,7 @@ mod tests {
                 .primitives
                 .iter()
                 .filter(|p| {
-                    matches!(p.prim_type(), PrimType::Rect | PrimType::Curve)
+                    matches!(p.prim_type(), PrimType::RoundedRect | PrimType::Curve)
                         && p.local_pos[0] >= icon_rect.origin.x
                         && p.local_pos[0] <= icon_rect.max().x
                         && p.local_pos[1] >= icon_rect.origin.y
