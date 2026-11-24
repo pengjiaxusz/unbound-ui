@@ -1698,7 +1698,7 @@ impl NavigationViewDesc {
             if self.is_pane_toggle_button_visible {
                 layout.pane_toggle_rect = Some(Rect::new(
                     active_pane_rect.origin.x + NAVIGATION_VIEW_PANE_PADDING,
-                    header_y + 40.0,
+                    cursor_y + NAVIGATION_VIEW_PANE_HEADER_TOP_INSET,
                     40.0,
                     36.0,
                 ));
@@ -2020,7 +2020,13 @@ impl NavigationViewDesc {
 
         let mut overflow_items: Vec<NavigationViewItem> = Vec::new();
         let estimate = |item: &NavigationViewItem| -> f32 {
-            (item.content.chars().count() as f32 * 8.0 + 48.0).clamp(72.0, 180.0)
+            let chars = item.content.chars().count() as f32;
+            if item.icon.is_some() {
+                // WinUI 顶部带图标项：左 12 + 图标 16 + 间距 8 + 文字估算 + 右 13（"Home" 恰为 85px）。
+                (chars * 9.0 + 49.0).clamp(72.0, 180.0)
+            } else {
+                (chars * 9.0 + 24.0).clamp(56.0, 180.0)
+            }
         };
         let items: Vec<&NavigationViewItem> = self
             .menu_items
@@ -2814,7 +2820,7 @@ fn emit_navigation_row(
             let quads = text_ctx.shape_line_styled(
                 content,
                 label_r,
-                12.0,
+                14.0,
                 600,
                 None,
                 AlignX::Left,
@@ -2906,7 +2912,8 @@ fn emit_navigation_row(
             );
         }
         NavigationViewRowKind::Settings => {
-            let settings_icon = NavigationViewIcon::Shell(ShellIcon::Settings);
+            // 优先使用平台符号字体齿轮字形（U+E713），无符号字体时由 Glyph 分支优雅回退到 8 齿 ShellIcon::Settings。
+            let settings_icon = NavigationViewIcon::Glyph("\u{E713}".into());
             emit_interactive_nav_item(
                 parent_node,
                 row.rect,
@@ -2929,6 +2936,28 @@ fn emit_navigation_row(
                 out,
             );
         }
+    }
+}
+
+/// 将常见 WinUI 3 符号字体 PUA 码点映射为内置矢量图标，供无符号字体环境（如 Linux）优雅回退。
+fn fallback_shell_icon_for_glyph(glyph: &str) -> Option<ShellIcon> {
+    match glyph {
+        "\u{E80F}" => Some(ShellIcon::Home),
+        "\u{E713}" => Some(ShellIcon::Settings),
+        "\u{E8F1}" => Some(ShellIcon::Layers),
+        "\u{E908}" | "\u{E9D2}" => Some(ShellIcon::Chart),
+        "\u{E8A5}" | "\u{E7C3}" => Some(ShellIcon::Documents),
+        "\u{E8B7}" => Some(ShellIcon::Folder),
+        "\u{E8E5}" => Some(ShellIcon::FolderOpen),
+        "\u{E787}" => Some(ShellIcon::Calendar),
+        "\u{E721}" => Some(ShellIcon::Search),
+        "\u{E74E}" => Some(ShellIcon::Save),
+        "\u{E74D}" => Some(ShellIcon::Delete),
+        "\u{E71D}" => Some(ShellIcon::AllApps),
+        "\u{E712}" | "\u{E10C}" => Some(ShellIcon::Ellipsis),
+        "\u{E762}" => Some(ShellIcon::DetailsView),
+        "\u{E7B8}" => Some(ShellIcon::Package),
+        _ => None,
     }
 }
 
@@ -3040,16 +3069,30 @@ fn emit_interactive_nav_item(
                 );
             }
             NavigationViewIcon::Glyph(glyph) => {
-                let quads = text_ctx.shape_line_styled(
-                    glyph,
-                    Rect::new(icon_x, rect.origin.y, 16.0, rect.height()),
-                    16.0,
-                    400,
-                    None,
-                    AlignX::Center,
-                    AlignY::Middle,
-                );
-                glyphs(&quads, ink, z + 1, &mut out.primitives, &mut out.payloads);
+                if let Some(quads) = text_ctx.shape_symbol_glyph(glyph, icon_r, 16.0) {
+                    glyphs(&quads, ink, z + 1, &mut out.primitives, &mut out.payloads);
+                } else if let Some(fallback) = fallback_shell_icon_for_glyph(glyph) {
+                    emit_shell_icon_primitives(
+                        fallback,
+                        icon_r,
+                        ink,
+                        Token::SURFACE_RAISED,
+                        z + 1,
+                        &mut out.primitives,
+                        &mut out.payloads,
+                    );
+                } else {
+                    let quads = text_ctx.shape_line_styled(
+                        glyph,
+                        Rect::new(icon_x, rect.origin.y, 16.0, rect.height()),
+                        16.0,
+                        400,
+                        None,
+                        AlignX::Center,
+                        AlignY::Middle,
+                    );
+                    glyphs(&quads, ink, z + 1, &mut out.primitives, &mut out.payloads);
+                }
             }
         }
     }
@@ -3057,8 +3100,13 @@ fn emit_interactive_nav_item(
     // 文本标签、子项折叠箭头与徽标：随窗格展开进度平滑淡出/淡入并受窗格右缘裁剪，`t <= 0.01` 时完全不画。
     if !collapsed {
         let text_x = if icon.is_some() {
-            // WinUI 的图标盒 16px 起点 +12，文字从图标盒右侧再让 16px（实测文字左缘 = 行左 + 45）。
-            icon_x + 32.0
+            if is_top {
+                // WinUI 顶部模式图标盒 16px 后留 8px 间距（icon_x + 24.0），对齐 Home 与 Settings 文字左缘。
+                icon_x + 24.0
+            } else {
+                // WinUI 左侧模式图标盒 16px 后留 16px 间距（实测文字左缘 = 行左 + 45）。
+                icon_x + 32.0
+            }
         } else {
             rect.origin.x + 12.0 + indent
         };
@@ -3270,5 +3318,419 @@ impl UiWidget for NavigationViewDesc {
         let mut laid = self.clone();
         laid.rect = rect;
         emit_navigation_view(node, &laid, control, state, text_ctx).output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scroll::{scrollbar_track_node, ScrollbarAxis, SCROLLBAR_EDGE_INSET};
+    use unbound_text::{GlyphCache, SymbolFontPolicy, TextEngine};
+
+    #[test]
+    fn back_visible_false_places_pane_toggle_above_first_row_without_overlap() {
+        let rect = Rect::new(16.0, 16.0, 360.0, 280.0);
+        let items = vec![
+            NavigationViewMenuItem::header("Workspace"),
+            NavigationViewMenuItem::item(
+                NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+            ),
+        ];
+
+        // back_visible == false：汉堡按钮应落在 y=22，位于首行菜单之上且无重叠。
+        let desc_no_back = NavigationViewDesc::new(rect, items.clone())
+            .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1));
+        let mut state_no_back = NavigationViewState::from_desc(&desc_no_back);
+        state_no_back.set_animations_enabled(false, &desc_no_back);
+        let layout_no_back = desc_no_back.compute_layout(&state_no_back);
+
+        assert!(layout_no_back.back_button_rect.is_none());
+        let toggle_no_back = layout_no_back
+            .pane_toggle_rect
+            .expect("pane toggle rect must exist");
+        let first_row = layout_no_back
+            .rows
+            .first()
+            .expect("menu must contain at least one row");
+        assert!((toggle_no_back.origin.y - 22.0).abs() < 1e-3);
+        assert!(
+            toggle_no_back.origin.y < first_row.rect.origin.y,
+            "pane toggle y {} must be strictly above first row y {}",
+            toggle_no_back.origin.y,
+            first_row.rect.origin.y
+        );
+        assert!(
+            toggle_no_back.max().y <= first_row.rect.origin.y,
+            "pane toggle bottom {} must not overlap first row top {}",
+            toggle_no_back.max().y,
+            first_row.rect.origin.y
+        );
+
+        // back_visible == true：返回键占首槽（y=22），汉堡按钮保持 y=62（与 NavigationViewChrome 一致）。
+        let desc_with_back = NavigationViewDesc::new(rect, items)
+            .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_back_button_visible(NavigationViewBackButtonVisible::Visible)
+            .selected_item(Some(1));
+        let mut state_with_back = NavigationViewState::from_desc(&desc_with_back);
+        state_with_back.set_animations_enabled(false, &desc_with_back);
+        let layout_with_back = desc_with_back.compute_layout(&state_with_back);
+
+        let back_rect = layout_with_back
+            .back_button_rect
+            .expect("back button rect must exist");
+        let toggle_with_back = layout_with_back
+            .pane_toggle_rect
+            .expect("pane toggle rect must exist");
+        let first_row_back = layout_with_back
+            .rows
+            .first()
+            .expect("menu must contain at least one row");
+        assert!((back_rect.origin.y - 22.0).abs() < 1e-3);
+        assert!((toggle_with_back.origin.y - 62.0).abs() < 1e-3);
+        assert!(toggle_with_back.max().y <= first_row_back.rect.origin.y);
+    }
+
+    #[test]
+    fn top_mode_aligns_home_text_and_centers_selection_indicator() {
+        let rect = Rect::new(16.0, 16.0, 360.0, 280.0);
+        let desc = NavigationViewDesc::new(
+            rect,
+            vec![
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(2, "Library").with_glyph("\u{E8F1}"),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(3, "Analytics").with_glyph("\u{E908}"),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(4, "Reports").with_glyph("\u{E8A5}"),
+                ),
+            ],
+        )
+        .pane_display_mode(NavigationViewPaneDisplayMode::Top)
+        .overflow_label_mode(NavigationViewOverflowLabelMode::NoLabel)
+        .is_settings_visible(true)
+        .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+        .selected_item(Some(1));
+
+        let mut state = NavigationViewState::from_desc(&desc);
+        state.set_animations_enabled(false, &desc);
+
+        let mut engine = TextEngine::new();
+        engine.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        let mut cache = GlyphCache::new();
+        let mut ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        let emitted = emit_navigation_view(201, &desc, ControlState::default(), &state, &mut ctx);
+        let home_row = emitted
+            .layout
+            .rows
+            .iter()
+            .find(|r| r.item_id() == Some(1))
+            .expect("Home row must exist");
+
+        // Home 项宽为 85.0（origin.x = 24.0），icon_x = 36.0，Top 模式文字起点为 icon_x + 24.0 = 60.0。
+        assert!((home_row.rect.origin.x - 24.0).abs() < 1e-3);
+        assert!((home_row.rect.width() - 85.0).abs() < 1e-3);
+
+        let icon_x = home_row.rect.origin.x + 12.0;
+        let expected_text_x = icon_x + 24.0;
+        let home_text_min_x = emitted
+            .output
+            .primitives
+            .iter()
+            .filter(|p| {
+                p.prim_type() == PrimType::Glyph
+                    && p.local_pos[0] >= icon_x + 18.0
+                    && p.local_pos[0] <= home_row.rect.max().x
+                    && p.local_pos[1] >= home_row.rect.origin.y
+                    && p.local_pos[1] <= home_row.rect.max().y
+            })
+            .map(|p| p.local_pos[0])
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            home_text_min_x.is_finite(),
+            "Home label glyphs must be emitted in Top mode"
+        );
+        assert!(
+            (home_text_min_x - expected_text_x).abs() <= 3.0,
+            "Home text left edge {home_text_min_x} must align near icon_x + 24.0 ({expected_text_x})"
+        );
+        assert!(
+            home_text_min_x < icon_x + 30.0,
+            "Home text left edge {home_text_min_x} must not suffer +8px Left-mode offset"
+        );
+
+        // 底部蓝色选中指示条应水平居中于 Home 项矩形（中心 66.5，区间 58.5..74.5）。
+        let indicator = emitted
+            .output
+            .primitives
+            .iter()
+            .find(|p| {
+                p.prim_type() == PrimType::Rect
+                    && (p.size[0] - NAVIGATION_VIEW_TOP_INDICATOR_WIDTH).abs() < 1e-3
+                    && (p.size[1] - NAVIGATION_VIEW_TOP_INDICATOR_HEIGHT).abs() < 1e-3
+                    && p.opacity() > 0.5
+                    && p.local_pos[0] >= home_row.rect.origin.x
+                    && p.local_pos[0] <= home_row.rect.max().x
+            })
+            .expect("selected Top Home indicator primitive must exist");
+        let indicator_cx = indicator.local_pos[0] + indicator.size[0] * 0.5;
+        assert!(
+            (indicator_cx - home_row.rect.center().x).abs() < 1e-3,
+            "indicator center {indicator_cx} must match Home rect center {}",
+            home_row.rect.center().x
+        );
+
+        // 溢出按钮紧随 Home 之后（109 + 4 = 113，中心 135）。
+        let ov_btn = emitted
+            .layout
+            .overflow_button_rect
+            .expect("Top mode must emit overflow button for 4 items in 360px");
+        assert!((ov_btn.center().x - 135.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn symbol_font_disabled_falls_back_to_vector_primitives_without_panic() {
+        let rect = Rect::new(16.0, 16.0, 360.0, 280.0);
+        let desc = NavigationViewDesc::new(
+            rect,
+            vec![
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(2, "Analytics").with_glyph("\u{E908}"),
+                ),
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(3, "Custom").with_glyph("\u{E999}"),
+                ),
+            ],
+        )
+        .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+        .open_pane_length(220.0)
+        .is_pane_open(true)
+        .is_settings_visible(true)
+        .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+        .selected_item(Some(1));
+
+        let mut state = NavigationViewState::from_desc(&desc);
+        state.set_animations_enabled(false, &desc);
+
+        let mut engine = TextEngine::new();
+        engine.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        let mut cache = GlyphCache::new();
+        let mut ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        let emitted = emit_navigation_view(202, &desc, ControlState::default(), &state, &mut ctx);
+
+        for target_id in [1_u64, 2_u64, NAVIGATION_VIEW_SETTINGS_ID] {
+            let row = emitted
+                .layout
+                .rows
+                .iter()
+                .find(|r| r.item_id() == Some(target_id))
+                .expect("expected nav row to exist");
+            let icon_x = row.rect.origin.x + 12.0;
+            let icon_rect = Rect::new(icon_x - 1.0, row.rect.origin.y + 4.0, 18.0, 28.0);
+
+            let vector_count = emitted
+                .output
+                .primitives
+                .iter()
+                .filter(|p| {
+                    matches!(p.prim_type(), PrimType::Rect | PrimType::Curve)
+                        && p.local_pos[0] >= icon_rect.origin.x
+                        && p.local_pos[0] <= icon_rect.max().x
+                        && p.local_pos[1] >= icon_rect.origin.y
+                        && p.local_pos[1] <= icon_rect.max().y
+                        && p.size[0] <= 18.0
+                        && p.size[1] <= 18.0
+                })
+                .count();
+            assert!(
+                vector_count > 0,
+                "row {target_id} must fall back to vector primitives when symbol font is disabled"
+            );
+
+            let icon_glyph_count = emitted
+                .output
+                .primitives
+                .iter()
+                .filter(|p| {
+                    p.prim_type() == PrimType::Glyph
+                        && p.local_pos[0] >= icon_rect.origin.x
+                        && p.local_pos[0] <= icon_rect.max().x
+                        && p.local_pos[1] >= icon_rect.origin.y
+                        && p.local_pos[1] <= icon_rect.max().y
+                })
+                .count();
+            assert_eq!(
+                icon_glyph_count, 0,
+                "row {target_id} must not emit tofu glyphs in icon slot when vector fallback matches"
+            );
+        }
+    }
+
+    #[test]
+    fn expand_animation_mid_frames_preserve_icon_anchor_header_clip_and_scrollbar_bounds() {
+        let rect = Rect::new(16.0, 16.0, 640.0, 260.0);
+        let owner_node = 203_u64;
+        let track_node = scrollbar_track_node(owner_node, ScrollbarAxis::Vertical);
+        let open = 220.0_f32;
+        let compact = NAVIGATION_VIEW_COMPACT_PANE_LENGTH;
+        let expected_icon_x = rect.origin.x + NAVIGATION_VIEW_PANE_PADDING + 12.0;
+
+        let mut items = vec![
+            NavigationViewMenuItem::header("Workspace Navigation Section"),
+            NavigationViewMenuItem::item(
+                NavigationViewItem::new(1, "Home").with_icon(ShellIcon::Grid),
+            ),
+        ];
+        for i in 2..=12_u64 {
+            items.push(NavigationViewMenuItem::item(
+                NavigationViewItem::new(i, format!("Section {i}")).with_icon(ShellIcon::Layers),
+            ));
+        }
+        let desc = NavigationViewDesc::new(rect, items)
+            .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(open)
+            .is_pane_open(true)
+            .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1));
+
+        let mut state = NavigationViewState::from_desc(&desc);
+        state.set_animations_enabled(true, &desc);
+
+        let mut engine = TextEngine::new();
+        engine.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        let mut cache = GlyphCache::new();
+        let mut ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        let mut prev_header_max_right = 0.0_f32;
+        for t in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+            state.pane_width_spring.value = compact + (open - compact) * t;
+            let emitted =
+                emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+            let pane_right = emitted.layout.pane_rect.max().x;
+
+            // 1. 一级图标水平锚点 0px 跳变。
+            let home_row = emitted
+                .layout
+                .rows
+                .iter()
+                .find(|r| r.item_id() == Some(1))
+                .expect("Home row must exist");
+            let grid_cell = emitted
+                .output
+                .primitives
+                .iter()
+                .find(|p| {
+                    (p.size[0] - 5.6).abs() < 0.05
+                        && (p.size[1] - 5.6).abs() < 0.05
+                        && p.local_pos[1] >= home_row.rect.origin.y
+                        && p.local_pos[1] <= home_row.rect.max().y
+                })
+                .expect("Home ShellIcon::Grid cell must exist");
+            let primary_icon_x = grid_cell.local_pos[0] - 1.5;
+            assert!(
+                (primary_icon_x - expected_icon_x).abs() < 1e-3,
+                "primary icon drifted at t={t}: got {primary_icon_x}, expected {expected_icon_x}"
+            );
+
+            // 2. 分组标题右缘裁剪连续且不越过窗格右缘。
+            let header_row = emitted
+                .layout
+                .rows
+                .iter()
+                .find(|r| matches!(r.kind, NavigationViewRowKind::Header { .. }))
+                .expect("Header row must exist");
+            let header_rights: Vec<f32> = emitted
+                .output
+                .primitives
+                .iter()
+                .filter(|p| {
+                    p.prim_type() == PrimType::Glyph
+                        && p.local_pos[1] >= header_row.rect.origin.y
+                        && p.local_pos[1] <= header_row.rect.max().y
+                        && p.local_pos[0] < pane_right + 1.0
+                })
+                .map(|p| p.local_pos[0] + p.size[0])
+                .collect();
+            if t <= 0.01 {
+                assert!(
+                    header_rights.is_empty(),
+                    "header glyphs must be hidden at collapsed frame t={t}"
+                );
+            } else {
+                assert!(
+                    !header_rights.is_empty(),
+                    "header glyphs must be emitted at expand frame t={t}"
+                );
+                let max_right = header_rights
+                    .iter()
+                    .copied()
+                    .fold(f32::NEG_INFINITY, f32::max);
+                assert!(
+                    max_right <= pane_right + 0.5,
+                    "header right edge {max_right} exceeded pane right {pane_right} at t={t}"
+                );
+                assert!(
+                    max_right + 0.5 >= prev_header_max_right,
+                    "header clipped right edge regressed from {prev_header_max_right} to {max_right} at t={t}"
+                );
+                prev_header_max_right = max_right;
+            }
+
+            // 3. 滚动条贴合窗格右缘且无越界（t > 0.01 时常显细指示条，t == 0.0 静止折叠态自动隐藏）。
+            let track_hit = emitted
+                .output
+                .sub_hits
+                .iter()
+                .find(|h| h.node == track_node);
+            if t <= 0.01 {
+                assert!(
+                    track_hit.is_none(),
+                    "collapsed idle pane must auto-hide scrollbar at t={t}"
+                );
+            } else {
+                let track = track_hit.expect("overflowing expanding pane must emit scrollbar track");
+                assert!(
+                    (track.bounds.max().x - (pane_right - SCROLLBAR_EDGE_INSET)).abs() < 1e-3,
+                    "scrollbar track right {} must hug pane right {} - inset at t={t}",
+                    track.bounds.max().x,
+                    pane_right
+                );
+                assert!(
+                    track.bounds.max().x <= pane_right,
+                    "scrollbar track right {} overflowed pane right {pane_right} at t={t}",
+                    track.bounds.max().x
+                );
+            }
+        }
     }
 }
