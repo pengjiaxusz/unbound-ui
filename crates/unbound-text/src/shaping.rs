@@ -2050,7 +2050,10 @@ mod tests {
 
     #[test]
     fn symbol_font_policy_disabled_and_force_override_platform_detection() {
-        let mut e = TextEngine::with_font_system(FontSystem::new_with_locale_and_db("en-US".to_string(), cosmic_text::fontdb::Database::new()));
+        let mut e = TextEngine::with_font_system(FontSystem::new_with_locale_and_db(
+            "en-US".to_string(),
+            cosmic_text::fontdb::Database::new(),
+        ));
         assert_eq!(e.symbol_font_policy(), SymbolFontPolicy::Auto);
         // 空字体库下 Auto 在全平台均无可用符号字体。
         assert_eq!(e.symbol_font_family(), None);

@@ -14,6 +14,7 @@
 
 pub mod presets;
 pub mod snapping;
+pub mod transition;
 pub mod typography;
 pub mod win11;
 pub mod zoom;
@@ -22,6 +23,10 @@ pub use presets::{
     snap_ui_scale, step_ui_scale, AccentBrand, ProductPreset, CANONICAL_SCALE_STEPS,
 };
 pub use snapping::{edge_screen, edge_screen_snapped, jitter, snap_error, snap_screen};
+pub use transition::{
+    ease_out_cubic_bezier, interpolate_color_oklab, ThemeTransition, ThemeTransitionConfig,
+    DEFAULT_THEME_TRANSITION_DURATION_SECS,
+};
 pub use zoom::ZoomLayers;
 
 use unbound_math::color::Color;
@@ -1150,6 +1155,12 @@ impl ThemeLut {
         Self { entries, bytes }
     }
 
+    /// 由模块内部直接从已打包的 RGBA16F 表项与字节流构造 LUT。
+    #[must_use]
+    pub(crate) fn from_raw(entries: Vec<[u16; 4]>, bytes: Vec<u8>) -> Self {
+        Self { entries, bytes }
+    }
+
     /// 原始 RGBA16F 表项切片。
     #[must_use]
     pub fn entries(&self) -> &[[u16; 4]] {
@@ -1224,6 +1235,12 @@ impl ThemeState {
     #[must_use]
     pub const fn current(&self) -> ThemeKind {
         self.current
+    }
+
+    /// 当前激活主题对应的完整调色板。
+    #[must_use]
+    pub fn active_palette(&self) -> &Palette {
+        self.set.palette(self.current)
     }
 
     /// 已打包的颜色表。

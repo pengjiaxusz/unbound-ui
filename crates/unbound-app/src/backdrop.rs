@@ -24,6 +24,7 @@ use unbound_backdrop::{
     wallpaper_stamp, BackdropGenerator, MicaRequest, UvRect, WallpaperStamp, WallpaperTexture,
 };
 use unbound_math::Rect;
+use unbound_widgets::ImageAssetResolver;
 
 use crate::{AppEventSender, ViewBuilder};
 
@@ -41,12 +42,21 @@ pub const fn is_mica_ready_event(id: u64) -> bool {
     id == MICA_READY_EVENT_ID
 }
 
-/// 整窗云母背板：持有生成器与已提交的纹理句柄。
+/// 自绘后景双纹理叠化的保底时长（秒）：即使后台纹理晚于前景过渡到达也不低于 150ms。
+pub const MIN_BACKDROP_CROSSFADE_SECS: f32 = 0.15;
+
+/// 整窗云母背板：持有生成器与已提交的纹理句柄，并在新代次纹理到达时与旧纹理叠化淡入。
 #[derive(Debug)]
 pub struct MicaBackdrop {
     generator: BackdropGenerator,
     /// 已解码并正在显示的纹理。
     asset: Option<AssetId>,
+    /// 叠化过渡期间保留的上一代纹理；过渡收敛后立即释放。
+    previous_asset: Option<AssetId>,
+    /// 双纹理叠化的起始时间戳。
+    crossfade_start: Option<Instant>,
+    /// 本次双纹理叠化的总时长（秒，保底不低于 [`MIN_BACKDROP_CROSSFADE_SECS`]）。
+    crossfade_duration_secs: f32,
     /// 新提交、仍在异步解码的纹理；解码完成前继续用旧纹理垫底。
     pending: Option<AssetId>,
     visible: bool,
@@ -64,6 +74,9 @@ impl Default for MicaBackdrop {
         Self {
             generator: BackdropGenerator::new(),
             asset: None,
+            previous_asset: None,
+            crossfade_start: None,
+            crossfade_duration_secs: MIN_BACKDROP_CROSSFADE_SECS,
             pending: None,
             visible: false,
             enabled: true,
@@ -156,22 +169,56 @@ impl MicaBackdrop {
             self.pending = Some(view.request_png(image.png));
         }
 
+        let mut just_promoted = false;
         if let Some(pending) = self.pending {
-            if view.backdrop_image_sampled(key, pending, Some(self.uv)) {
+            if view.assets.resolve(pending).is_some() {
+                let transition_enabled = view
+                    .ctx
+                    .theme_transition
+                    .effective_duration_secs(unbound_platform::prefers_reduced_motion())
+                    > 0.0;
+                if transition_enabled && self.asset.is_some() && self.asset != Some(pending) {
+                    self.previous_asset = self.asset;
+                    self.crossfade_start = Some(Instant::now());
+                    self.crossfade_duration_secs = view
+                        .ctx
+                        .theme_transition_remaining_secs
+                        .max(MIN_BACKDROP_CROSSFADE_SECS);
+                } else {
+                    self.previous_asset = None;
+                    self.crossfade_start = None;
+                }
                 self.asset = Some(pending);
                 self.pending = None;
-                self.visible = true;
-            } else {
-                // 新纹理还在解码：继续显示旧纹理，避免主题切换闪一帧纯色。
-                self.visible = self
-                    .asset
-                    .is_some_and(|asset| view.backdrop_image_sampled(key, asset, Some(self.uv)));
+                just_promoted = true;
             }
-        } else {
-            self.visible = self
-                .asset
-                .is_some_and(|asset| view.backdrop_image_sampled(key, asset, Some(self.uv)));
         }
+
+        // 若存在进行中的双纹理叠化，按缓动进度以双图元透明度叠化绘制；收敛后立即释放旧纹理句柄。
+        if let (Some(prev), Some(start)) = (self.previous_asset, self.crossfade_start) {
+            let elapsed = if just_promoted {
+                0.0
+            } else {
+                start.elapsed().as_secs_f32()
+            };
+            if let Some(alpha) = self.sample_crossfade_alpha(elapsed) {
+                let base_key = key ^ 0x517C_C1B7_2722_0A95;
+                let base_ok =
+                    view.backdrop_image_sampled_with_opacity(base_key, prev, Some(self.uv), 1.0);
+                let top_ok = self.asset.is_some_and(|asset| {
+                    view.backdrop_image_sampled_with_opacity(key, asset, Some(self.uv), alpha)
+                });
+                self.visible = base_ok || top_ok;
+                return self.visible;
+            }
+            // 叠化已收敛：释放旧纹理句柄并回落为单图元绘制。
+            self.previous_asset = None;
+            self.crossfade_start = None;
+        }
+
+        self.visible = self
+            .asset
+            .is_some_and(|asset| view.backdrop_image_sampled(key, asset, Some(self.uv)));
         self.visible
     }
 
@@ -190,7 +237,11 @@ impl MicaBackdrop {
         if !self.enabled {
             return false;
         }
-        if self.pending.is_some() || self.generator.is_pending() || self.generator.has_result() {
+        if self.pending.is_some()
+            || self.crossfade_start.is_some()
+            || self.generator.is_pending()
+            || self.generator.has_result()
+        {
             return true;
         }
         self.asset.is_some() && !self.visible
@@ -200,6 +251,52 @@ impl MicaBackdrop {
     #[must_use]
     pub fn asset(&self) -> Option<AssetId> {
         self.asset
+    }
+
+    /// 叠化过渡期间保留的上一代资产句柄（收敛后自动归 `None`）。
+    #[must_use]
+    pub fn previous_asset(&self) -> Option<AssetId> {
+        self.previous_asset
+    }
+
+    /// 计算给定经过时间下新纹理的叠化不透明度；返回 `None` 表示已收敛到达终态。
+    #[must_use]
+    pub fn sample_crossfade_alpha(&self, elapsed_secs: f32) -> Option<f32> {
+        let dur = self
+            .crossfade_duration_secs
+            .max(MIN_BACKDROP_CROSSFADE_SECS);
+        if elapsed_secs >= dur {
+            None
+        } else {
+            let raw = (elapsed_secs / dur).clamp(0.0, 1.0);
+            Some(unbound_theme::ease_out_cubic_bezier(raw))
+        }
+    }
+
+    /// 启动一次由测试或宿主驱动的自绘双纹理叠化（采用前景剩余时长并保底不低于 150ms）。
+    pub fn begin_crossfade_for_test(
+        &mut self,
+        previous: AssetId,
+        next: AssetId,
+        foreground_remaining_secs: f32,
+    ) {
+        self.previous_asset = Some(previous);
+        self.asset = Some(next);
+        self.crossfade_start = Some(Instant::now());
+        self.crossfade_duration_secs = foreground_remaining_secs.max(MIN_BACKDROP_CROSSFADE_SECS);
+    }
+
+    /// 按确定性经过时间推进双纹理叠化并在收敛后释放旧纹理句柄。
+    pub fn step_crossfade_for_test(&mut self, elapsed_secs: f32) -> Option<f32> {
+        self.crossfade_start?;
+        match self.sample_crossfade_alpha(elapsed_secs) {
+            Some(alpha) => Some(alpha),
+            None => {
+                self.previous_asset = None;
+                self.crossfade_start = None;
+                None
+            }
+        }
     }
 }
 
@@ -304,5 +401,28 @@ mod tests {
     fn only_the_ready_event_id_is_recognized() {
         assert!(is_mica_ready_event(MICA_READY_EVENT_ID));
         assert!(!is_mica_ready_event(MICA_READY_EVENT_ID + 1));
+    }
+
+    #[test]
+    fn self_drawn_crossfade_enforces_150ms_floor_and_releases_previous_asset() {
+        let mut mica = MicaBackdrop::new();
+        let old_id = AssetId(1);
+        let new_id = AssetId(2);
+        // 即使前景仅剩 30ms（异步纹理迟到），叠化时长仍保底 150ms。
+        mica.begin_crossfade_for_test(old_id, new_id, 0.03);
+        assert!(mica.needs_frame());
+        assert_eq!(mica.previous_asset(), Some(old_id));
+        assert_eq!(mica.asset(), Some(new_id));
+
+        let mid = mica
+            .step_crossfade_for_test(0.075)
+            .expect("mid-crossfade should still be active");
+        assert!(mid > 0.0 && mid < 1.0);
+        assert_eq!(mica.previous_asset(), Some(old_id));
+
+        // 达到 150ms 后收敛并释放旧纹理句柄。
+        assert!(mica.step_crossfade_for_test(0.15).is_none());
+        assert_eq!(mica.previous_asset(), None);
+        assert_eq!(mica.asset(), Some(new_id));
     }
 }

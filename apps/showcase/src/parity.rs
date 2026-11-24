@@ -142,7 +142,9 @@ pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId>
         | "NavigationViewHierarchical"
         | "NavigationViewChrome"
         | "NavigationViewOverflow"
-        | "NavigationViewLeftClosedOverflow" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
+        | "NavigationViewLeftClosedOverflow" => {
+            Some(unbound_widgets::WidgetCatalogId::NavigationView)
+        }
         "TitleBar" => None,
         other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
     }

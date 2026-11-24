@@ -22,7 +22,7 @@ use unbound_platform::{
     begin_outbound_file_drag, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
     PopupWindowConfig, WindowId,
 };
-use unbound_theme::{ThemeSet, ThemeState};
+use unbound_theme::{ThemeSet, ThemeState, ThemeTransition};
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
@@ -181,6 +181,10 @@ pub struct WindowedRunner<A: Application> {
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     /// GPU 着色器用于解析颜色 token 的语义颜色表。
     theme: ThemeState,
+    /// 框架级主题过渡状态机（ADR 0034：Oklab 4 KiB LUT 逐帧插值）。
+    theme_transition: ThemeTransition,
+    /// 主题过渡单调时钟基准。
+    theme_clock_epoch: Instant,
     /// 当前渲染器 LUT 中已写入的主题与品牌色三元组；`None` 表示仍需上传
     /// （设备重建完成后同样如此）。
     uploaded_theme: Option<(
@@ -235,6 +239,7 @@ impl<A: Application> WindowedRunner<A> {
             ),
             ctx.theme,
         );
+        let theme_transition = ThemeTransition::new(theme.active_palette());
 
         // 根据 ADR 0014 与建窗契约：建窗计算 surface_alpha 时，只有当配置中显式意图开启原生后景
         // （config.backdrop 存在且非 WindowBackdropMaterial::None）时，才强制覆盖为 PreMultiplied；
@@ -250,6 +255,8 @@ impl<A: Application> WindowedRunner<A> {
         Self {
             runtime,
             theme,
+            theme_transition,
+            theme_clock_epoch: Instant::now(),
             uploaded_theme: None,
             on_hwnd_created: None,
             on_frame: None,
@@ -327,24 +334,49 @@ impl<A: Application> WindowedRunner<A> {
     /// 纯白：图元确实绘制了，但颜色全透明。showcase 自行上传 LUT，通用运行器
     /// 必须为每个示例做同样的事，并在设备重建后重新上传。
     fn sync_theme(&mut self, window: &NativeWindow) {
-        let ctx = self.runtime.context();
-        let sys_accent = ctx.resolved_system_accent();
-        let sys_bits =
-            sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
-        let key = (ctx.theme, ctx.preset, ctx.accent, sys_bits);
-        if self.uploaded_theme == Some(key) {
+        let (key, sys_accent, transition_cfg) = {
+            let ctx = self.runtime.context();
+            let sys_accent = ctx.resolved_system_accent();
+            let sys_bits =
+                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+            (
+                (ctx.theme, ctx.preset, ctx.accent, sys_bits),
+                sys_accent,
+                ctx.theme_transition,
+            )
+        };
+        let key_changed = self.uploaded_theme != Some(key);
+        if !key_changed && !self.theme_transition.is_active() {
             return;
         }
-        let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
-        if prev_preset_accent != Some((key.1, key.2, key.3)) {
-            self.theme = ThemeState::new(
-                ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
-                key.0,
-            );
-        } else {
-            self.theme.switch(key.0);
+
+        let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
+        if key_changed {
+            let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
+            if prev_preset_accent != Some((key.1, key.2, key.3)) {
+                self.theme = ThemeState::new(
+                    ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
+                    key.0,
+                );
+            } else {
+                self.theme.switch(key.0);
+            }
+            if self.uploaded_theme.is_none() {
+                // 首帧或设备重建后强制瞬切，避免启动时播放主题动画。
+                self.theme_transition.snap_to(self.theme.active_palette());
+            } else {
+                let reduced_motion = unbound_platform::prefers_reduced_motion();
+                let duration = transition_cfg.effective_duration_secs(reduced_motion);
+                let _ =
+                    self.theme_transition
+                        .begin(self.theme.active_palette(), now_secs, duration);
+            }
         }
-        let lut = self.theme.lut().clone();
+
+        let still_active = self.theme_transition.advance(now_secs);
+        self.runtime.context_mut().theme_transition_remaining_secs =
+            self.theme_transition.remaining_secs(now_secs);
+        let lut = self.theme_transition.lut().clone();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
@@ -352,8 +384,10 @@ impl<A: Application> WindowedRunner<A> {
             Ok(()) => {
                 self.uploaded_theme = Some(key);
                 // 切换主题或强调色只改变 4 KiB LUT：既不重排也不重传图元，
-                // 但需要再多呈现一帧。
-                window.request_redraw();
+                // 过渡期间逐帧请求重绘，收敛后自动停止请求并回落 0% 占用。
+                if still_active || key_changed {
+                    window.request_redraw();
+                }
             }
             Err(error) => {
                 eprintln!("[unbound-app] Could not upload the theme LUT: {error:?}");
@@ -368,7 +402,8 @@ impl<A: Application> WindowedRunner<A> {
             self.runtime.premultiplied_surface(),
             unbound_platform::accent_policy_export_available(),
         );
-        let theme = self.runtime.context().theme;
+        // 原生后景在主题过渡期间延迟至中点（t >= 0.5）再翻转 DWM 深色模式（ADR 0034）。
+        let theme = self.theme_transition.effective_backdrop_theme();
         self.appearance
             .set_host_clear_alpha(self.runtime.clear_alpha());
         let diff = self

@@ -717,6 +717,10 @@ pub struct AppContext {
     pub accent: unbound_theme::AccentBrand,
     /// 可选操作系统主题强调色覆盖（`None` 时在默认 Win11 蓝色预设下自动读取平台系统强调色）。
     pub system_accent: Option<unbound_math::Color>,
+    /// 框架级主题过渡配置（默认 240ms ease-out，设为 `0` 关闭过渡）。
+    pub theme_transition: unbound_theme::ThemeTransitionConfig,
+    /// 当前进行中的前景主题过渡剩余时长（秒，由运行器逐帧同步，供自绘后景叠化继承）。
+    pub theme_transition_remaining_secs: f32,
     /// 当前原生窗口是否处于最大化状态（由窗口运行器自动同步）。
     pub window_maximized: bool,
     /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
@@ -813,6 +817,8 @@ impl AppContext {
             preset: unbound_theme::ProductPreset::Win11,
             accent: unbound_theme::AccentBrand::Blue,
             system_accent: None,
+            theme_transition: unbound_theme::ThemeTransitionConfig::default(),
+            theme_transition_remaining_secs: 0.0,
             window_maximized: false,
             window_focused: true,
             os_scale: 1.0,
@@ -960,6 +966,16 @@ impl AppContext {
     /// 显式设置或清除覆盖用的系统主题强调色。
     pub fn set_system_accent(&mut self, accent: Option<unbound_math::Color>) {
         self.system_accent = accent;
+    }
+
+    /// 配置框架级主题过渡（时长与开关；时长设为 `0` 表示强制瞬切）。
+    pub fn set_theme_transition(&mut self, config: unbound_theme::ThemeTransitionConfig) {
+        self.theme_transition = config;
+    }
+
+    /// 按毫秒数快捷设置框架级主题过渡时长（`0` 表示关闭过渡）。
+    pub fn set_theme_transition_millis(&mut self, ms: u32) {
+        self.theme_transition = unbound_theme::ThemeTransitionConfig::from_millis(ms);
     }
 
     /// 解析当前生效的系统强调色：优先取显式覆盖，其次在默认 Win11 预设下读取平台系统强调色。
@@ -1443,6 +1459,10 @@ pub struct ViewContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 框架级主题过渡配置（与 [`AppContext::theme_transition`] 同步）。
+    pub theme_transition: unbound_theme::ThemeTransitionConfig,
+    /// 当前进行中的前景主题过渡剩余时长（秒），供自绘后景叠化继承。
+    pub theme_transition_remaining_secs: f32,
     /// 指针下方的节点。
     pub hovered: Option<u64>,
     /// 当前按下的节点。
@@ -4057,6 +4077,17 @@ impl<'a> ViewBuilder<'a> {
         asset: unbound_asset::AssetId,
         sample_uv: Option<Rect>,
     ) -> bool {
+        self.backdrop_image_sampled_with_opacity(key, asset, sample_uv, 1.0)
+    }
+
+    /// 以指定不透明度将资产纹理绘制在整窗最底层，供自绘后景双纹理叠化过渡使用。
+    pub fn backdrop_image_sampled_with_opacity(
+        &mut self,
+        key: u64,
+        asset: unbound_asset::AssetId,
+        sample_uv: Option<Rect>,
+        opacity: f32,
+    ) -> bool {
         use unbound_widgets::{ImageAssetResolver, ImageDesc, ObjectFit};
         if self.assets.resolve(asset).is_none() {
             return false;
@@ -4070,12 +4101,21 @@ impl<'a> ViewBuilder<'a> {
         }
         // z = 0：位列所有容器与卡片之下（图元按 z 排序，卡片背景在 1 以上）。
         desc.z = 0;
-        let output = unbound_widgets::emit_image_with_assets(
+        let mut output = unbound_widgets::emit_image_with_assets(
             key,
             &desc,
             ControlState::default(),
             self.assets,
         );
+        let alpha = opacity.clamp(0.0, 1.0);
+        if alpha < 1.0 {
+            for primitive in &mut output.primitives {
+                primitive.z_and_opacity = unbound_gpu::data::GpuPrimitiveInstance::pack_z_opacity(
+                    primitive.depth_u16(),
+                    alpha,
+                );
+            }
+        }
         self.collector.push(key, output);
         true
     }
@@ -5614,6 +5654,8 @@ impl<A: Application> AppRuntime<A> {
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
+            theme_transition: self.ctx.theme_transition,
+            theme_transition_remaining_secs: self.ctx.theme_transition_remaining_secs,
             hovered: self.router.hover(),
             pressed: self.router.pointer().pressed(),
             focused: self.ctx.focused,

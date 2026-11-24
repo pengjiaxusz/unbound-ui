@@ -1452,7 +1452,13 @@ pub fn emit_canonical_command_bar_fixture(
 
         // 优先通过平台感知符号字体塑形发射原生字形；无可用符号字体时回退校准矢量。
         if let Some(quads) = text_ctx.shape_symbol_glyph(glyph, btn_r, 16.0) {
-            primitive::glyphs(&quads, icon_ink, z + 2, &mut out.primitives, &mut out.payloads);
+            primitive::glyphs(
+                &quads,
+                icon_ink,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
         } else {
             let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
                 crate::shell::ShellIcon::Save
@@ -1499,7 +1505,13 @@ pub fn emit_canonical_command_bar_fixture(
         Token::TEXT_PRIMARY
     };
     if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_COMMAND_MORE_GLYPH, more_r, 16.0) {
-        primitive::glyphs(&quads, more_ink, z + 2, &mut out.primitives, &mut out.payloads);
+        primitive::glyphs(
+            &quads,
+            more_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
     } else {
         crate::shell::emit_shell_icon_primitives(
             crate::shell::ShellIcon::Ellipsis,
@@ -3255,7 +3267,13 @@ pub fn emit_canonical_font_icon_fixture(
         total_r,
         CANONICAL_FONT_ICON_FONT_SIZE,
     ) {
-        primitive::glyphs(&quads, text_ink, z + 1, &mut out.primitives, &mut out.payloads);
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 1,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
     } else {
         crate::shell::emit_shell_icon_primitives(
             crate::shell::ShellIcon::AllApps,
@@ -3685,7 +3703,13 @@ pub fn emit_canonical_app_bar_button_fixture(
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
     let icon_r = Rect::new(total_r.origin.x, stack_top - 1.0, w, 16.0);
     if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_BUTTON_GLYPH, icon_r, 16.0) {
-        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
     } else {
         crate::shell::emit_shell_icon_primitives(
             crate::shell::ShellIcon::Save,
@@ -3795,7 +3819,13 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
     if let Some(quads) =
         text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH, icon_r, 16.0)
     {
-        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+        primitive::glyphs(
+            &quads,
+            text_ink,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
     } else {
         crate::shell::emit_shell_icon_primitives(
             crate::shell::ShellIcon::Bold,

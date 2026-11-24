@@ -49,7 +49,8 @@ pub use unbound_text::{
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use unbound_theme::{
     snap_ui_scale, step_ui_scale, typography, AccentBrand, ProductPreset, ThemeKind, ThemeState,
-    Token, CANONICAL_SCALE_STEPS,
+    ThemeTransition, ThemeTransitionConfig, Token, CANONICAL_SCALE_STEPS,
+    DEFAULT_THEME_TRANSITION_DURATION_SECS,
 };
 pub use unbound_widgets::ergonomics::{AlignX, AlignY, TextCtx, UiWidget, WidgetInputEvent};
 pub use unbound_widgets::overlay::{OverlayEntry, OverlayKind, OverlayStack};
