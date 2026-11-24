@@ -1,3 +1,4 @@
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 //! Linux AT-SPI 无障碍适配器（基于纯 Rust `accesskit_unix`，零 `libatk-dev` / `libdbus-1-dev`）。
 //!
 //! 遵循二期 Spec（#213）：
