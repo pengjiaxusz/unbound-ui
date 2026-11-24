@@ -106,8 +106,11 @@ pub use system_accent::{
     DEFAULT_SYSTEM_ACCENT_SRGB,
 };
 pub use tray::{
-    notification_urgency, set_taskbar_progress, set_tray_icon, show_tray_balloon,
-    TaskbarProgressState, TrayIconState, TrayNotificationSeverity,
+    active_tray_menu_items, is_tray_heartbeat_stalled, notification_urgency, poll_tray_events,
+    push_tray_event_for_test, reattach_tray_icon, set_taskbar_progress,
+    set_tray_heartbeat_stalled_for_test, set_tray_icon, set_tray_menu, set_tray_rescue_menu,
+    show_tray_balloon, update_tray_heartbeat, TaskbarProgressState, TrayEvent, TrayIconState,
+    TrayMenuItem, TrayNotificationSeverity, WM_APP_TRAY,
 };
 pub use wayland_logic::{
     compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
@@ -125,9 +128,9 @@ pub use win32_window::{
     CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window, WindowId as NativeWindowId,
 };
 pub use window::{
-    apply, resolve_window_placement, ButtonState, ImeEvent, ImeState, Modifiers, MouseButton,
-    PlatformError, PlatformEvent, PlatformKey, PlatformState, ScreenRect, SurfaceAlpha,
-    WindowConfig, WindowPlacement, WindowPosition,
+    apply, enumerate_monitor_work_areas, resolve_window_placement, ButtonState, ImeEvent, ImeState,
+    Modifiers, MonitorWorkArea, MouseButton, PlatformError, PlatformEvent, PlatformKey,
+    PlatformState, ScreenRect, SurfaceAlpha, WindowConfig, WindowPlacement, WindowPosition,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};
 pub use windows_build::windows_build;

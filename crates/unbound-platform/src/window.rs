@@ -80,6 +80,36 @@ impl ScreenRect {
     }
 }
 
+/// 单个显示器的可用工作区（扣除任务栏/停靠栏）物理几何与缩放因子。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MonitorWorkArea {
+    /// 工作区左上角屏幕物理 X 坐标。
+    pub x: i32,
+    /// 工作区左上角屏幕物理 Y 坐标。
+    pub y: i32,
+    /// 工作区物理像素宽度。
+    pub width: i32,
+    /// 工作区物理像素高度。
+    pub height: i32,
+    /// 该显示器的有效 DPI 缩放因子（`1.0` 对应 96 DPI）。
+    pub scale_factor: f64,
+    /// 是否为主显示器。
+    pub is_primary: bool,
+}
+
+/// 枚举当前系统所有显示器的可用工作区（非 Windows 平台返回空列表）。
+#[must_use]
+pub fn enumerate_monitor_work_areas() -> Vec<MonitorWorkArea> {
+    #[cfg(windows)]
+    {
+        crate::win32_window::win32::enumerate_monitor_work_areas()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
 /// 窗口表面的合成方式。
 ///
 /// 它决定窗口内容能否与 DWM 后景材质（云母 / 亚克力）合成：不透明表面会把
@@ -122,6 +152,10 @@ pub struct WindowConfig {
     pub refresh: std::time::Duration,
     /// 窗口启动时的初始位置策略（默认为主屏幕工作区居中 [`WindowPosition::CenterPrimary`]）。
     pub position: WindowPosition,
+    /// 可选显式初始物理坐标（若为 `Some((x, y))`，优先于 `position` 在首次显示前应用）。
+    pub initial_position: Option<(i32, i32)>,
+    /// 窗口首次显示时是否直接以最大化状态呈现（避免先闪后跳）。
+    pub initial_maximized: bool,
     /// 表面合成方式（默认为不透明）。
     ///
     /// 需要系统原生后景（云母 / 亚克力）从客户区透出的窗口必须选
@@ -154,6 +188,8 @@ impl Default for WindowConfig {
             visible: true,
             refresh: crate::pacing::REFRESH_120,
             position: WindowPosition::CenterPrimary,
+            initial_position: None,
+            initial_maximized: false,
             surface_alpha: SurfaceAlpha::Opaque,
             backdrop: None,
         }
@@ -216,6 +252,20 @@ impl WindowConfig {
     #[must_use]
     pub const fn at_physical(mut self, x: i32, y: i32) -> Self {
         self.position = WindowPosition::Physical { x, y };
+        self
+    }
+
+    /// 设置可选的首次显示前初始屏幕物理坐标覆盖。
+    #[must_use]
+    pub const fn with_initial_position(mut self, pos: Option<(i32, i32)>) -> Self {
+        self.initial_position = pos;
+        self
+    }
+
+    /// 设置窗口首次显示时是否直接最大化。
+    #[must_use]
+    pub const fn with_initial_maximized(mut self, maximized: bool) -> Self {
+        self.initial_maximized = maximized;
         self
     }
 
@@ -293,7 +343,10 @@ pub fn resolve_window_placement(
     let work_w = (work_right - work_left).max(1);
     let work_h = (work_bottom - work_top).max(1);
 
-    let (x, y) = match config.position {
+    let (x, y) = if let Some((ix, iy)) = config.initial_position {
+        (ix, iy)
+    } else {
+        match config.position {
         WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
             let cx = work_left + ((work_w - width) / 2).max(0);
             let cy = work_top + ((work_h - height) / 2).max(0);
@@ -310,6 +363,7 @@ pub fn resolve_window_placement(
                 work_left + offset.min((work_w - width).max(0)),
                 work_top + offset.min((work_h - height).max(0)),
             )
+        }
         }
     };
 

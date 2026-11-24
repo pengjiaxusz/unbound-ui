@@ -92,7 +92,8 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
+    run_multi_window, run_multi_window_with_config, MultiWindowConfig, MultiWindowCoordinator,
+    MultiWindowFactory, WindowContext, WindowCreatedHook,
 };
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -762,6 +763,8 @@ pub struct AppContext {
     pub request_focus: Option<(u64, FocusCause)>,
     /// 请求运行时在本次归约后失焦。
     pub request_blur: bool,
+    /// 请求运行时在本次归约后清除当前指针捕获/拖拽状态。
+    request_cancel_drag: bool,
     /// 局部状态池，与渲染它的视图共享。
     widget_state: Rc<RefCell<WidgetStateStore>>,
     /// 本次归约期间请求的定时器，由运行时排空。
@@ -840,6 +843,7 @@ impl AppContext {
             time: 0.0,
             request_focus: None,
             request_blur: false,
+            request_cancel_drag: false,
             widget_state: Rc::new(RefCell::new(WidgetStateStore::new())),
             timer_requests: Vec::new(),
             timer_cancels: Vec::new(),
@@ -1449,6 +1453,64 @@ impl AppContext {
     pub fn close_window(&mut self, id: unbound_platform::WindowId) {
         self.pending_window_commands
             .push(WindowCommand::CloseWindow(id));
+    }
+
+    /// 上报输入法（IME）候选框锚点区域（物理像素坐标）。
+    pub fn set_ime_cursor_area(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.pending_window_commands
+            .push(WindowCommand::SetImeCursorArea {
+                x,
+                y,
+                width,
+                height,
+            });
+    }
+
+    /// 设置当前原生窗口可见性。
+    pub fn set_window_visible(&mut self, visible: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::SetVisible(visible));
+    }
+
+    /// 恢复隐藏或最小化的窗口并激活到前台。
+    pub fn activate_window_foreground(&mut self) {
+        self.pending_window_commands
+            .push(WindowCommand::ActivateForeground);
+    }
+
+    /// 同步设置当前原生窗口外框位置与客户区尺寸（物理像素）。
+    pub fn set_window_bounds(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.pending_window_commands
+            .push(WindowCommand::SetOuterPosition { x, y });
+        self.pending_window_commands
+            .push(WindowCommand::SetInnerSize { width, height });
+    }
+
+    /// 设置当前原生窗口的最大化状态。
+    pub fn set_window_maximized(&mut self, maximized: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::SetMaximized(maximized));
+    }
+
+    /// 更新当前窗口的任务栏进度条状态与进度值。
+    pub fn set_taskbar_progress(
+        &mut self,
+        completed: u64,
+        total: u64,
+        state: unbound_platform::TaskbarProgressState,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetTaskbarProgress {
+                completed,
+                total,
+                state,
+            });
+    }
+
+    /// 清除当前活跃的拖拽与指针捕获状态，避免释放事件丢失后粘滞。
+    pub fn cancel_drag(&mut self) {
+        self.pressed = None;
+        self.request_cancel_drag = true;
     }
 }
 
@@ -4487,6 +4549,29 @@ pub enum WindowCommand {
     OpenWindow(unbound_platform::WindowConfig),
     /// 请求多窗口协调器关闭指定标识的窗口。
     CloseWindow(unbound_platform::WindowId),
+    /// 更新原生窗口输入法（IME）候选框锚点区域（客户区物理像素）。
+    SetImeCursorArea {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
+    /// 设置当前原生窗口可见性。
+    SetVisible(bool),
+    /// 恢复当前窗口并激活置顶到前台。
+    ActivateForeground,
+    /// 设置当前原生窗口外框左上角屏幕物理坐标。
+    SetOuterPosition { x: i32, y: i32 },
+    /// 设置当前原生窗口客户区物理像素尺寸。
+    SetInnerSize { width: u32, height: u32 },
+    /// 设置当前原生窗口最大化或还原状态。
+    SetMaximized(bool),
+    /// 更新当前原生窗口任务栏进度指示器。
+    SetTaskbarProgress {
+        completed: u64,
+        total: u64,
+        state: unbound_platform::TaskbarProgressState,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -8957,6 +9042,10 @@ impl<A: Application> AppRuntime<A> {
         if core::mem::take(&mut self.ctx.request_blur) {
             self.focus.blur();
         }
+        if core::mem::take(&mut self.ctx.request_cancel_drag) {
+            let _ = self.router.cancel();
+            self.sync_router_context();
+        }
         self.sync_focus_context();
         self.collect_timer_requests();
         self.mark(outcome.dirty);
@@ -10813,5 +10902,80 @@ mod tests {
             "bottom bar must stay within 300px viewport, got {:?}",
             status_rect
         );
+    }
+
+    #[test]
+    fn app_context_window_hooks_enqueue_commands_and_cancel_drag() {
+        struct HookTestApp;
+        impl Application for HookTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+                match event {
+                    AppEvent::Custom { id: 1, .. } => {
+                        ctx.set_ime_cursor_area(12, 34, 2, 20);
+                        ctx.set_window_visible(false);
+                        ctx.activate_window_foreground();
+                        ctx.set_window_bounds(100, 200, 1280, 720);
+                        ctx.set_window_maximized(true);
+                        ctx.set_taskbar_progress(
+                            40,
+                            100,
+                            unbound_platform::TaskbarProgressState::Normal,
+                        );
+                    }
+                    AppEvent::Custom { id: 2, .. } => {
+                        ctx.cancel_drag();
+                    }
+                    _ => {}
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(
+                    10,
+                    ButtonDesc::new(Rect::new(10.0, 10.0, 120.0, 36.0), "DragTarget"),
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(HookTestApp, Vec2::new(400.0, 300.0));
+        let _ = rt.frame(0.0);
+
+        // 验证窗口钩子命令按序入队并可被运行器完整排空。
+        let _ = rt.custom(1, String::new());
+        let cmds = rt.drain_window_commands();
+        assert_eq!(
+            cmds,
+            vec![
+                WindowCommand::SetImeCursorArea {
+                    x: 12,
+                    y: 34,
+                    width: 2,
+                    height: 20,
+                },
+                WindowCommand::SetVisible(false),
+                WindowCommand::ActivateForeground,
+                WindowCommand::SetOuterPosition { x: 100, y: 200 },
+                WindowCommand::SetInnerSize {
+                    width: 1280,
+                    height: 720,
+                },
+                WindowCommand::SetMaximized(true),
+                WindowCommand::SetTaskbarProgress {
+                    completed: 40,
+                    total: 100,
+                    state: unbound_platform::TaskbarProgressState::Normal,
+                },
+            ]
+        );
+        assert!(rt.drain_window_commands().is_empty());
+
+        // 按下按钮建立指针捕获，再经 AppContext::cancel_drag 清除捕获状态。
+        let _ = rt.pointer_down(Vec2::new(30.0, 24.0), PointerButton::Left);
+        assert_eq!(rt.context().pressed, Some(10));
+        let _ = rt.custom(2, String::new());
+        assert_eq!(rt.context().pressed, None);
+        assert_eq!(rt.router().pointer().pressed(), None);
     }
 }

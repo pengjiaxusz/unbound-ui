@@ -88,6 +88,8 @@ impl OverlayWindowSpec {
                 visible: true,
                 refresh: crate::pacing::REFRESH_120,
                 position: WindowPosition::CenterActiveMonitor,
+                initial_position: None,
+                initial_maximized: false,
                 // 覆盖层走分层窗口的 `transparent` 开关，与交换链合成方式无关：
                 // 把它改成预乘 alpha 会让覆盖层内容按另一套 alpha 语义参与合成。
                 surface_alpha: crate::window::SurfaceAlpha::Opaque,

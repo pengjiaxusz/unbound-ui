@@ -207,6 +207,63 @@ impl NativeWindow {
         }
     }
 
+    /// 窗口当前是否处于最小化状态。
+    #[must_use]
+    pub fn is_minimized(&self) -> bool {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.is_minimized(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_minimized(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.is_minimized(),
+        }
+    }
+
+    /// 获取窗口外框左上角在屏幕物理坐标系中的位置。
+    #[must_use]
+    pub fn outer_position(&self) -> Option<(i32, i32)> {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.outer_position(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.outer_position(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.outer_position(),
+        }
+    }
+
+    /// 设置窗口外框左上角在屏幕物理坐标系中的位置。
+    pub fn set_outer_position(&self, x: i32, y: i32) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_outer_position(x, y),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_outer_position(x, y),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_outer_position(x, y),
+        }
+    }
+
+    /// 设置窗口客户区物理像素尺寸。
+    pub fn set_inner_size(&self, width: u32, height: u32) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_inner_size(width, height),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_inner_size(width, height),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_inner_size(width, height),
+        }
+    }
+
+    /// 恢复隐藏或最小化的窗口并将其激活置顶到前台。
+    pub fn activate_foreground(&self) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.activate_foreground(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.activate_foreground(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.activate_foreground(),
+        }
+    }
+
     /// 窗口是否使用系统原生装饰。
     #[must_use]
     pub fn is_decorated(&self) -> bool {
