@@ -1,8 +1,8 @@
-# ADR 0037：自定义 3D 离屏 RenderPass、动态渲染缩放与 Viewport3D 容器契约
+# ADR 0041：自定义 3D 离屏 RenderPass、动态渲染缩放与 Viewport3D 容器契约
 
 - 状态：已采纳
 - 日期：2026-11-24
-- 关联：扩展 ADR 0019（外部纹理 Bindless 槽位治理），协同 ADR 0036（动态外部表面渲染）
+- 关联：扩展 ADR 0019（外部纹理 Bindless 槽位治理），协同 ADR 0040（动态外部表面渲染）
 
 ## 背景
 
