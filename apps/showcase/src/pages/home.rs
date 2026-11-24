@@ -99,7 +99,7 @@ pub const EXAMPLES: &[ExampleDef] = &[ExampleDef::new(
     "Unbound UI Gallery",
     "Landing page rendered directly without ExampleCard chrome.",
     &["unbound-gpu", "unbound-widgets"],
-    "",
+    "app.navigate(PageId::Home);",
     "Landing page with hero banner, engine highlights, quick access, and 10 control categories.",
     &[],
     DemoKind::Hero,
