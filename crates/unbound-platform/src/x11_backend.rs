@@ -1020,7 +1020,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     while !exit_requested && !windows.is_empty() {
         wake_pipe.drain();
 
-        // 1. 排空所有待处理 X11 事件
+        // 1. 排空所有待处理 X11 事件（交互缩放期间将高频 MotionNotify 合并为单次 configure_window）
+        let mut pending_resize_cfg: Option<(X11WindowId, ScreenRect)> = None;
         while let Ok(Some(event)) = conn.poll_for_event() {
             match event {
                 X11Event::ConfigureNotify(ev) => {
@@ -1115,15 +1116,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             res.min_w,
                             res.min_h,
                         );
-                        let _ = conn.configure_window(
-                            res.xid,
-                            &ConfigureWindowAux::new()
-                                .x(target.x)
-                                .y(target.y)
-                                .width(target.width.max(1))
-                                .height(target.height.max(1)),
-                        );
-                        let _ = conn.flush();
+                        pending_resize_cfg = Some((res.xid, target));
                         continue;
                     }
                     if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.event) {
@@ -1428,6 +1421,18 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 }
                 _ => {}
             }
+        }
+
+        if let Some((rxid, target)) = pending_resize_cfg {
+            let _ = conn.configure_window(
+                rxid,
+                &ConfigureWindowAux::new()
+                    .x(target.x)
+                    .y(target.y)
+                    .width(target.width.max(1))
+                    .height(target.height.max(1)),
+            );
+            let _ = conn.flush();
         }
 
         // 2. 消费应用侧控制命令
