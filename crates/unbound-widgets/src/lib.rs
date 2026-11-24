@@ -1104,6 +1104,7 @@ impl WidgetOutput {
         self.primitives.extend(other.primitives);
         self.payloads.extend(other.payloads);
         self.clips.extend(other.clips);
+        let other_root_node = other.hit.as_ref().map(|hit| hit.node);
         if self.hit.is_none() {
             self.hit = other.hit;
         } else if let Some(hit) = other.hit {
@@ -1112,6 +1113,16 @@ impl WidgetOutput {
         self.sub_hits.extend(other.sub_hits);
         if self.a11y.is_none() {
             self.a11y = other.a11y;
+        } else if let Some(node) = other.a11y {
+            let sub_key = other_root_node
+                .or_else(|| other.sub_a11y.first().map(|(k, _)| k.wrapping_sub(1)))
+                .unwrap_or_else(|| {
+                    self.hit
+                        .as_ref()
+                        .map_or(0, |hit| hit.node)
+                        .wrapping_add(self.sub_a11y.len() as u64 + 1)
+                });
+            self.sub_a11y.push((sub_key, node));
         }
         self.sub_a11y.extend(other.sub_a11y);
         self.focusable |= other.focusable;

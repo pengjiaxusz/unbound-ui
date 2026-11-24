@@ -12,7 +12,9 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::date_picker::{emit_calendar_view, CalendarSelectionMode, CalendarState, DatePickerDesc, NaiveDate};
+use crate::date_picker::{
+    emit_calendar_view, CalendarSelectionMode, CalendarState, DatePickerDesc, NaiveDate,
+};
 use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
 use crate::{
@@ -39,6 +41,12 @@ pub const CALENDAR_DATE_PICKER_PANEL_HEIGHT: f32 = 280.0;
 pub const CALENDAR_DATE_PICKER_PANEL_RADIUS: f32 = 8.0;
 /// 弹出面板阴影模糊半径。
 pub const CALENDAR_DATE_PICKER_PANEL_SHADOW: f32 = 24.0;
+/// 未选日期时浮层日历的默认基准日期。
+const DEFAULT_CALENDAR_DATE: NaiveDate = NaiveDate {
+    year: 2024,
+    month: 3,
+    day: 15,
+};
 
 /// 日历日期选择器描述符。
 #[derive(Clone, Debug, PartialEq)]
@@ -156,13 +164,25 @@ impl CalendarDatePickerDesc {
     }
 }
 
-/// 日历日期选择器状态：是否展开与已选日期。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// 日历日期选择器状态：是否展开、已选日期与持久化浮层日历状态。
+#[derive(Clone, Debug, PartialEq)]
 pub struct CalendarDatePickerState {
     /// 弹出面板是否展开。
     pub open: bool,
     /// 已选日期。
     pub date: Option<NaiveDate>,
+    /// 弹出日历面板的持久化状态（保留翻页月份与视图钻取层级）。
+    pub calendar: CalendarState,
+}
+
+impl Default for CalendarDatePickerState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            date: None,
+            calendar: CalendarState::new(DEFAULT_CALENDAR_DATE, CalendarSelectionMode::Single),
+        }
+    }
 }
 
 impl CalendarDatePickerState {
@@ -175,20 +195,44 @@ impl CalendarDatePickerState {
     /// 创建已选日期的收起状态。
     #[must_use]
     pub fn with_date(date: NaiveDate) -> Self {
+        let mut calendar = CalendarState::new(date, CalendarSelectionMode::Single);
+        calendar.selected = Some(date);
         Self {
             open: false,
             date: Some(date),
+            calendar,
+        }
+    }
+
+    /// 设置已选日期，并同步对齐内部浮层日历的选中项与浏览月份。
+    pub fn set_date(&mut self, date: Option<NaiveDate>) {
+        self.date = date;
+        self.sync_calendar_to_date();
+    }
+
+    /// 将内部浮层日历的选中项与浏览月份对齐至 `self.date`。
+    pub fn sync_calendar_to_date(&mut self) {
+        self.calendar.selected = self.date;
+        if let Some(date) = self.date {
+            self.calendar.open(date);
         }
     }
 
     /// 切换展开状态。
     pub fn toggle(&mut self) {
-        self.open = !self.open;
+        if self.open {
+            self.collapse();
+        } else {
+            self.expand();
+        }
     }
 
-    /// 展开面板。
+    /// 展开面板，并将浮层日历对齐至当前已选日期（若有）。
     pub fn expand(&mut self) {
-        self.open = true;
+        if !self.open {
+            self.open = true;
+            self.sync_calendar_to_date();
+        }
     }
 
     /// 收起面板。
@@ -204,27 +248,42 @@ impl CalendarDatePickerState {
 
     /// 处理键盘按键输入，若状态改变则返回 `true`。
     pub fn handle_key(&mut self, chord: &KeyChord) -> bool {
+        if self.open {
+            return match chord.key {
+                KeyName::Named("Escape") => {
+                    self.collapse();
+                    true
+                }
+                KeyName::Named("ArrowUp") if chord.alt => {
+                    self.collapse();
+                    true
+                }
+                _ => {
+                    if self.calendar.handle_key(chord) {
+                        if self.calendar.selected != self.date {
+                            self.date = self.calendar.selected;
+                            self.open = false;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+        }
         match chord.key {
             KeyName::Named("Enter") | KeyName::Named("Space") => {
-                self.toggle();
-                true
-            }
-            KeyName::Named("Escape") if self.open => {
-                self.collapse();
-                true
-            }
-            KeyName::Named("ArrowDown") if chord.alt && !self.open => {
                 self.expand();
                 true
             }
-            KeyName::Named("ArrowUp") if chord.alt && self.open => {
-                self.collapse();
+            KeyName::Named("ArrowDown") if chord.alt => {
+                self.expand();
                 true
             }
             KeyName::Named("ArrowLeft") => {
                 if let Some(date) = self.date {
                     if let Some(prev) = date.prev_day() {
-                        self.date = Some(prev);
+                        self.set_date(Some(prev));
                         return true;
                     }
                 }
@@ -233,7 +292,7 @@ impl CalendarDatePickerState {
             KeyName::Named("ArrowRight") => {
                 if let Some(date) = self.date {
                     if let Some(next) = date.next_day() {
-                        self.date = Some(next);
+                        self.set_date(Some(next));
                         return true;
                     }
                 }
@@ -274,18 +333,9 @@ impl UiWidget for CalendarDatePickerDesc {
                 desc.rect = rect;
                 if state.open && desc.panel_rect().contains_point(*pos) {
                     let cal_desc = DatePickerDesc::new(desc.panel_rect()).disabled(desc.disabled);
-                    let mut cal_state = CalendarState::new(
-                        state.date.unwrap_or(NaiveDate {
-                            year: 2024,
-                            month: 3,
-                            day: 15,
-                        }),
-                        CalendarSelectionMode::Single,
-                    );
-                    cal_state.selected = state.date;
-                    if cal_state.handle_click(&cal_desc, *pos) {
-                        if cal_state.selected != state.date {
-                            state.date = cal_state.selected;
+                    if state.calendar.handle_click(&cal_desc, *pos) {
+                        if state.calendar.selected != state.date {
+                            state.date = state.calendar.selected;
                             state.open = false;
                         }
                         return true;
@@ -299,6 +349,7 @@ impl UiWidget for CalendarDatePickerDesc {
                     false
                 }
             }
+            WidgetInputEvent::Wheel { delta } if state.open => state.calendar.handle_wheel(delta.y),
             WidgetInputEvent::KeyDown(chord) => state.handle_key(chord),
             _ => false,
         }
@@ -587,17 +638,10 @@ fn emit_calendar_date_picker_with_icon(
             .with_label("CalendarDatePicker flyout")
             .with_z(z.saturating_add(10))
             .disabled(disabled);
-        let today = state.date.unwrap_or(NaiveDate {
-            year: 2024,
-            month: 3,
-            day: 15,
-        });
-        let mut cal_state = CalendarState::new(today, CalendarSelectionMode::Single);
-        cal_state.selected = state.date;
         let cal_out = emit_calendar_view(
             calendar_popup_node(node),
             &cal_desc,
-            &cal_state,
+            &state.calendar,
             ControlState {
                 disabled,
                 ..ControlState::default()
@@ -742,5 +786,65 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn flyout_calendar_navigation_and_drill_up_persist_across_events() {
+        use crate::date_picker::{CalendarDisplayMode, YearMonth};
+
+        let d = desc();
+        let mut state = CalendarDatePickerState::with_date(date());
+
+        // 点击右侧图标展开浮层，初始视图应与已选日期 2024-03 对齐。
+        let opened = d.reduce(
+            &mut state,
+            d.rect,
+            &WidgetInputEvent::PointerDown {
+                pos: d.icon_rect().center(),
+                click_count: 1,
+            },
+        );
+        assert!(opened);
+        assert!(state.open);
+        assert_eq!(state.calendar.view, YearMonth { year: 2024, month: 3 });
+
+        // 点击浮层下一月按钮：浮层保持展开且视图持续推进，不弹回原月份。
+        let cal_desc = DatePickerDesc::new(d.panel_rect());
+        let paged = d.reduce(
+            &mut state,
+            d.rect,
+            &WidgetInputEvent::PointerDown {
+                pos: cal_desc.next_rect().center(),
+                click_count: 1,
+            },
+        );
+        assert!(paged);
+        assert!(state.open);
+        assert_eq!(state.calendar.view, YearMonth { year: 2024, month: 4 });
+
+        let paged_again = d.reduce(
+            &mut state,
+            d.rect,
+            &WidgetInputEvent::PointerDown {
+                pos: cal_desc.next_rect().center(),
+                click_count: 1,
+            },
+        );
+        assert!(paged_again);
+        assert!(state.open);
+        assert_eq!(state.calendar.view, YearMonth { year: 2024, month: 5 });
+
+        // 点击钻取标题切换到 Year 视图：浮层保持展开且模式持久化。
+        let drilled = d.reduce(
+            &mut state,
+            d.rect,
+            &WidgetInputEvent::PointerDown {
+                pos: cal_desc.header_title_rect().center(),
+                click_count: 1,
+            },
+        );
+        assert!(drilled);
+        assert!(state.open);
+        assert_eq!(state.calendar.display_mode, CalendarDisplayMode::Year);
     }
 }

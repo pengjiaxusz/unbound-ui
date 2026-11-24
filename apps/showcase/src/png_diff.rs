@@ -139,7 +139,7 @@ pub const EXEMPT_CASES: &[ExemptCase] = &[
         name: "CalendarDatePicker_normal_dark",
         reason: "同 normal_light：字形 AA 墨量差与图标字形光栅化差异",
     },
-    // 注：CalendarView 已按 ADR-0038 直连真实 emit_calendar_view 控件并扩展多状态配方，
+    // 注：CalendarView 已按 ADR-0043 直连真实 emit_calendar_view 控件并扩展多状态配方，
     // 以下旧豁免项暂保留，待 Windows 真机重新采集与像素差分实测后决定是否移除或调整。
     ExemptCase {
         name: "CalendarView_normal_light",

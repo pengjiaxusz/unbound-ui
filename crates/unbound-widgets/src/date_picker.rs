@@ -273,6 +273,16 @@ impl YearMonth {
         }
     }
 
+    /// 偏移指定月数（正数向后，负数向前）。
+    #[must_use]
+    pub fn offset_months(self, delta: i32) -> Self {
+        let total = self.year * 12 + i32::from(self.month - 1) + delta;
+        Self {
+            year: total.div_euclid(12),
+            month: (total.rem_euclid(12) + 1) as u8,
+        }
+    }
+
     /// 当月第一天。
     #[must_use]
     pub fn first(self) -> NaiveDate {
@@ -1013,19 +1023,20 @@ impl CalendarState {
             CalendarDisplayMode::Year => match key.key {
                 KeyName::Named("PageUp") => self.page_prev(),
                 KeyName::Named("PageDown") => self.page_next(),
-                KeyName::Named("ArrowLeft") | KeyName::Named("ArrowUp") => {
-                    let prev = self.view.prev();
-                    if self.is_month_in_bounds(prev.year, prev.month) {
-                        self.view = prev;
-                        true
-                    } else {
-                        false
-                    }
-                }
-                KeyName::Named("ArrowRight") | KeyName::Named("ArrowDown") => {
-                    let next = self.view.next();
-                    if self.is_month_in_bounds(next.year, next.month) {
-                        self.view = next;
+                KeyName::Named("ArrowLeft")
+                | KeyName::Named("ArrowRight")
+                | KeyName::Named("ArrowUp")
+                | KeyName::Named("ArrowDown") => {
+                    let delta = match key.key {
+                        KeyName::Named("ArrowLeft") => -1,
+                        KeyName::Named("ArrowRight") => 1,
+                        KeyName::Named("ArrowUp") => -4,
+                        KeyName::Named("ArrowDown") => 4,
+                        _ => 0,
+                    };
+                    let target = self.view.offset_months(delta);
+                    if self.is_month_in_bounds(target.year, target.month) {
+                        self.view = target;
                         true
                     } else {
                         false
@@ -1043,17 +1054,20 @@ impl CalendarState {
             CalendarDisplayMode::Decade => match key.key {
                 KeyName::Named("PageUp") => self.page_prev(),
                 KeyName::Named("PageDown") => self.page_next(),
-                KeyName::Named("ArrowLeft") | KeyName::Named("ArrowUp") => {
-                    if self.is_year_in_bounds(self.view.year - 1) {
-                        self.view.year -= 1;
-                        true
-                    } else {
-                        false
-                    }
-                }
-                KeyName::Named("ArrowRight") | KeyName::Named("ArrowDown") => {
-                    if self.is_year_in_bounds(self.view.year + 1) {
-                        self.view.year += 1;
+                KeyName::Named("ArrowLeft")
+                | KeyName::Named("ArrowRight")
+                | KeyName::Named("ArrowUp")
+                | KeyName::Named("ArrowDown") => {
+                    let delta = match key.key {
+                        KeyName::Named("ArrowLeft") => -1,
+                        KeyName::Named("ArrowRight") => 1,
+                        KeyName::Named("ArrowUp") => -4,
+                        KeyName::Named("ArrowDown") => 4,
+                        _ => 0,
+                    };
+                    let target_year = self.view.year + delta;
+                    if self.is_year_in_bounds(target_year) {
+                        self.view.year = target_year;
                         true
                     } else {
                         false

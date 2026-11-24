@@ -938,7 +938,7 @@ impl<'a> Canvas<'a> {
             let is_elided_last = was_clamped && idx + 1 == wrapped.lines.len();
             let shaped_line = if is_elided_last {
                 let elided = format!("{}\u{2026}", slice.trim_end());
-                labels.engine.shape(&elided, &style)
+                labels.engine.shape_elided(&elided, &style, max_width)
             } else {
                 labels.engine.shape(slice, &style)
             };

@@ -2344,6 +2344,17 @@ impl GalleryApp {
                     _ => false,
                 };
                 if handled {
+                    if self.state.active_component == Some(WidgetCatalogId::CalendarView) {
+                        let dm = match self.state.sandbox.calendar_view.display_mode {
+                            unbound_widgets::CalendarDisplayMode::Month => 0.0,
+                            unbound_widgets::CalendarDisplayMode::Year => 1.0,
+                            unbound_widgets::CalendarDisplayMode::Decade => 2.0,
+                        };
+                        let card = pages::components::component_card_index(
+                            WidgetCatalogId::CalendarView,
+                        );
+                        self.state.set_knob(PageId::Components, card, 1, dm);
+                    }
                     self.state.bump();
                     return;
                 }
