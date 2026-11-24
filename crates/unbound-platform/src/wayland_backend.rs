@@ -59,6 +59,7 @@ use wayland_protocols::wp::text_input::zv3::client::{
 use wayland_protocols::xdg::shell::client::{xdg_positioner, xdg_toplevel};
 
 use crate::backend::{push_coalesced_event, Flow, PlatformApp};
+use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea, WindowRole};
 use crate::native_window::NativeWindow;
 use crate::pacing::PresentWaitPolicy;
 use crate::popup_host::PopupWindowConfig;
@@ -98,6 +99,10 @@ enum WaylandCommand {
     SetVisible {
         id: isize,
         visible: bool,
+    },
+    SetClickThrough {
+        id: isize,
+        click_through: bool,
     },
     SetCursor {
         cursor: CursorIcon,
@@ -381,6 +386,35 @@ impl WaylandWindowHandle {
             id: self.shared.id,
             visible,
         });
+    }
+
+    pub(crate) fn set_visible_no_activate(&self, visible: bool) {
+        self.set_visible(visible);
+    }
+
+    pub(crate) fn set_always_on_top(&self, topmost: bool) {
+        // Wayland `xdg_toplevel` 不支持应用侧强制置顶，安全无操作。
+        let _ = topmost;
+    }
+
+    pub(crate) fn set_click_through(&self, click_through: bool) {
+        self.send(WaylandCommand::SetClickThrough {
+            id: self.shared.id,
+            click_through,
+        });
+    }
+
+    pub(crate) fn set_outer_rect(&self, rect: ScreenRect) {
+        // Wayland `xdg_toplevel` 不暴露全局坐标定位，安全无操作。
+        let _ = rect;
+    }
+
+    pub(crate) fn capabilities(&self) -> FloatingWindowCapabilities {
+        FloatingWindowCapabilities::wayland_xdg_fallback()
+    }
+
+    pub(crate) fn work_area(&self) -> Option<MonitorWorkArea> {
+        crate::floating::work_area_for_point(0, 0)
     }
 
     pub(crate) fn set_minimized(&self, minimized: bool) {
@@ -673,11 +707,19 @@ impl WaylandState {
         let surface_proto_id = surface_obj_id.protocol_id();
         let surface_ptr = surface_obj_id.as_ptr() as usize;
 
-        let decorations = if config.decorations {
-            WindowDecorations::RequestServer
-        } else {
+        let borderless = !config.decorations || config.role != WindowRole::Standard;
+        let decorations = if borderless {
             WindowDecorations::ClientOnly
+        } else {
+            WindowDecorations::RequestServer
         };
+        if config.floating_policy.click_through {
+            if let Ok(region) =
+                smithay_client_toolkit::compositor::Region::new(&self.compositor_state)
+            {
+                surface.set_input_region(Some(region.wl_region()));
+            }
+        }
         let sctk_window = self.xdg_shell.create_window(surface, decorations, qh);
         sctk_window.set_title(&config.title);
         sctk_window.set_app_id("unbound-ui");
@@ -703,7 +745,7 @@ impl WaylandState {
             id,
             display_ptr: self.display_ptr,
             surface_ptr,
-            decorated: config.decorations,
+            decorated: !borderless,
             popup_id: None,
             inner_size: Mutex::new(PhysicalSize::new(phys_w.max(1), phys_h.max(1))),
             scale_bits: AtomicU64::new(init_scale.to_bits()),
@@ -955,6 +997,24 @@ impl WaylandState {
             WaylandCommand::SetVisible { id, visible } => {
                 if let Some(entry) = self.window_by_id_mut(id) {
                     entry.throttle.set_hidden_or_minimized(!visible);
+                }
+            }
+            WaylandCommand::SetClickThrough { id, click_through } => {
+                if click_through {
+                    if let Ok(region) =
+                        smithay_client_toolkit::compositor::Region::new(&self.compositor_state)
+                    {
+                        if let Some(entry) = self.window_by_id_mut(id) {
+                            entry
+                                .sctk_window
+                                .wl_surface()
+                                .set_input_region(Some(region.wl_region()));
+                            entry.sctk_window.wl_surface().commit();
+                        }
+                    }
+                } else if let Some(entry) = self.window_by_id_mut(id) {
+                    entry.sctk_window.wl_surface().set_input_region(None);
+                    entry.sctk_window.wl_surface().commit();
                 }
             }
             WaylandCommand::SetCursor { cursor } => {

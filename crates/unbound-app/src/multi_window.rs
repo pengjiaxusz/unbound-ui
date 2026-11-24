@@ -22,15 +22,18 @@ use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
-    PlatformState, SurfaceAlpha, WindowConfig,
+    PlatformState, ScreenRect, SurfaceAlpha, WindowConfig, WindowPosition,
 };
 use unbound_platform::{
-    begin_outbound_file_drag, FramePacer, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
-    PopupWindowConfig, WindowId, WindowRegistry,
+    begin_outbound_file_drag, clamp_rect_to_work_area, resolve_floating_placement, solve_edge_snap,
+    FloatingPlacementStrategy, FloatingWindowCapabilities, FloatingWindowPolicy, FramePacer,
+    MonitorWorkArea, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry, PopupWindowConfig,
+    RelativeMonitorAnchor, WindowId, WindowRegistry, WindowRole,
 };
 use unbound_theme::ThemeSet;
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
+use crate::floating_host::FloatingHost;
 use crate::{
     AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind, WindowCommand,
@@ -503,6 +506,15 @@ impl<A: Application> Drop for WindowContext<A> {
     }
 }
 
+/// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
+#[derive(Clone, Copy, Debug, Default)]
+struct FloatingLiveSync {
+    visible: Option<bool>,
+    topmost: Option<bool>,
+    click_through: Option<bool>,
+    outer_rect: Option<ScreenRect>,
+}
+
 /// 多窗口共享 `VkDevice` 与共享基础图集的运行时协调器。
 pub struct MultiWindowCoordinator<A: Application> {
     registry: WindowRegistry<WindowContext<A>>,
@@ -514,6 +526,10 @@ pub struct MultiWindowCoordinator<A: Application> {
     pending_popup_syncs: Vec<(u64, PopupWindowConfig)>,
     pending_popup_closes: Vec<u64>,
     native_popup_owners: FxHashMap<WindowId, (u64, WindowId)>,
+    floating_host: FloatingHost,
+    focused_window_id: Option<WindowId>,
+    headless_work_areas: Vec<MonitorWorkArea>,
+    pending_floating_live_syncs: FxHashMap<WindowId, FloatingLiveSync>,
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -540,6 +556,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
             native_popup_owners: FxHashMap::default(),
+            floating_host: FloatingHost::with_current_platform(),
+            focused_window_id: None,
+            headless_work_areas: Vec::new(),
+            pending_floating_live_syncs: FxHashMap::default(),
             primary_config,
             factory: Box::new(factory),
             waker: None,
@@ -577,8 +597,142 @@ impl<A: Application> MultiWindowCoordinator<A> {
         self.pending_windows.push_back(config);
     }
 
+    fn default_fallback_work_area() -> MonitorWorkArea {
+        MonitorWorkArea {
+            monitor_bounds: ScreenRect::new(0, 0, 1920, 1080),
+            work_area: ScreenRect::new(0, 0, 1920, 1040),
+            scale_factor: 1.0,
+            is_primary: true,
+        }
+    }
+
+    fn select_work_area_for_rect(&self, desired: ScreenRect) -> MonitorWorkArea {
+        if self.headless_work_areas.is_empty() {
+            return Self::default_fallback_work_area();
+        }
+        let cx = i64::from(desired.x) + i64::from(desired.width) / 2;
+        let cy = i64::from(desired.y) + i64::from(desired.height) / 2;
+        if let Some(hit) = self.headless_work_areas.iter().find(|m| {
+            let b = m.monitor_bounds;
+            cx >= i64::from(b.x)
+                && cx < i64::from(b.x) + i64::from(b.width)
+                && cy >= i64::from(b.y)
+                && cy < i64::from(b.y) + i64::from(b.height)
+        }) {
+            return *hit;
+        }
+        // 中心点越出所有显示器时，优先选择距离最近的显示器，避免辅屏越界被弹回主屏。
+        *self
+            .headless_work_areas
+            .iter()
+            .min_by_key(|m| {
+                let b = m.monitor_bounds;
+                let min_x = i64::from(b.x);
+                let max_x = min_x + i64::from(b.width.max(1)) - 1;
+                let min_y = i64::from(b.y);
+                let max_y = min_y + i64::from(b.height.max(1)) - 1;
+                let dx = if cx < min_x {
+                    min_x - cx
+                } else if cx > max_x {
+                    cx - max_x
+                } else {
+                    0
+                };
+                let dy = if cy < min_y {
+                    min_y - cy
+                } else if cy > max_y {
+                    cy - max_y
+                } else {
+                    0
+                };
+                dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
+            })
+            .unwrap_or(&self.headless_work_areas[0])
+    }
+
+    fn resolve_open_floating_config(
+        &self,
+        mut config: WindowConfig,
+        placement: Option<FloatingPlacementStrategy>,
+    ) -> WindowConfig {
+        config.decorations = false;
+        config.surface_alpha = SurfaceAlpha::PreMultiplied;
+        if let Some(strategy) = placement {
+            let target_rect = match strategy {
+                FloatingPlacementStrategy::CursorMonitorAvoid { cursor, size, .. } => {
+                    ScreenRect::new(cursor.0, cursor.1, size.0, size.1)
+                }
+                FloatingPlacementStrategy::AnchorRectAvoid { anchor, .. } => anchor,
+                FloatingPlacementStrategy::EdgeSnap { desired, .. } => desired,
+            };
+            let work_area = self.select_work_area_for_rect(target_rect).work_area;
+            let rect = resolve_floating_placement(&strategy, work_area);
+            config.position = WindowPosition::Physical {
+                x: rect.x,
+                y: rect.y,
+            };
+            config.width = rect.width.max(1);
+            config.height = rect.height.max(1);
+        }
+        config
+    }
+
+    fn initial_rect_from_config(config: &WindowConfig) -> ScreenRect {
+        match config.position {
+            WindowPosition::Physical { x, y } | WindowPosition::Logical { x, y } => {
+                ScreenRect::new(x, y, config.width.max(1), config.height.max(1))
+            }
+            _ => ScreenRect::new(0, 0, config.width.max(1), config.height.max(1)),
+        }
+    }
+
+    fn is_window_no_activate(&self, id: WindowId) -> bool {
+        if let Some(state) = self.floating_host.get(id) {
+            return state.effective_policy.no_activate;
+        }
+        self.registry.get(id).is_some_and(|ctx| {
+            ctx.config.role != WindowRole::Standard && ctx.config.floating_policy.no_activate
+        })
+    }
+
     /// 无头注册一个窗口上下文（主要用于无头多窗口测试与集成验证）。
     pub fn register_headless_window(&mut self, id: WindowId, config: WindowConfig) {
+        if config.role != WindowRole::Standard {
+            self.register_headless_floating_window(id, config);
+            return;
+        }
+        let app = self.factory.create(id, &config);
+        let mut ctx = WindowContext::new(app, &config);
+        if let Some(waker) = &self.waker {
+            ctx.runtime
+                .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
+        }
+        let visible = config.visible;
+        let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        if self.focused_window_id.is_none() && visible {
+            self.focused_window_id = Some(id);
+        }
+    }
+
+    /// 无头注册一个幽灵窗或悬浮浮岛上下文（含策略、初始外框与焦点隔离初始化）。
+    pub fn register_headless_floating_window(&mut self, id: WindowId, mut config: WindowConfig) {
+        config.decorations = false;
+        config.surface_alpha = SurfaceAlpha::PreMultiplied;
+        let mut outer_rect = Self::initial_rect_from_config(&config);
+        if self
+            .floating_host
+            .capabilities()
+            .supports_global_positioning
+            && !self.headless_work_areas.is_empty()
+        {
+            let area = self.select_work_area_for_rect(outer_rect);
+            outer_rect = clamp_rect_to_work_area(outer_rect, area.work_area);
+        }
+        let role = config.role;
+        let policy = config.floating_policy;
+        let visible = config.visible;
+
         let app = self.factory.create(id, &config);
         let mut ctx = WindowContext::new(app, &config);
         if let Some(waker) = &self.waker {
@@ -586,10 +740,121 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
         }
         let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        let state = self
+            .floating_host
+            .register(id, role, policy, outer_rect, visible);
+        // 绝不将 Ghost 提升为主窗口；若当前主窗口是非 Standard，则尝试保持首个 Standard 为主窗口。
+        if let Some(primary) = self.registry.primary() {
+            if primary == id && role == WindowRole::Ghost {
+                let std_id = self
+                    .registry
+                    .iter()
+                    .find(|s| s.context.config.role == WindowRole::Standard)
+                    .map(|s| s.id);
+                if let Some(std_id) = std_id {
+                    let _ = self.registry.set_primary(std_id);
+                }
+            }
+        }
+        if !state.effective_policy.no_activate && visible && self.focused_window_id.is_none() {
+            self.focused_window_id = Some(id);
+        }
     }
 
-    /// 按严格回收顺序关闭并移除指定窗口；若全部窗口均已关闭则释放共享图集与设备引用。
+    /// 无头模拟窗口焦点事件，验证 `no_activate` 浮窗绝不抢占宿主焦点。
+    pub fn simulate_window_focus_event(&mut self, id: WindowId, focused: bool) {
+        if self.is_window_no_activate(id) {
+            if let Some(ctx) = self.registry.get_mut(id) {
+                ctx.runtime.set_window_focused(false);
+            }
+            return;
+        }
+        if focused {
+            self.focused_window_id = Some(id);
+        } else if self.focused_window_id == Some(id) {
+            self.focused_window_id = None;
+        }
+        if let Some(ctx) = self.registry.get_mut(id) {
+            ctx.pacer.set_focused(focused);
+            ctx.runtime.set_window_focused(focused);
+        }
+    }
+
+    /// 查询指定窗口的角色。
+    #[must_use]
+    pub fn window_role(&self, id: WindowId) -> Option<WindowRole> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.role)
+            .or_else(|| self.registry.get(id).map(|c| c.config.role))
+    }
+
+    /// 查询指定浮窗当前生效的策略。
+    #[must_use]
+    pub fn floating_policy(&self, id: WindowId) -> Option<FloatingWindowPolicy> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.effective_policy)
+            .or_else(|| self.registry.get(id).map(|c| c.config.floating_policy))
+    }
+
+    /// 查询指定浮窗当前记录的屏幕物理外框矩形。
+    #[must_use]
+    pub fn window_outer_rect(&self, id: WindowId) -> Option<ScreenRect> {
+        self.floating_host.get(id).map(|s| s.outer_rect)
+    }
+
+    /// 查询指定窗口当前是否可见。
+    #[must_use]
+    pub fn window_visible(&self, id: WindowId) -> Option<bool> {
+        self.floating_host
+            .get(id)
+            .map(|s| s.visible)
+            .or_else(|| self.registry.iter().find(|s| s.id == id).map(|s| s.visible))
+    }
+
+    /// 查询指定浮窗的实例代次（仅销毁重建时递增，热切换保持不变）。
+    #[must_use]
+    pub fn window_generation(&self, id: WindowId) -> Option<u64> {
+        self.floating_host.get(id).map(|s| s.generation)
+    }
+
+    /// 查询指定浮窗最近一次边缘磁吸记录的相对显示器锚点。
+    #[must_use]
+    pub fn last_snap_anchor(&self, id: WindowId) -> Option<RelativeMonitorAnchor> {
+        self.floating_host.get(id).and_then(|s| s.last_snap_anchor)
+    }
+
+    /// 查询当前拥有键盘焦点的窗口 ID。
+    #[must_use]
+    pub const fn focused_window_id(&self) -> Option<WindowId> {
+        self.focused_window_id
+    }
+
+    /// 获取当前协调器持有的浮窗平台能力矩阵。
+    #[must_use]
+    pub const fn floating_capabilities(&self) -> FloatingWindowCapabilities {
+        self.floating_host.capabilities()
+    }
+
+    /// 在无头模式下注入平台能力矩阵（用于测试 Win32 / X11 / Wayland 降级路径）。
+    pub fn set_headless_capabilities(&mut self, caps: FloatingWindowCapabilities) {
+        self.floating_host.set_capabilities(caps);
+    }
+
+    /// 在无头模式下注入多显示器工作区列表（用于测试负坐标辅屏、避让与边缘磁吸）。
+    pub fn set_headless_work_areas(&mut self, areas: Vec<MonitorWorkArea>) {
+        self.headless_work_areas = areas;
+    }
+
+    /// 按严格回收顺序关闭并移除指定窗口；若无任何 `Standard` 窗口存活则级联关闭全部浮窗并释放共享 GPU。
     pub fn close_window(&mut self, id: WindowId) -> bool {
+        let _ = self.floating_host.unregister(id);
+        self.pending_floating_live_syncs.remove(&id);
+        if self.focused_window_id == Some(id) {
+            self.focused_window_id = None;
+        }
         let Some(mut ctx) = self.registry.remove(id) else {
             return false;
         };
@@ -600,10 +865,151 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
         ctx.destroy_vulkan();
         drop(ctx);
+
+        // 绝不将 Ghost 提升为主窗口；若不再有 Standard 窗口存活，级联关闭所有剩余浮窗。
+        let next_standard = self
+            .registry
+            .iter()
+            .find(|slot| slot.context.config.role == WindowRole::Standard)
+            .map(|slot| slot.id);
+        if let Some(std_id) = next_standard {
+            if let Some(primary_id) = self.registry.primary() {
+                if self
+                    .registry
+                    .get(primary_id)
+                    .is_some_and(|c| c.config.role == WindowRole::Ghost)
+                {
+                    let _ = self.registry.set_primary(std_id);
+                }
+            }
+        } else if !self.registry.is_empty() {
+            let remaining_ids: Vec<WindowId> = self.registry.iter().map(|slot| slot.id).collect();
+            for rem_id in remaining_ids {
+                let _ = self.floating_host.unregister(rem_id);
+                self.pending_floating_live_syncs.remove(&rem_id);
+                if self.focused_window_id == Some(rem_id) {
+                    self.focused_window_id = None;
+                }
+                if let Some(mut rem_ctx) = self.registry.remove(rem_id) {
+                    for action in rem_ctx.popup_host.close_for_owner(rem_id) {
+                        if let unbound_platform::PopupSyncAction::Close { id: popup_id, .. } =
+                            action
+                        {
+                            self.pending_popup_closes.push(popup_id);
+                        }
+                    }
+                    rem_ctx.destroy_vulkan();
+                    drop(rem_ctx);
+                    self.pending_window_close_requests.push(rem_id);
+                }
+            }
+        }
+
         if self.registry.is_empty() {
             self.release_shared_gpu();
         }
         true
+    }
+
+    fn apply_floating_command_state(&mut self, cmd: &WindowCommand) {
+        match cmd {
+            WindowCommand::UpdateFloatingPolicy { id, policy } => {
+                if let Some(eff) = self.floating_host.update_policy(*id, *policy) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy = *policy;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.topmost = Some(eff.always_on_top);
+                    sync.click_through = Some(eff.click_through);
+                }
+            }
+            WindowCommand::SetWindowVisibleNoActivate { id, visible } => {
+                if self.floating_host.set_visible(*id, *visible) {
+                    self.registry.set_visible(*id, *visible);
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.visible = Some(*visible);
+                }
+            }
+            WindowCommand::SetWindowAlwaysOnTop { id, topmost } => {
+                if let Some(eff_topmost) = self.floating_host.set_always_on_top(*id, *topmost) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy.always_on_top = *topmost;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.topmost = Some(eff_topmost);
+                }
+            }
+            WindowCommand::SetWindowClickThrough { id, click_through } => {
+                if let Some(eff_ct) = self.floating_host.set_click_through(*id, *click_through) {
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.config.floating_policy.click_through = *click_through;
+                    }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.click_through = Some(eff_ct);
+                }
+            }
+            WindowCommand::SetWindowOuterRect { id, rect } => {
+                let target_rect = if self
+                    .floating_host
+                    .capabilities()
+                    .supports_global_positioning
+                    && !self.headless_work_areas.is_empty()
+                {
+                    let area = self.select_work_area_for_rect(*rect);
+                    clamp_rect_to_work_area(*rect, area.work_area)
+                } else {
+                    *rect
+                };
+                if let Some(applied) = self.floating_host.set_outer_rect(*id, target_rect) {
+                    if self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
+                    {
+                        let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                        sync.outer_rect = Some(applied);
+                    }
+                }
+            }
+            WindowCommand::SnapFloatingWindow {
+                id,
+                desired,
+                snap_threshold,
+            } => {
+                let area = self.select_work_area_for_rect(*desired);
+                let snap = solve_edge_snap(*desired, area.work_area, *snap_threshold);
+                if self
+                    .floating_host
+                    .set_snap_anchor(*id, snap.rect, Some(snap.anchor))
+                    && self
+                        .floating_host
+                        .capabilities()
+                        .supports_global_positioning
+                {
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.outer_rect = Some(snap.rect);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn flush_floating_live_sync(&mut self, id: WindowId, window: &NativeWindow) {
+        let Some(sync) = self.pending_floating_live_syncs.remove(&id) else {
+            return;
+        };
+        if let Some(visible) = sync.visible {
+            window.set_visible_no_activate(visible);
+        }
+        if let Some(topmost) = sync.topmost {
+            window.set_always_on_top(topmost);
+        }
+        if let Some(click_through) = sync.click_through {
+            window.set_click_through(click_through);
+        }
+        if let Some(rect) = sync.outer_rect {
+            window.set_outer_rect(rect);
+        }
     }
 
     /// 排空指定窗口上下文产出的命令（无头安全路径：不依赖原生 `Window` 句柄）。
@@ -611,34 +1017,55 @@ impl<A: Application> MultiWindowCoordinator<A> {
     /// 返回需要关闭的目标窗口 ID 列表。
     pub fn route_window_commands(&mut self, source_id: WindowId) -> Vec<WindowId> {
         let mut to_close = Vec::new();
-        let Some(ctx) = self.registry.get_mut(source_id) else {
+        let Some(cmds) = self
+            .registry
+            .get_mut(source_id)
+            .map(|ctx| ctx.runtime.drain_window_commands())
+        else {
             return to_close;
         };
-        let cmds = ctx.runtime.drain_window_commands();
         for cmd in cmds {
             match cmd {
                 WindowCommand::OpenWindow(mut config) => {
                     config.decorations = false;
                     self.pending_windows.push_back(config);
                 }
-                WindowCommand::CloseWindow(target) => {
+                WindowCommand::OpenFloatingWindow { config, placement } => {
+                    let resolved = self.resolve_open_floating_config(config, placement);
+                    self.pending_windows.push_back(resolved);
+                }
+                WindowCommand::CloseWindow(target) | WindowCommand::CloseFloatingWindow(target) => {
                     to_close.push(target);
                 }
                 WindowCommand::Close => {
                     to_close.push(source_id);
                 }
                 WindowCommand::SetThrottlePolicy(policy) => {
-                    ctx.pacer.set_throttle_policy(policy);
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        ctx.pacer.set_throttle_policy(policy);
+                    }
                 }
                 WindowCommand::SyncNativePopup { id, config } => {
-                    if ctx.popup_host.sync_popup(id, config).is_some() {
-                        self.pending_popup_syncs.push((id, config));
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        if ctx.popup_host.sync_popup(id, config).is_some() {
+                            self.pending_popup_syncs.push((id, config));
+                        }
                     }
                 }
                 WindowCommand::CloseNativePopup { id } => {
-                    if ctx.popup_host.close_popup(id).is_some() {
-                        self.pending_popup_closes.push(id);
+                    if let Some(ctx) = self.registry.get_mut(source_id) {
+                        if ctx.popup_host.close_popup(id).is_some() {
+                            self.pending_popup_closes.push(id);
+                        }
                     }
+                }
+                cmd @ (WindowCommand::UpdateFloatingPolicy { .. }
+                | WindowCommand::SetWindowVisibleNoActivate { .. }
+                | WindowCommand::SetWindowAlwaysOnTop { .. }
+                | WindowCommand::SetWindowClickThrough { .. }
+                | WindowCommand::SetWindowOuterRect { .. }
+                | WindowCommand::SnapFloatingWindow { .. }) => {
+                    self.apply_floating_command_state(&cmd);
                 }
                 WindowCommand::StartDrag
                 | WindowCommand::Minimize
@@ -841,13 +1268,35 @@ impl<A: Application> MultiWindowCoordinator<A> {
         ctx.sync_appearance(window);
         ctx.last_frame = Instant::now();
 
+        let caps = window.capabilities();
+        self.floating_host.set_capabilities(caps);
+        let role = config.role;
+        let policy = config.floating_policy;
+        let visible = config.visible;
+        let outer_rect = ScreenRect::new(client_screen.x, client_screen.y, width, height);
         let _ = self.registry.insert(id, ctx);
+        self.registry.set_visible(id, visible);
+        if role != WindowRole::Standard {
+            let state = self
+                .floating_host
+                .register(id, role, policy, outer_rect, visible);
+            let eff = state.effective_policy;
+            window.set_always_on_top(eff.always_on_top);
+            window.set_click_through(eff.click_through);
+            window.set_visible_no_activate(visible);
+            if !eff.no_activate && visible && self.focused_window_id.is_none() {
+                self.focused_window_id = Some(id);
+            }
+        } else if visible && self.focused_window_id.is_none() {
+            self.focused_window_id = Some(id);
+        }
     }
 
     fn drain_window_commands_live(&mut self, id: WindowId, window: &NativeWindow) -> Flow {
         let mut outbound_drag = None;
         let mut close_targets = Vec::new();
         let mut close_self = false;
+        let mut deferred_floating = Vec::new();
 
         if let Some(ctx) = self.registry.get_mut(id) {
             for cmd in ctx.runtime.drain_window_commands() {
@@ -887,12 +1336,25 @@ impl<A: Application> MultiWindowCoordinator<A> {
                         config.decorations = false;
                         self.pending_windows.push_back(config);
                     }
-                    WindowCommand::CloseWindow(target) => {
+                    WindowCommand::OpenFloatingWindow { config, placement } => {
+                        deferred_floating
+                            .push(WindowCommand::OpenFloatingWindow { config, placement });
+                    }
+                    WindowCommand::CloseWindow(target)
+                    | WindowCommand::CloseFloatingWindow(target) => {
                         if target == id {
                             close_self = true;
                         } else {
                             close_targets.push(target);
                         }
+                    }
+                    other @ (WindowCommand::UpdateFloatingPolicy { .. }
+                    | WindowCommand::SetWindowVisibleNoActivate { .. }
+                    | WindowCommand::SetWindowAlwaysOnTop { .. }
+                    | WindowCommand::SetWindowClickThrough { .. }
+                    | WindowCommand::SetWindowOuterRect { .. }
+                    | WindowCommand::SnapFloatingWindow { .. }) => {
+                        deferred_floating.push(other);
                     }
                 }
             }
@@ -910,6 +1372,60 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 window.request_redraw();
             }
         }
+
+        if !deferred_floating.is_empty() {
+            self.floating_host.set_capabilities(window.capabilities());
+            let live_work_area = window.work_area();
+            for cmd in deferred_floating {
+                match cmd {
+                    WindowCommand::OpenFloatingWindow { config, placement } => {
+                        let resolved = if let Some(area) = &live_work_area {
+                            let mut c = config;
+                            c.decorations = false;
+                            c.surface_alpha = SurfaceAlpha::PreMultiplied;
+                            if let Some(strategy) = placement {
+                                let rect = resolve_floating_placement(&strategy, area.work_area);
+                                c.position = WindowPosition::Physical {
+                                    x: rect.x,
+                                    y: rect.y,
+                                };
+                                c.width = rect.width.max(1);
+                                c.height = rect.height.max(1);
+                            }
+                            c
+                        } else {
+                            self.resolve_open_floating_config(config, placement)
+                        };
+                        self.pending_windows.push_back(resolved);
+                    }
+                    WindowCommand::SnapFloatingWindow {
+                        id: target,
+                        desired,
+                        snap_threshold,
+                    } => {
+                        let work_area = live_work_area
+                            .as_ref()
+                            .map(|m| m.work_area)
+                            .unwrap_or_else(|| self.select_work_area_for_rect(desired).work_area);
+                        let snap = solve_edge_snap(desired, work_area, snap_threshold);
+                        if self
+                            .floating_host
+                            .set_snap_anchor(target, snap.rect, Some(snap.anchor))
+                            && self
+                                .floating_host
+                                .capabilities()
+                                .supports_global_positioning
+                        {
+                            let sync = self.pending_floating_live_syncs.entry(target).or_default();
+                            sync.outer_rect = Some(snap.rect);
+                        }
+                    }
+                    other => self.apply_floating_command_state(&other),
+                }
+            }
+        }
+
+        self.flush_floating_live_sync(id, window);
 
         for target in close_targets {
             if self.close_window(target) {
@@ -1137,6 +1653,11 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             return Flow::Continue;
         };
         let os_scale = ctx.sync_os_scale(window);
+        let focused_event = if let PlatformEvent::Focused(focused) = &event {
+            Some(*focused)
+        } else {
+            None
+        };
         match event {
             PlatformEvent::Resized(_) => {
                 let size = window.inner_size();
@@ -1272,11 +1793,17 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 ctx.runtime.file_hover_cancelled();
             }
             PlatformEvent::Focused(focused) => {
-                ctx.pacer.set_focused(focused);
-                if focused {
-                    ctx.pacer.note_activity(Instant::now());
+                let no_activate = ctx.config.role != WindowRole::Standard
+                    && ctx.config.floating_policy.no_activate;
+                if no_activate {
+                    ctx.runtime.set_window_focused(false);
+                } else {
+                    ctx.pacer.set_focused(focused);
+                    if focused {
+                        ctx.pacer.note_activity(Instant::now());
+                    }
+                    ctx.runtime.set_window_focused(focused);
                 }
-                ctx.runtime.set_window_focused(focused);
             }
             PlatformEvent::Minimized(minimized) => {
                 ctx.pacer.set_minimized(minimized);
@@ -1311,6 +1838,16 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
         let dirty = ctx.runtime.dirty() != crate::DirtyFlags::NONE;
         let suspended = ctx.pacer.is_suspended();
+        if let Some(focused) = focused_event {
+            if !self.is_window_no_activate(id) {
+                if focused {
+                    self.focused_window_id = Some(id);
+                } else if self.focused_window_id == Some(id) {
+                    self.focused_window_id = None;
+                }
+            }
+        }
+        self.flush_floating_live_sync(id, window);
         if self.drain_window_commands_live(id, window) == Flow::Exit {
             return Flow::Exit;
         }
@@ -1852,5 +2389,209 @@ mod tests {
         assert!(!win.theme_driver.is_active());
         assert_eq!(win.theme_driver.target_kind(), ThemeKind::Light);
         assert_eq!(win.theme_driver.progress(), 1.0);
+    }
+
+    #[test]
+    fn ghost_and_floating_island_lifecycle_and_focus_isolation() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Hover Ghost", 280, 160).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+        assert_eq!(coord.window_role(WindowId(2)), Some(WindowRole::Ghost));
+        assert_eq!(coord.window_visible(WindowId(2)), Some(false));
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        // 无激活显示幽灵窗与模拟焦点事件均不得抢占主窗口焦点。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_visible_no_activate(WindowId(2), true);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert_eq!(coord.window_visible(WindowId(2)), Some(true));
+        coord.simulate_window_focus_event(WindowId(2), true);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+
+        // 注册悬浮浮岛同样不抢占主窗口焦点。
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Media Island", 320, 88).build();
+        coord.register_headless_floating_window(WindowId(3), island_cfg);
+        assert_eq!(
+            coord.window_role(WindowId(3)),
+            Some(WindowRole::FloatingIsland)
+        );
+        assert_eq!(coord.window_visible(WindowId(3)), Some(true));
+        coord.simulate_window_focus_event(WindowId(3), true);
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+    }
+
+    #[test]
+    fn floating_hot_toggles_preserve_generation_and_never_recreate() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg);
+
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Island", 300, 100).build();
+        coord.register_headless_floating_window(WindowId(2), island_cfg);
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+
+        let rt = &mut coord.registry_mut().get_mut(WindowId(1)).unwrap().runtime;
+        rt.set_window_click_through(WindowId(2), true);
+        rt.set_window_always_on_top(WindowId(2), false);
+        rt.set_window_visible_no_activate(WindowId(2), false);
+        let target_rect = ScreenRect::new(200, 150, 340, 120);
+        rt.set_window_outer_rect(WindowId(2), target_rect);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+
+        // 全部运行期热切换不得销毁重建窗口（generation 保持为 1）。
+        assert_eq!(coord.window_generation(WindowId(2)), Some(1));
+        let policy = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(policy.click_through);
+        assert!(!policy.always_on_top);
+        assert_eq!(coord.window_visible(WindowId(2)), Some(false));
+        assert_eq!(coord.window_outer_rect(WindowId(2)), Some(target_rect));
+        assert_eq!(coord.focused_window_id(), Some(WindowId(1)));
+    }
+
+    #[test]
+    fn multi_monitor_negative_coordinates_edge_snap_and_clamping() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.set_headless_work_areas(vec![
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(0, 0, 1920, 1080),
+                work_area: ScreenRect::new(0, 0, 1920, 1040),
+                scale_factor: 1.0,
+                is_primary: true,
+            },
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(-1920, 0, 1920, 1080),
+                work_area: ScreenRect::new(-1920, 0, 1920, 1040),
+                scale_factor: 1.25,
+                is_primary: false,
+            },
+        ]);
+        coord.register_headless_window(WindowId(1), primary_cfg);
+
+        let (island_cfg, _) =
+            crate::FloatingWindowSpec::floating_island("Left Monitor Island", 300, 100).build();
+        coord.register_headless_floating_window(WindowId(2), island_cfg);
+
+        // 越界矩形应钳制到负坐标辅屏工作区内。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_outer_rect(WindowId(2), ScreenRect::new(-2100, -50, 300, 100));
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert_eq!(
+            coord.window_outer_rect(WindowId(2)),
+            Some(ScreenRect::new(-1920, 0, 300, 100))
+        );
+
+        // 靠近负坐标辅屏左边缘（阈值 24px 内）应自动磁吸至 x = -1920 并记录相对锚点。
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .snap_floating_window(WindowId(2), ScreenRect::new(-1908, 220, 300, 100), 24);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        let snapped = coord.window_outer_rect(WindowId(2)).unwrap();
+        assert_eq!(snapped.x, -1920);
+        assert!(coord.last_snap_anchor(WindowId(2)).is_some());
+    }
+
+    #[test]
+    fn closing_last_standard_window_cascade_closes_floating_windows_and_never_promotes_ghost() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg.clone());
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Ghost", 240, 120).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+        coord.register_headless_window(WindowId(3), primary_cfg);
+        let (island_cfg, _) = crate::FloatingWindowSpec::floating_island("Island", 260, 80).build();
+        coord.register_headless_floating_window(WindowId(4), island_cfg);
+
+        // 关闭主 Standard 窗口 1 时，绝不将 Ghost(2) 提升为主窗口，而应提升 Standard(3)。
+        assert!(coord.close_window(WindowId(1)));
+        assert_eq!(coord.registry().primary(), Some(WindowId(3)));
+
+        // 关闭最后一个 Standard 窗口 3 时，应级联关闭剩余全部 Ghost(2) 与 FloatingIsland(4)。
+        assert!(coord.close_window(WindowId(3)));
+        assert!(coord.registry().is_empty());
+        assert_eq!(coord.registry().primary(), None);
+        let closed_reqs = coord.take_window_close_requests();
+        assert!(closed_reqs.contains(&WindowId(2)));
+        assert!(closed_reqs.contains(&WindowId(4)));
+    }
+
+    #[test]
+    fn floating_capabilities_degrade_deterministically_across_backends() {
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        let (ghost_cfg, _) = crate::FloatingWindowSpec::ghost("Ghost", 260, 140).build();
+        coord.register_headless_floating_window(WindowId(2), ghost_cfg);
+
+        // Win32 全量能力。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        let win32 = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(
+            win32.no_activate && win32.always_on_top && win32.skip_taskbar && win32.click_through
+        );
+
+        // X11 默认能力。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::x11_default());
+        let x11 = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(x11.always_on_top && x11.skip_taskbar && x11.click_through);
+
+        // Wayland xdg_toplevel 回退能力：保留 click_through，降级 always_on_top 与 no_activate。
+        coord.set_headless_capabilities(FloatingWindowCapabilities::wayland_xdg_fallback());
+        let wayland = coord.floating_policy(WindowId(2)).unwrap();
+        assert!(!wayland.always_on_top);
+        assert!(!wayland.no_activate);
+        assert!(wayland.click_through);
     }
 }

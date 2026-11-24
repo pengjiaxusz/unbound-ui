@@ -6,6 +6,7 @@
 
 use std::time::Instant;
 
+use crate::floating::{FloatingWindowPolicy, WindowRole};
 use crate::latency::LatencyTracker;
 use crate::overlay_host::OcclusionMonitor;
 use crate::pacing::{FramePacer, PresentWaitPolicy};
@@ -139,6 +140,10 @@ pub struct WindowConfig {
     /// 该字段只覆盖能直接映射到系统 DWM 取值的四档（`System`, `Mica`, `Tabbed`, `Acrylic`）；
     /// 实验档（如亚克力自定义色调、自绘纹理等）必须走外观意图账本组件。
     pub backdrop: Option<WindowBackdropMaterial>,
+    /// 窗口在平台层的语义角色（标准窗口、幽灵覆盖层或灵动岛浮窗）。
+    pub role: WindowRole,
+    /// 浮窗行为策略（无激活、置顶、跳过任务栏、点击穿透、可拖拽）。
+    pub floating_policy: FloatingWindowPolicy,
 }
 
 impl Default for WindowConfig {
@@ -156,6 +161,8 @@ impl Default for WindowConfig {
             position: WindowPosition::CenterPrimary,
             surface_alpha: SurfaceAlpha::Opaque,
             backdrop: None,
+            role: WindowRole::Standard,
+            floating_policy: FloatingWindowPolicy::default(),
         }
     }
 }
@@ -233,6 +240,40 @@ impl WindowConfig {
     #[must_use]
     pub const fn with_backdrop(mut self, backdrop: Option<WindowBackdropMaterial>) -> Self {
         self.backdrop = backdrop;
+        self
+    }
+
+    /// 设置窗口语义角色，并同步更新对应的默认浮窗策略。
+    #[must_use]
+    pub const fn with_role(mut self, role: WindowRole) -> Self {
+        self.role = role;
+        self.floating_policy = FloatingWindowPolicy::for_role(role);
+        self
+    }
+
+    /// 显式覆盖浮窗行为策略。
+    #[must_use]
+    pub const fn with_floating_policy(mut self, policy: FloatingWindowPolicy) -> Self {
+        self.floating_policy = policy;
+        self
+    }
+
+    /// 配置为幽灵透明覆盖层（无边框、不可缩放、无激活、置顶、跳过任务栏、鼠标穿透）。
+    #[must_use]
+    pub const fn ghost(mut self) -> Self {
+        self.role = WindowRole::Ghost;
+        self.floating_policy = FloatingWindowPolicy::ghost_default();
+        self.decorations = false;
+        self.resizable = false;
+        self
+    }
+
+    /// 配置为灵动岛浮窗宿主（无边框、无激活、置顶、跳过任务栏、接收点击、可拖拽）。
+    #[must_use]
+    pub const fn floating_island(mut self) -> Self {
+        self.role = WindowRole::FloatingIsland;
+        self.floating_policy = FloatingWindowPolicy::floating_island_default();
+        self.decorations = false;
         self
     }
 
