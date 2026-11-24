@@ -25,8 +25,8 @@ use x11rb::protocol::randr::ConnectionExt as RandrConnectionExt;
 use x11rb::protocol::xfixes::ConnectionExt as XfixesConnectionExt;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageData, ClientMessageEvent,
-    ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, PropMode, Rectangle,
-    SelectionNotifyEvent, Window as X11WindowId, WindowClass,
+    ConfigureWindowAux, ConnectionExt, CreateWindowAux, EventMask, Font, GrabMode, PropMode,
+    Rectangle, SelectionNotifyEvent, Window as X11WindowId, WindowClass,
 };
 use x11rb::protocol::Event as X11Event;
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
@@ -35,15 +35,15 @@ use x11rb::COPY_DEPTH_FROM_PARENT;
 
 use crate::backend::{push_coalesced_event, Flow, PlatformApp};
 use crate::linux_backend::{
-    place_x11_popup_in_work_area, set_active_linux_backend, LinuxBackendKind,
+    compute_interactive_resize_rect, place_x11_popup_in_work_area, set_active_linux_backend,
+    LinuxBackendKind,
 };
 use crate::native_window::NativeWindow;
 use crate::pacing::PresentWaitPolicy;
 use crate::resize::Extent;
 use crate::wayland_logic::{
     csd_resize_direction_at, cursor_for_resize_direction, register_wayland_clipboard,
-    set_primary_output_metrics, translate_evdev_key, wayland_cursor_name, PrimaryOutputMetrics,
-    WaylandClipboardBackend,
+    set_primary_output_metrics, translate_evdev_key, PrimaryOutputMetrics, WaylandClipboardBackend,
 };
 use crate::win32_frame::FrameHitMetrics;
 use crate::win32_window::{
@@ -55,7 +55,6 @@ use crate::window::{
 };
 
 const X11_CSD_RESIZE_BORDER: f64 = 8.0;
-const X11_DEFAULT_CURSOR_SIZE: u32 = 24;
 
 /// 应用侧向 X11 事件循环发送的窗口控制命令。
 enum X11Command {
@@ -460,32 +459,81 @@ impl WaylandClipboardBackend for X11ClipboardBridge {
     }
 }
 
-/// X11 光标缓存：启动时仅初始化一次 `x11rb::cursor::Handle` 并按样式复用已加载的 `Cursor` XID，
-/// 同时按窗口去重避免 `MotionNotify` 每像素触发磁盘主题扫描阻塞事件循环；
-/// 在 WSLg 等未设置 `XCURSOR_SIZE` 的环境下默认使用 24px 逻辑光标尺寸，防止光标异常巨大。
+/// 将框架光标样式映射为标准 X11 核心字体光标字形编号（`X11/cursorfont.h`）。
+///
+/// `CursorIcon::Default` 返回 `None`，使用 `x11rb::NONE` 继承宿主/WSLg 原生默认箭头光标，
+/// 彻底避免在 4K WSLg XWayland 下加载 24px+ Adwaita 光栅主题后被 2× 放大导致光标异常巨大。
+const fn x11_core_cursor_glyph(icon: CursorIcon) -> Option<u16> {
+    match icon {
+        CursorIcon::Default => None,
+        CursorIcon::Pointer => Some(60),    // XC_hand2
+        CursorIcon::Text => Some(152),      // XC_xterm
+        CursorIcon::Grab => Some(58),       // XC_hand1
+        CursorIcon::Grabbing => Some(52),   // XC_fleur
+        CursorIcon::Crosshair => Some(34),  // XC_crosshair
+        CursorIcon::Move => Some(52),       // XC_fleur
+        CursorIcon::NsResize => Some(116),  // XC_sb_v_double_arrow
+        CursorIcon::EwResize => Some(108),  // XC_sb_h_double_arrow
+        CursorIcon::NwseResize => Some(14), // XC_bottom_right_corner
+        CursorIcon::NeswResize => Some(12), // XC_bottom_left_corner
+        CursorIcon::NotAllowed => Some(0),  // XC_X_cursor
+    }
+}
+
+/// X11 核心字体光标缓存：零磁盘主题扫描、按样式复用 `Cursor` XID、按窗口去重。
 struct X11CursorCache {
-    handle: Option<x11rb::cursor::Handle>,
+    cursor_font: Option<Font>,
     cursors: HashMap<u8, u32>,
     applied: HashMap<X11WindowId, CursorIcon>,
 }
 
 impl X11CursorCache {
-    fn new(conn: &XCBConnection, screen_num: usize) -> Self {
-        let env_size = std::env::var("XCURSOR_SIZE")
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-            .filter(|&v| (12..=64).contains(&v));
-        let size = env_size.unwrap_or(X11_DEFAULT_CURSOR_SIZE);
-        let db = x11rb::resource_manager::Database::new_from_data(
-            format!("Xcursor.size: {size}\n").as_bytes(),
-        );
-        let handle = x11rb::cursor::Handle::new(conn, screen_num, &db)
-            .ok()
-            .and_then(|cookie| cookie.reply().ok());
+    fn new(conn: &XCBConnection) -> Self {
+        let cursor_font = conn.generate_id().ok().and_then(|fid| {
+            conn.open_font(fid, b"cursor").ok()?;
+            Some(fid)
+        });
         Self {
-            handle,
+            cursor_font,
             cursors: HashMap::new(),
             applied: HashMap::new(),
+        }
+    }
+
+    fn cursor_id(&mut self, conn: &XCBConnection, icon: CursorIcon) -> u32 {
+        let Some(glyph) = x11_core_cursor_glyph(icon) else {
+            return x11rb::NONE;
+        };
+        let key = icon as u8;
+        if let Some(&existing) = self.cursors.get(&key) {
+            return existing;
+        }
+        let Some(font) = self.cursor_font else {
+            return x11rb::NONE;
+        };
+        let Ok(cid) = conn.generate_id() else {
+            return x11rb::NONE;
+        };
+        if conn
+            .create_glyph_cursor(
+                cid,
+                font,
+                font,
+                glyph,
+                glyph + 1,
+                0,
+                0,
+                0,
+                0xFFFF,
+                0xFFFF,
+                0xFFFF,
+            )
+            .is_ok()
+        {
+            self.cursors.insert(key, cid);
+            cid
+        } else {
+            x11rb::NONE
         }
     }
 
@@ -493,24 +541,11 @@ impl X11CursorCache {
         if self.applied.get(&window) == Some(&icon) {
             return;
         }
-        let key = icon as u8;
-        let cid = if let Some(&existing) = self.cursors.get(&key) {
-            Some(existing)
-        } else if let Some(handle) = &self.handle {
-            handle
-                .load_cursor(conn, wayland_cursor_name(icon))
-                .ok()
-                .inspect(|&id| {
-                    self.cursors.insert(key, id);
-                })
-        } else {
-            None
-        };
-        if let Some(cid) = cid {
-            let _ = conn
-                .change_window_attributes(window, &ChangeWindowAttributesAux::new().cursor(cid));
-            self.applied.insert(window, icon);
-        }
+        let cid = self.cursor_id(conn, icon);
+        let _ =
+            conn.change_window_attributes(window, &ChangeWindowAttributesAux::new().cursor(cid));
+        let _ = conn.flush();
+        self.applied.insert(window, icon);
     }
 
     fn remove_window(&mut self, window: X11WindowId) {
@@ -521,8 +556,22 @@ impl X11CursorCache {
         for (_, cid) in self.cursors.drain() {
             let _ = conn.free_cursor(cid);
         }
+        if let Some(font) = self.cursor_font.take() {
+            let _ = conn.close_font(font);
+        }
         self.applied.clear();
     }
+}
+
+/// X11 客户端即时边缘拖拽缩放状态（零 XWM 握手延迟，按下即响应）。
+struct X11ActiveResize {
+    xid: X11WindowId,
+    dir: ResizeDirection,
+    start_root_x: i16,
+    start_root_y: i16,
+    start_rect: ScreenRect,
+    min_w: u32,
+    min_h: u32,
 }
 
 /// 缓存的 X11 Atom 集合。
@@ -599,6 +648,8 @@ struct X11ToplevelEntry {
     shared: Arc<X11WindowShared>,
     state: PlatformState,
     resizable: bool,
+    min_width: u32,
+    min_height: u32,
     csd_edge_active: bool,
     pending_events: Vec<PlatformEvent>,
     cursor_local: (f64, f64),
@@ -632,19 +683,6 @@ const fn x11_button_to_mouse(detail: u8) -> Option<MouseButton> {
         8 => Some(MouseButton::Back),
         9 => Some(MouseButton::Forward),
         _ => None,
-    }
-}
-
-const fn x11_moveresize_direction(dir: ResizeDirection) -> u32 {
-    match dir {
-        ResizeDirection::NorthWest => 0,
-        ResizeDirection::North => 1,
-        ResizeDirection::NorthEast => 2,
-        ResizeDirection::East => 3,
-        ResizeDirection::SouthEast => 4,
-        ResizeDirection::South => 5,
-        ResizeDirection::SouthWest => 6,
-        ResizeDirection::West => 7,
     }
 }
 
@@ -851,7 +889,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let mut popups: HashMap<u64, X11PopupEntry> = HashMap::new();
     let mut exit_requested = false;
     let mut xdnd_source_window: Option<X11WindowId> = None;
-    let mut cursor_cache = X11CursorCache::new(&conn, screen_num);
+    let mut cursor_cache = X11CursorCache::new(&conn);
+    let mut active_resize: Option<X11ActiveResize> = None;
 
     let create_toplevel = |cfg: &WindowConfig| -> Result<X11ToplevelEntry, PlatformError> {
         let xid = conn
@@ -959,6 +998,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             shared,
             state,
             resizable: cfg.resizable,
+            min_width: cfg.effective_min_size().0,
+            min_height: cfg.effective_min_size().1,
             csd_edge_active: false,
             pending_events: Vec::new(),
             cursor_local: (0.0, 0.0),
@@ -1063,6 +1104,28 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     }
                 }
                 X11Event::MotionNotify(ev) => {
+                    if let Some(res) = &active_resize {
+                        let dx = i32::from(ev.root_x) - i32::from(res.start_root_x);
+                        let dy = i32::from(ev.root_y) - i32::from(res.start_root_y);
+                        let target = compute_interactive_resize_rect(
+                            res.start_rect,
+                            res.dir,
+                            dx,
+                            dy,
+                            res.min_w,
+                            res.min_h,
+                        );
+                        let _ = conn.configure_window(
+                            res.xid,
+                            &ConfigureWindowAux::new()
+                                .x(target.x)
+                                .y(target.y)
+                                .width(target.width.max(1))
+                                .height(target.height.max(1)),
+                        );
+                        let _ = conn.flush();
+                        continue;
+                    }
                     if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.event) {
                         let x = f64::from(ev.event_x);
                         let y = f64::from(ev.event_y);
@@ -1144,15 +1207,31 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                                             f64::from(size.height),
                                             X11_CSD_RESIZE_BORDER,
                                         ) {
-                                            send_net_wm_moveresize(
-                                                &conn,
-                                                root,
-                                                &atoms,
+                                            let start_rect =
+                                                entry.native_window.client_rect_on_screen();
+                                            let cid = cursor_cache
+                                                .cursor_id(&conn, cursor_for_resize_direction(dir));
+                                            let _ = conn.grab_pointer(
+                                                false,
                                                 entry.xid,
-                                                ev.root_x,
-                                                ev.root_y,
-                                                x11_moveresize_direction(dir),
+                                                EventMask::POINTER_MOTION
+                                                    | EventMask::BUTTON_RELEASE,
+                                                GrabMode::ASYNC,
+                                                GrabMode::ASYNC,
+                                                x11rb::NONE,
+                                                cid,
+                                                ev.time,
                                             );
+                                            let _ = conn.flush();
+                                            active_resize = Some(X11ActiveResize {
+                                                xid: entry.xid,
+                                                dir,
+                                                start_root_x: ev.root_x,
+                                                start_root_y: ev.root_y,
+                                                start_rect,
+                                                min_w: entry.min_width,
+                                                min_h: entry.min_height,
+                                            });
                                             continue;
                                         }
                                     }
@@ -1173,6 +1252,11 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     }
                 }
                 X11Event::ButtonRelease(ev) => {
+                    if ev.detail == 1 && active_resize.take().is_some() {
+                        let _ = conn.ungrab_pointer(ev.time);
+                        let _ = conn.flush();
+                        continue;
+                    }
                     if let Some(mb) = x11_button_to_mouse(ev.detail) {
                         if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.event) {
                             entry.pending_events.push(PlatformEvent::MouseInput {
@@ -1409,19 +1493,32 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     send_net_wm_moveresize(&conn, root, &atoms, window, rx, ry, 8);
                 }
                 X11Command::DragResizeWindow { window, direction } => {
-                    let (rx, ry) = windows
-                        .iter()
-                        .find(|w| w.xid == window)
-                        .map_or((0, 0), |w| w.last_pointer_root);
-                    send_net_wm_moveresize(
-                        &conn,
-                        root,
-                        &atoms,
-                        window,
-                        rx,
-                        ry,
-                        x11_moveresize_direction(direction),
-                    );
+                    if let Some(entry) = windows.iter().find(|w| w.xid == window) {
+                        let (rx, ry) = entry.last_pointer_root;
+                        let start_rect = entry.native_window.client_rect_on_screen();
+                        let cid =
+                            cursor_cache.cursor_id(&conn, cursor_for_resize_direction(direction));
+                        let _ = conn.grab_pointer(
+                            false,
+                            entry.xid,
+                            EventMask::POINTER_MOTION | EventMask::BUTTON_RELEASE,
+                            GrabMode::ASYNC,
+                            GrabMode::ASYNC,
+                            x11rb::NONE,
+                            cid,
+                            x11rb::CURRENT_TIME,
+                        );
+                        let _ = conn.flush();
+                        active_resize = Some(X11ActiveResize {
+                            xid: entry.xid,
+                            dir: direction,
+                            start_root_x: rx,
+                            start_root_y: ry,
+                            start_rect,
+                            min_w: entry.min_width,
+                            min_h: entry.min_height,
+                        });
+                    }
                 }
                 X11Command::RequestClose { window } => {
                     if let Some(entry) = windows.iter_mut().find(|w| w.xid == window) {

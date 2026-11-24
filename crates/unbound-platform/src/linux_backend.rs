@@ -3,6 +3,7 @@
 use std::sync::{Mutex, OnceLock};
 
 use crate::popup_host::clamp_popup_to_work_area;
+use crate::win32_window::ResizeDirection;
 use crate::window::{PlatformError, ScreenRect};
 
 /// `UNBOUND_LINUX_BACKEND` 环境变量解析出的后端偏好。
@@ -185,6 +186,65 @@ pub fn place_x11_popup_in_work_area(
     clamp_popup_to_work_area(rect, work_area)
 }
 
+/// 根据起始窗口矩形、拖拽边缘方向、指针位移 `(dx, dy)` 与最小尺寸计算实时交互缩放后的目标矩形。
+///
+/// 供 X11 即时 `grab_pointer + configure_window` 缩放以及 Wayland（WSLg Weston 忽略
+/// `xdg_toplevel::resize` 时）客户端回退缩放共用。
+#[must_use]
+pub fn compute_interactive_resize_rect(
+    start: ScreenRect,
+    dir: ResizeDirection,
+    dx: i32,
+    dy: i32,
+    min_w: u32,
+    min_h: u32,
+) -> ScreenRect {
+    let min_w = i64::from(min_w.max(1));
+    let min_h = i64::from(min_h.max(1));
+    let mut left = i64::from(start.x);
+    let mut top = i64::from(start.y);
+    let mut right = left + i64::from(start.width.max(1));
+    let mut bottom = top + i64::from(start.height.max(1));
+
+    match dir {
+        ResizeDirection::East => {
+            right = (right + i64::from(dx)).max(left + min_w);
+        }
+        ResizeDirection::South => {
+            bottom = (bottom + i64::from(dy)).max(top + min_h);
+        }
+        ResizeDirection::SouthEast => {
+            right = (right + i64::from(dx)).max(left + min_w);
+            bottom = (bottom + i64::from(dy)).max(top + min_h);
+        }
+        ResizeDirection::West => {
+            left = (left + i64::from(dx)).min(right - min_w);
+        }
+        ResizeDirection::North => {
+            top = (top + i64::from(dy)).min(bottom - min_h);
+        }
+        ResizeDirection::NorthWest => {
+            left = (left + i64::from(dx)).min(right - min_w);
+            top = (top + i64::from(dy)).min(bottom - min_h);
+        }
+        ResizeDirection::NorthEast => {
+            right = (right + i64::from(dx)).max(left + min_w);
+            top = (top + i64::from(dy)).min(bottom - min_h);
+        }
+        ResizeDirection::SouthWest => {
+            left = (left + i64::from(dx)).min(right - min_w);
+            bottom = (bottom + i64::from(dy)).max(top + min_h);
+        }
+    }
+
+    ScreenRect::new(
+        left.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        top.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        (right - left).clamp(1, i64::from(u32::MAX)) as u32,
+        (bottom - top).clamp(1, i64::from(u32::MAX)) as u32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,5 +331,25 @@ mod tests {
         assert!(placed.x + placed.width as i32 <= work_area.x + work_area.width as i32);
         assert!(placed.y >= work_area.y);
         assert!(placed.y + placed.height as i32 <= work_area.y + work_area.height as i32);
+    }
+
+    #[test]
+    fn interactive_resize_rect_clamps_to_minimum_size_for_all_edges() {
+        let start = ScreenRect::new(100, 200, 800, 600);
+        // 右下角拉大
+        assert_eq!(
+            compute_interactive_resize_rect(start, ResizeDirection::SouthEast, 120, 80, 400, 300),
+            ScreenRect::new(100, 200, 920, 680)
+        );
+        // 左上角收缩超过最小尺寸时右/底边保持锚定
+        assert_eq!(
+            compute_interactive_resize_rect(start, ResizeDirection::NorthWest, 600, 500, 400, 300),
+            ScreenRect::new(500, 500, 400, 300)
+        );
+        // 仅右边缘向左收缩钳制到最小宽
+        assert_eq!(
+            compute_interactive_resize_rect(start, ResizeDirection::East, -700, 50, 400, 300),
+            ScreenRect::new(100, 200, 400, 600)
+        );
     }
 }
