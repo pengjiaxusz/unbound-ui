@@ -41,6 +41,17 @@ enum DbusCommand {
         config: FileDialogConfig,
         reply: mpsc::Sender<Option<PathBuf>>,
     },
+    SetTrayIcon {
+        tooltip: String,
+        visible: bool,
+        reply: mpsc::Sender<bool>,
+    },
+    ShowNotification {
+        title: String,
+        message: String,
+        urgency: u8,
+        reply: mpsc::Sender<bool>,
+    },
 }
 
 struct DbusRuntime {
@@ -155,6 +166,47 @@ pub(crate) fn portal_pick_folder(config: &FileDialogConfig) -> Option<PathBuf> {
     reply_rx.recv().ok()?.into_iter().next()
 }
 
+/// 通过 `org.kde.StatusNotifierWatcher` 注册/更新/隐藏 Linux 系统托盘图标（无服务时返回 `false`）。
+pub(crate) fn linux_set_tray_icon(tooltip: &str, visible: bool) -> bool {
+    let Some(rt) = runtime() else {
+        return false;
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    let sent = rt.cmd_tx.lock().ok().is_some_and(|tx| {
+        tx.send(DbusCommand::SetTrayIcon {
+            tooltip: tooltip.to_owned(),
+            visible,
+            reply: reply_tx,
+        })
+        .is_ok()
+    });
+    if !sent {
+        return false;
+    }
+    reply_rx.recv().unwrap_or(false)
+}
+
+/// 通过 `org.freedesktop.Notifications` 发送桌面气泡通知（无通知守护进程时返回 `false`）。
+pub(crate) fn linux_show_notification(title: &str, message: &str, urgency: u8) -> bool {
+    let Some(rt) = runtime() else {
+        return false;
+    };
+    let (reply_tx, reply_rx) = mpsc::channel();
+    let sent = rt.cmd_tx.lock().ok().is_some_and(|tx| {
+        tx.send(DbusCommand::ShowNotification {
+            title: title.to_owned(),
+            message: message.to_owned(),
+            urgency,
+            reply: reply_tx,
+        })
+        .is_ok()
+    });
+    if !sent {
+        return false;
+    }
+    reply_rx.recv().unwrap_or(false)
+}
+
 /// 通过 `xdg-desktop-portal` `FileChooser` 打开保存文件对话框（无服务时返回 `None`）。
 pub(crate) fn portal_save_file(config: &FileDialogConfig) -> Option<PathBuf> {
     let Some(rt) = runtime() else {
@@ -216,6 +268,23 @@ async fn run_dbus_worker(
                 let path = handle_save_file(&conn, &config).await;
                 let _ = reply.send(path);
             }
+            DbusCommand::SetTrayIcon {
+                tooltip,
+                visible,
+                reply,
+            } => {
+                let ok = handle_set_tray_icon(&conn, &tooltip, visible).await;
+                let _ = reply.send(ok);
+            }
+            DbusCommand::ShowNotification {
+                title,
+                message,
+                urgency,
+                reply,
+            } => {
+                let ok = handle_show_notification(&conn, &title, &message, urgency).await;
+                let _ = reply.send(ok);
+            }
         }
     }
 }
@@ -228,6 +297,10 @@ fn drain_commands_offline(cmd_rx: mpsc::Receiver<DbusCommand>) {
             }
             DbusCommand::SaveFile { reply, .. } => {
                 let _ = reply.send(None);
+            }
+            DbusCommand::SetTrayIcon { reply, .. }
+            | DbusCommand::ShowNotification { reply, .. } => {
+                let _ = reply.send(false);
             }
         }
     }
@@ -497,4 +570,98 @@ async fn handle_save_file(conn: &Connection, config: &FileDialogConfig) -> Optio
         .await
         .into_iter()
         .next()
+}
+
+/// `org.kde.StatusNotifierItem` 最小 D-Bus 接口实现。
+struct StatusNotifierItem {
+    title: String,
+    status: String,
+}
+
+#[zbus::interface(name = "org.kde.StatusNotifierItem")]
+impl StatusNotifierItem {
+    #[zbus(property)]
+    fn category(&self) -> &str {
+        "ApplicationStatus"
+    }
+
+    #[zbus(property)]
+    fn id(&self) -> &str {
+        "unbound-ui"
+    }
+
+    #[zbus(property)]
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    #[zbus(property)]
+    fn status(&self) -> &str {
+        &self.status
+    }
+
+    #[zbus(property)]
+    fn icon_name(&self) -> &str {
+        "application-x-executable"
+    }
+}
+
+async fn handle_set_tray_icon(conn: &Connection, tooltip: &str, visible: bool) -> bool {
+    const SNI_PATH: &str = "/StatusNotifierItem";
+    if !visible {
+        let _ = conn
+            .object_server()
+            .remove::<StatusNotifierItem, _>(SNI_PATH)
+            .await;
+        return true;
+    }
+    let item = StatusNotifierItem {
+        title: tooltip.to_owned(),
+        status: "Active".to_owned(),
+    };
+    let _ = conn
+        .object_server()
+        .remove::<StatusNotifierItem, _>(SNI_PATH)
+        .await;
+    if conn.object_server().at(SNI_PATH, item).await.is_err() {
+        return false;
+    }
+    conn.call_method(
+        Some("org.kde.StatusNotifierWatcher"),
+        "/StatusNotifierWatcher",
+        Some("org.kde.StatusNotifierWatcher"),
+        "RegisterStatusNotifierItem",
+        &(SNI_PATH,),
+    )
+    .await
+    .is_ok()
+}
+
+async fn handle_show_notification(
+    conn: &Connection,
+    title: &str,
+    message: &str,
+    urgency: u8,
+) -> bool {
+    let actions: Vec<&str> = Vec::new();
+    let mut hints: HashMap<&str, Value<'_>> = HashMap::new();
+    hints.insert("urgency", Value::from(urgency));
+    conn.call_method(
+        Some("org.freedesktop.Notifications"),
+        "/org/freedesktop/Notifications",
+        Some("org.freedesktop.Notifications"),
+        "Notify",
+        &(
+            "unbound-ui",
+            0u32,
+            "",
+            title,
+            message,
+            actions,
+            hints,
+            -1i32,
+        ),
+    )
+    .await
+    .is_ok()
 }

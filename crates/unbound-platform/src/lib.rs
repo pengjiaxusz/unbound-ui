@@ -94,15 +94,16 @@ pub use portal_logic::{
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{
-    capture_screen_region, clamp_to_screen, screen_rect_uv, CaptureError, CapturedScreen,
+    capture_screen_region, clamp_to_screen, normalize_x11_bgrx_to_bgra, screen_rect_uv,
+    CaptureError, CapturedScreen,
 };
 pub use system_accent::{
     decode_abgr_accent, decode_argb_colorization, read_system_accent_color, system_accent_color,
     DEFAULT_SYSTEM_ACCENT_SRGB,
 };
 pub use tray::{
-    set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
-    TrayNotificationSeverity,
+    notification_urgency, set_taskbar_progress, set_tray_icon, show_tray_balloon,
+    TaskbarProgressState, TrayIconState, TrayNotificationSeverity,
 };
 pub use wayland_logic::{
     compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
