@@ -2583,7 +2583,7 @@ pub fn emit_navigation_view(
     // 7.4 Left 窗格菜单溢出且存在页脚时，按 WinUI 3 FooterMenuItemsTopSeparator 发射 1px 页脚顶部分隔线。
     let has_footer = desc.is_settings_visible || !desc.footer_menu_items.is_empty();
     let pane_visible = !(layout.display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open);
-    if !layout.is_top && pane_visible && has_footer && layout.scroll_max > 0.5 {
+    if !layout.is_top && pane_visible && has_footer && layout.menu_content_height > layout.menu_viewport_rect.height() + 0.5 {
         let sep_w = (pane_right_edge - active_pane_rect.origin.x).max(0.0);
         out.primitives.push(surface(
             Rect::new(
