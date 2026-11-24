@@ -36,6 +36,7 @@ pub mod overlay_host;
 pub mod pacing;
 pub mod popup_host;
 pub mod portal_logic;
+pub mod reduced_motion;
 pub mod resize;
 pub mod screen_capture;
 pub mod system_accent;
@@ -91,6 +92,9 @@ pub use popup_host::{
 pub use portal_logic::{
     convert_dialog_filters, decode_file_uri, parse_portal_accent_color, parse_portal_color_scheme,
     percent_decode_bytes, LinuxAppearanceSnapshot, PortalColorScheme, PortalFileFilter,
+};
+pub use reduced_motion::{
+    parse_gnome_enable_animations, parse_reduced_motion_env, prefers_reduced_motion,
 };
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{
