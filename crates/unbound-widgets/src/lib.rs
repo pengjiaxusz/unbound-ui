@@ -20,6 +20,7 @@ pub mod canonical;
 pub mod catalog;
 pub mod column_header_bar;
 pub mod diff;
+pub mod docking_overlay;
 pub mod ergonomics;
 pub mod primitive;
 pub mod shell;
@@ -592,6 +593,14 @@ pub use divider::{emit_divider, DividerDesc, DividerOrientation, DividerTokens};
 pub use dock::{
     emit_dock_pane, emit_dock_preview, emit_dock_tab, DockDrag, DockHover, DockNode, DockPane,
     DockState, DockTab, DockTokens, DockTree, DockZone,
+};
+pub use docking_overlay::{
+    clamp_rect_to_bounds, elide_hint_label, emit_docking_overlay, emit_drag_proxy,
+    layout_hint_pill, resolve_candidates, DockCandidatePane, DockCandidateWindow, DockDragProxy,
+    DockDragSource, DockDropKind, DockDropSemantic, DockDropTarget, DockEdge, DockOverlayState,
+    DockOverlayTokens, ALLOWED_FILL_ALPHA, BLOCKED_FILL_ALPHA, HINT_PILL_HEIGHT,
+    HINT_PILL_MAX_WIDTH, HINT_PILL_OFFSET, NEST_FILL_ALPHA, PREVIEW_BORDER_WIDTH,
+    REORDER_INDICATOR_WIDTH, ROOT_EDGE_BAND_PX, SHELL_DWELL_SECS, SHELL_DWELL_TOLERANCE_PX,
 };
 pub use drawer::{
     drawer_rect, emit_drawer, DrawerDesc, DrawerOutput, DrawerSide, DrawerState, DRAWER_BLUR,
