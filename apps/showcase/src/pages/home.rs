@@ -780,7 +780,7 @@ pub fn capability_grid(ctx: &mut DemoCtx<'_, '_>) {
     let gap = 12.0;
     let cell_w = (rect.size.x - gap * (columns - 1) as f32) / columns as f32;
     let cell_h = (rect.size.y - gap) * 0.5;
-    for (index, (_, _, _page, icon)) in CAPABILITIES.iter().enumerate() {
+    for (index, (_, _, page, icon)) in CAPABILITIES.iter().enumerate() {
         let (title, subtitle) = localized_capability(index, ctx.state.locale);
         let col = index % columns;
         let row = index / columns;
