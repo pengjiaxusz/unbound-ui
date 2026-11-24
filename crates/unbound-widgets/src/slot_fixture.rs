@@ -3145,22 +3145,29 @@ pub fn emit_canonical_font_icon_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
     let disabled = state.disabled;
 
-    // 居中绘制矢量字形
+    // 优先通过平台感知符号字体塑形发射原生字形；无可用符号字体时自动回退校准后的 ShellIcon::AllApps。
     let text_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
-    let _ = text_ctx;
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Sparkles,
+    if let Some(quads) = text_ctx.shape_symbol_glyph(
+        CANONICAL_FONT_ICON_GLYPH,
         total_r,
-        text_ink,
-        Token::SURFACE,
-        z + 1,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+        CANONICAL_FONT_ICON_FONT_SIZE,
+    ) {
+        primitive::glyphs(&quads, text_ink, z + 1, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::AllApps,
+            total_r,
+            text_ink,
+            Token::SURFACE,
+            z + 1,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // disabled 态下 text_ink 已为 Token::TEXT_DISABLED，不再二次乘以 WINUI_DISABLED_OPACITY。
 

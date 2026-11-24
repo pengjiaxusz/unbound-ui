@@ -3943,26 +3943,29 @@ fn emit_case(
             fixture.total_size
         }
         "FontIcon" => {
-            if control.disabled && case.theme == "light" {
-                let size = if rect.width() > 0.0 {
-                    rect.width().min(if rect.height() > 0.0 {
-                        rect.height()
-                    } else {
-                        rect.width()
-                    })
+            // 亮色禁用态下若平台存在符号字体，继续通过 `texture_quads` 做 sRGB 线性覆盖率预混，
+            // 避免默认着色器的浅底字形补偿曲线叠加半透明令牌使边缘二次加深；
+            // 其余状态及无符号字体回退统一走 `emit_canonical_font_icon_fixture`。
+            let size = if rect.width() > 0.0 {
+                rect.width().min(if rect.height() > 0.0 {
+                    rect.height()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_SIZE
-                };
-                let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
-                let quads = text_ctx.shape_line_styled(
+                    rect.width()
+                })
+            } else {
+                unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_SIZE
+            };
+            let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
+            let premixed_quads = if control.disabled && case.theme == "light" {
+                text_ctx.shape_symbol_glyph(
                     unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_GLYPH,
                     total_r,
                     unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_FONT_SIZE,
-                    400,
-                    Some("Segoe Fluent Icons"),
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
+                )
+            } else {
+                None
+            };
+            if let Some(quads) = premixed_quads {
                 texture_quads.extend(quads);
                 Vec2::new(size, size)
             } else {

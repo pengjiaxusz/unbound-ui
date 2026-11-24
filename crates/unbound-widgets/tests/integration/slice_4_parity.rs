@@ -381,6 +381,54 @@ fn font_icon_normal_and_disabled_states() {
 }
 
 #[test]
+fn font_icon_falls_back_to_all_apps_when_symbol_font_disabled() {
+    with_test_ctx(|text_ctx| {
+        text_ctx
+            .engine
+            .set_symbol_font_policy(unbound_text::SymbolFontPolicy::Disabled);
+        assert!(!text_ctx.has_symbol_font());
+
+        let rect = Rect::new(0.0, 0.0, CANONICAL_FONT_ICON_SIZE, CANONICAL_FONT_ICON_SIZE);
+        let normal = emit_canonical_font_icon_fixture(rect, FixtureState::normal(), text_ctx, 100);
+        let disabled =
+            emit_canonical_font_icon_fixture(rect, FixtureState::disabled(), text_ctx, 100);
+
+        let mut expected_prims = Vec::new();
+        let mut expected_payloads = Vec::new();
+        unbound_widgets::shell::emit_shell_icon_primitives(
+            unbound_widgets::shell::ShellIcon::AllApps,
+            rect,
+            Token::TEXT_PRIMARY,
+            Token::SURFACE,
+            101,
+            &mut expected_prims,
+            &mut expected_payloads,
+        );
+
+        assert_eq!(normal.output.primitives.len(), expected_prims.len());
+        assert_eq!(disabled.output.primitives.len(), expected_prims.len());
+        assert!(
+            normal
+                .output
+                .primitives
+                .iter()
+                .all(|p| p.prim_type() != PrimType::Glyph),
+            "disabled symbol font must fall back to ShellIcon::AllApps vector geometry"
+        );
+        assert!(normal
+            .output
+            .primitives
+            .iter()
+            .all(|p| Token::new(p.fill_token_or_uv as u16) == Token::TEXT_PRIMARY));
+        assert!(disabled
+            .output
+            .primitives
+            .iter()
+            .all(|p| Token::new(p.fill_token_or_uv as u16) == Token::TEXT_DISABLED));
+    });
+}
+
+#[test]
 fn pivot_normal_and_disabled_and_focused_states() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, CANONICAL_PIVOT_WIDTH, CANONICAL_PIVOT_HEIGHT);

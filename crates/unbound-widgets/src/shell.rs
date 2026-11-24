@@ -176,6 +176,18 @@ pub enum ShellIcon {
     LargeIconsView,
     /// 查看/视图选项（带底线窗口布局）图标。
     ViewOptions,
+    /// 保存（标准软盘轮廓）图标。
+    Save,
+    /// 日历（圆角外框 + 顶栏线 + 双装订环 + 日期网格点）图标。
+    Calendar,
+    /// 粗体（粗体 `B` 矢量轮廓）图标。
+    Bold,
+    /// 空心五角星图标。
+    Star,
+    /// 实心填充五角星图标。
+    StarFilled,
+    /// 所有应用（四宫格应用网格，供 `FontIcon` `U+E71D` 回退）图标。
+    AllApps,
 }
 
 /// 跨控件统一图标变体（支持内置 Fluent 几何矢量图标与外部 RGBA8 彩色纹理双通道）。
@@ -1269,23 +1281,37 @@ pub fn emit_shell_icon_primitives(
             }
         }
         ShellIcon::Settings => {
-            // 中心圆环 + 四个齿。
+            // 标准 8 齿齿轮：外圆环 + 8 方向短齿（含 45 度对角齿）+ 中心小圆孔。
             primitives.push(outlined(
-                Rect::new(c.x - 4.2, c.y - 4.2, 8.4, 8.4),
-                4.2,
+                Rect::new(c.x - 4.6, c.y - 4.6, 9.2, 9.2),
+                4.6,
                 Token::NONE,
                 color,
                 1.8,
                 0.0,
                 z,
             ));
-            for (dx, dy, w, h) in [
-                (-1.2, -7.4, 2.4, 3.0),
-                (-1.2, 4.4, 2.4, 3.0),
-                (-7.4, -1.2, 3.0, 2.4),
-                (4.4, -1.2, 3.0, 2.4),
-            ] {
-                primitives.push(surface(Rect::new(c.x + dx, c.y + dy, w, h), 0.8, color, z));
+            primitives.push(outlined(
+                Rect::new(c.x - 1.8, c.y - 1.8, 3.6, 3.6),
+                1.8,
+                Token::NONE,
+                color,
+                1.2,
+                0.0,
+                z,
+            ));
+            for deg in [0.0f32, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0] {
+                let rad = deg.to_radians();
+                let (sin_a, cos_a) = rad.sin_cos();
+                curve_stroke(
+                    [c.x + cos_a * 4.4, c.y + sin_a * 4.4],
+                    [c.x + cos_a * 6.8, c.y + sin_a * 6.8],
+                    2.0,
+                    color,
+                    z,
+                    primitives,
+                    payloads,
+                );
             }
         }
         ShellIcon::ArrowLeft => {
@@ -2294,6 +2320,194 @@ pub fn emit_shell_icon_primitives(
                 color,
                 z,
             ));
+        }
+        ShellIcon::Save => {
+            // 标准软盘轮廓：外框 + 顶部金属滑片框/竖槽 + 底部写入标签框。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.0, c.y - 6.0, 12.0, 12.0),
+                1.5,
+                Token::NONE,
+                color,
+                1.4,
+                0.0,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 3.6, c.y - 6.0, 6.4, 4.4),
+                0.6,
+                Token::NONE,
+                color,
+                1.2,
+                0.0,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 0.6, c.y - 4.8, 1.2, 2.2),
+                0.4,
+                color,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 3.8, c.y + 0.8, 7.6, 5.2),
+                0.6,
+                Token::NONE,
+                color,
+                1.2,
+                0.0,
+                z,
+            ));
+        }
+        ShellIcon::Calendar => {
+            // 12x12 圆角外框 + 顶栏横线 + 顶部双装订环 + 内部 3x2 日历网格点。
+            primitives.push(outlined(
+                Rect::new(c.x - 6.0, c.y - 5.5, 12.0, 12.0),
+                1.5,
+                Token::NONE,
+                color,
+                1.2,
+                0.0,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 5.0, c.y - 2.3, 10.0, 1.0),
+                0.0,
+                color,
+                z,
+            ));
+            curve_stroke(
+                [c.x - 3.0, c.y - 7.0],
+                [c.x - 3.0, c.y - 4.8],
+                1.2,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 3.0, c.y - 7.0],
+                [c.x + 3.0, c.y - 4.8],
+                1.2,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            for dy in [0.4f32, 3.2] {
+                for dx in [-3.4f32, -0.7, 2.0] {
+                    primitives.push(surface(
+                        Rect::new(c.x + dx, c.y + dy, 1.4, 1.4),
+                        0.4,
+                        color,
+                        z,
+                    ));
+                }
+            }
+        }
+        ShellIcon::Bold => {
+            // 粗体 B 矢量轮廓：左侧加粗竖干 + 上窄下宽双半圆弧肚。
+            primitives.push(surface(
+                Rect::new(c.x - 4.2, c.y - 5.6, 2.2, 11.2),
+                0.6,
+                color,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 3.6, c.y - 5.6, 7.0, 5.8),
+                2.6,
+                Token::NONE,
+                color,
+                2.0,
+                0.0,
+                z,
+            ));
+            primitives.push(outlined(
+                Rect::new(c.x - 3.6, c.y - 0.6, 8.0, 6.2),
+                2.8,
+                Token::NONE,
+                color,
+                2.0,
+                0.0,
+                z,
+            ));
+        }
+        ShellIcon::Star => {
+            // 空心五角星：10 个交替外顶与内谷连成闭合折线。
+            let mut pts = [[0.0f32; 2]; 10];
+            for (idx, pt) in pts.iter_mut().enumerate() {
+                let rad = (-90.0f32 + idx as f32 * 36.0).to_radians();
+                let r = if idx % 2 == 0 { 6.8 } else { 2.9 };
+                let (sin_a, cos_a) = rad.sin_cos();
+                *pt = [c.x + cos_a * r, c.y + sin_a * r];
+            }
+            for idx in 0..10 {
+                curve_stroke(
+                    pts[idx],
+                    pts[(idx + 1) % 10],
+                    1.3,
+                    color,
+                    z,
+                    primitives,
+                    payloads,
+                );
+            }
+        }
+        ShellIcon::StarFilled => {
+            // 实心五角星：10 段外轮廓 + 5 条中心至外顶星芒加粗笔画 + 中心填充圆。
+            let mut pts = [[0.0f32; 2]; 10];
+            for (idx, pt) in pts.iter_mut().enumerate() {
+                let rad = (-90.0f32 + idx as f32 * 36.0).to_radians();
+                let r = if idx % 2 == 0 { 6.8 } else { 2.9 };
+                let (sin_a, cos_a) = rad.sin_cos();
+                *pt = [c.x + cos_a * r, c.y + sin_a * r];
+            }
+            for idx in 0..10 {
+                curve_stroke(
+                    pts[idx],
+                    pts[(idx + 1) % 10],
+                    1.4,
+                    color,
+                    z,
+                    primitives,
+                    payloads,
+                );
+            }
+            for idx in (0..10).step_by(2) {
+                let rad = (-90.0f32 + idx as f32 * 36.0).to_radians();
+                let (sin_a, cos_a) = rad.sin_cos();
+                curve_stroke(
+                    [c.x, c.y],
+                    [c.x + cos_a * 5.0, c.y + sin_a * 5.0],
+                    2.6,
+                    color,
+                    z,
+                    primitives,
+                    payloads,
+                );
+            }
+            primitives.push(surface(
+                Rect::new(c.x - 3.0, c.y - 3.0, 6.0, 6.0),
+                3.0,
+                color,
+                z,
+            ));
+        }
+        ShellIcon::AllApps => {
+            // 四宫格应用网格（供 FontIcon U+E71D 矢量回退）。
+            for row in 0..2 {
+                for col in 0..2 {
+                    primitives.push(surface(
+                        Rect::new(
+                            c.x - 6.2 + col as f32 * 7.4,
+                            c.y - 6.2 + row as f32 * 7.4,
+                            5.0,
+                            5.0,
+                        ),
+                        1.2,
+                        color,
+                        z,
+                    ));
+                }
+            }
         }
     }
 
@@ -3579,5 +3793,73 @@ mod tests {
             offenders.is_empty(),
             "runtime widgets must not hardcode Segoe Fluent Icons: {offenders:?}"
         );
+    }
+
+    #[test]
+    fn settings_gear_emits_eight_teeth_and_inner_hub() {
+        let mut primitives = Vec::new();
+        let mut payloads = Vec::new();
+        emit_shell_icon_primitives(
+            ShellIcon::Settings,
+            Rect::new(0.0, 0.0, 16.0, 16.0),
+            Token::TEXT_PRIMARY,
+            Token::SURFACE,
+            500,
+            &mut primitives,
+            &mut payloads,
+        );
+        // 2 个圆环（外环 + 中心轴孔）+ 8 条方向短齿曲线。
+        assert_eq!(primitives.len(), 10);
+        assert_eq!(payloads.len(), 8);
+        let curve_count = primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(curve_count, 8);
+    }
+
+    #[test]
+    fn fluent_fallback_shell_icons_emit_constant_non_empty_geometry() {
+        let icons = [
+            ShellIcon::Save,
+            ShellIcon::Calendar,
+            ShellIcon::Bold,
+            ShellIcon::Star,
+            ShellIcon::StarFilled,
+            ShellIcon::AllApps,
+        ];
+        let small = Rect::new(0.0, 0.0, 16.0, 16.0);
+        let large = Rect::new(4.0, 4.0, 32.0, 32.0);
+        for icon in icons {
+            let mut p1 = Vec::new();
+            let mut pl1 = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                small,
+                Token::TEXT_PRIMARY,
+                Token::SURFACE,
+                600,
+                &mut p1,
+                &mut pl1,
+            );
+            let mut p2 = Vec::new();
+            let mut pl2 = Vec::new();
+            emit_shell_icon_primitives(
+                icon,
+                large,
+                Token::TEXT_DISABLED,
+                Token::SURFACE,
+                600,
+                &mut p2,
+                &mut pl2,
+            );
+            assert!(!p1.is_empty(), "ShellIcon::{icon:?} must emit primitives");
+            assert_eq!(
+                p1.len(),
+                p2.len(),
+                "ShellIcon::{icon:?} primitive count must stay constant across states"
+            );
+            assert_eq!(pl1.len(), pl2.len());
+        }
     }
 }

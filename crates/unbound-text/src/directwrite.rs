@@ -130,6 +130,14 @@ pub struct DirectWriteRasterizer {
 /// DirectWrite 字形光栅化引擎（别名）。
 pub type DirectWriteEngine = DirectWriteRasterizer;
 
+/// 判断给定字体族是否属于 Windows 符号图标字体（匹配 `Segoe Fluent Icons` 与
+/// `Segoe MDL2 Assets`，忽略 ASCII 大小写）。
+fn is_symbol_font_family(family: &str) -> bool {
+    crate::shaping::WINDOWS_SYMBOL_FALLBACKS
+        .iter()
+        .any(|candidate| family.eq_ignore_ascii_case(candidate))
+}
+
 impl DirectWriteRasterizer {
     /// 创建共享 DirectWrite 工厂与系统字体集合。
     ///
@@ -228,12 +236,11 @@ impl DirectWriteRasterizer {
             isSideways: BOOL(0),
             bidiLevel: 0,
         };
-        let rendering_mode =
-            if font_size >= 24.0 && key.family.eq_ignore_ascii_case("Segoe Fluent Icons") {
-                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC
-            } else {
-                DWRITE_RENDERING_MODE_NATURAL
-            };
+        let rendering_mode = if font_size >= 24.0 && is_symbol_font_family(&key.family) {
+            DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC
+        } else {
+            DWRITE_RENDERING_MODE_NATURAL
+        };
         let analysis = unsafe {
             self.factory.CreateGlyphRunAnalysis(
                 &run,
