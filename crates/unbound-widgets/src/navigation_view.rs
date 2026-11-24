@@ -3667,26 +3667,26 @@ mod tests {
                 .layout
                 .rows
                 .iter()
-                .find(|r| matches!(r.kind, NavigationViewRowKind::Header { .. }))
-                .expect("Header row must exist");
-            let header_rights: Vec<f32> = emitted
-                .output
-                .primitives
-                .iter()
-                .filter(|p| {
-                    p.prim_type() == PrimType::Glyph
-                        && p.local_pos[1] >= header_row.rect.origin.y
-                        && p.local_pos[1] <= header_row.rect.max().y
-                        && p.local_pos[0] < pane_right + 1.0
-                })
-                .map(|p| p.local_pos[0] + p.size[0])
-                .collect();
+                .find(|r| matches!(r.kind, NavigationViewRowKind::Header { .. }));
             if t <= 0.01 {
                 assert!(
-                    header_rights.is_empty(),
-                    "header glyphs must be hidden at collapsed frame t={t}"
+                    header_row.is_none(),
+                    "header row must be hidden at collapsed frame t={t}"
                 );
             } else {
+                let header_row = header_row.expect("Header row must exist when expanded");
+                let header_rights: Vec<f32> = emitted
+                    .output
+                    .primitives
+                    .iter()
+                    .filter(|p| {
+                        p.prim_type() == PrimType::Glyph
+                            && p.local_pos[1] >= header_row.rect.origin.y
+                            && p.local_pos[1] <= header_row.rect.max().y
+                            && p.local_pos[0] < pane_right + 1.0
+                    })
+                    .map(|p| p.local_pos[0] + p.size[0])
+                    .collect();
                 assert!(
                     !header_rights.is_empty(),
                     "header glyphs must be emitted at expand frame t={t}"
