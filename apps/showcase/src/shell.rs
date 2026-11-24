@@ -1526,8 +1526,10 @@ impl GalleryApp {
                     if let Some(old) = self.tooltip_timer.take() {
                         ctx.cancel_timer(old);
                     }
-                    let delay = std::time::Duration::from_millis(remaining_ms.ceil().max(1.0) as u64);
-                    let token = ctx.set_timeout(delay, |token| unbound_app::AppEvent::Timer { token });
+                    let delay =
+                        std::time::Duration::from_millis(remaining_ms.ceil().max(1.0) as u64);
+                    let token =
+                        ctx.set_timeout(delay, |token| unbound_app::AppEvent::Timer { token });
                     self.tooltip_timer = Some(token);
                     self.tooltip_timer_anchor = Some(anchor);
                 }

@@ -5060,13 +5060,8 @@ impl<A: Application> AppRuntime<A> {
                 } else {
                     self.managed_tooltip.visible = false;
                     let token = self.ctx.allocate_timer();
-                    self.timers.schedule(
-                        token,
-                        now_ms,
-                        delay_ms,
-                        None,
-                        AppEvent::Timer { token },
-                    );
+                    self.timers
+                        .schedule(token, now_ms, delay_ms, None, AppEvent::Timer { token });
                     self.managed_tooltip.pending_timer = Some(token);
                     if was_visible {
                         self.force_rebuild = true;

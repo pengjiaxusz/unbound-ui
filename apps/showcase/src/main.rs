@@ -1464,9 +1464,7 @@ impl Showcase {
         // 在借用渲染器前推进时间并重建场景：应用与 GPU 对象互不相交，
         // 但辅助方法会借用整个 `self`。
         //
-        let raw_dt = now
-            .saturating_duration_since(self.last_frame)
-            .as_secs_f32();
+        let raw_dt = now.saturating_duration_since(self.last_frame).as_secs_f32();
         let dt = raw_dt.min(0.1);
         self.last_frame = now;
         if dt > 0.0 {
