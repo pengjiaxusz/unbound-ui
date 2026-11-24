@@ -42,7 +42,7 @@ description: >-
 
 - 变参配方写成 `build *ARGS:`，再用 `{{ARGS}}` 转发。模板文件里要把这个变量包在 minijinja raw 块内才能扛住渲染。
 - 配方本身有有用输出时，命令前加 `@` 关掉 just 的回显。
-- 层用了工作树时，通过 `pengj-templates-cli worktree target-dir` 取共享目录——参照 `templates/rust/.pengj-templates/just/rust.just` 的 `shared_win()` / `shared_sh()` 宏写法，不要硬编码 `CARGO_TARGET_DIR`。
+- 层用了工作树时，通过 `pengj-templates-cli worktree target-dir` 取共享目录——参照 `templates/rust/.pengj-templates/just/rust.just` 的 `shared_win()` / `shared_sh()` 宏写法，不要硬编码 `CARGO_TARGET_DIR`，也禁止在顶层裸写反引号 ``export CARGO_TARGET_DIR := `pengj-templates-cli worktree target-dir --dir .` ``（顶层反引号不会继承 `export PATH`，一旦未装 CLI 或终端未刷新 PATH 就会以退出码 127 炸毁整个 `justfile`；若需顶层导出，必须在反引号内补齐默认安装目录并优雅回退到 `${CARGO_TARGET_DIR:-target}`）。
 - 多行配方默认每行独立 shell。需要共享状态时用 `#!/usr/bin/env bash` shebang 配方或显式续行。
 
 ## 4. 托管块纪律
