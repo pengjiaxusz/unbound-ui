@@ -1301,16 +1301,20 @@ fn escape_outside_click_and_scroll_close_the_context_menu() {
 #[test]
 fn code_panels_change_the_page_extent() {
     let mut app = app();
-    app.navigate(PageId::Buttons);
+    app.navigate(PageId::Elevation);
     app.rebuild(VIEWPORT);
-    let closed = app.frame().nodes.len();
-    app.state.toggle_code(PageId::Buttons, 0);
+    let closed_h = app.page_layout().expect("page layout").content_height;
+    let closed_nodes = app.frame().nodes.len();
+    app.state.toggle_code(PageId::Elevation, 0);
     app.rebuild(VIEWPORT);
-    let open = app.frame().nodes.len();
-    assert!(open > closed, "expanded code should add semantic nodes");
-    app.state.toggle_code(PageId::Buttons, 0);
+    let open_h = app.page_layout().expect("page layout").content_height;
+    assert!(
+        open_h > closed_h,
+        "expanded code should increase page extent ({open_h} > {closed_h})"
+    );
+    app.state.toggle_code(PageId::Elevation, 0);
     app.rebuild(VIEWPORT);
-    assert_eq!(app.frame().nodes.len(), closed);
+    assert_eq!(app.frame().nodes.len(), closed_nodes);
 }
 
 #[test]
@@ -1665,7 +1669,7 @@ fn every_card_is_a_relayout_boundary() {
 #[test]
 fn a_hover_repaints_without_relaying_out() {
     let mut app = app();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
@@ -1684,7 +1688,7 @@ fn a_hover_repaints_without_relaying_out() {
 #[test]
 fn a_hover_uploads_a_handful_of_bytes() {
     let mut app = app();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
@@ -1706,7 +1710,7 @@ fn a_hover_uploads_a_handful_of_bytes() {
 fn a_paint_only_change_keeps_the_upload_generation() {
     let mut app = app();
     let generation = app.generation();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
