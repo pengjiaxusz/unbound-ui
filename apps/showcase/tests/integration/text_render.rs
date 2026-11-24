@@ -8,8 +8,8 @@ use accesskit::Role;
 use showcase::pages::text_render::PART_BACKEND_DW;
 use showcase::pages::text_render::{
     resolve_feature, FeatureResolution, TextConsoleGroup, TextFeatureKey, TextRenderPageState,
-    TextRenderPreset, FEATURE_RULES, FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_ITALIC_PART,
-    FONT_SIZE_OPTIONS, FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE,
+    TextRenderPreset, FEATURE_RULES, FONT_FAMILY_OPTIONS, FONT_FAMILY_PART_BASE, FONT_FAMILY_TRIGGER_PART, FONT_ITALIC_PART,
+    FONT_SIZE_OPTIONS, FONT_SIZE_PART_BASE, FONT_WEIGHT_OPTIONS, FONT_WEIGHT_PART_BASE, FONT_WEIGHT_TRIGGER_PART,
     GROUP_PART_BASE, PART_BACKEND_COSMIC, PART_BIDI_OFF, PART_BIDI_ON, PART_COMP_LAYER_DIRECT,
     PART_COMP_SRGB, PART_DF_OFF, PART_EMOJI_BACKEND_COSMIC, PART_EMOJI_BACKEND_DW,
     PART_EMOJI_BACKEND_FOLLOW, PART_EMOJI_PRES_COLOR, PART_EMOJI_PRES_MONO,
@@ -447,8 +447,13 @@ fn font_group_controls_interaction_and_live_preview() {
     assert_eq!(app.state.text_render.settings.size, 14.0);
     assert!(!app.state.text_render.settings.italic);
 
-    // 1. 切换字体家族：点击 FONT_FAMILY_OPTIONS 中的 Cascadia (索引 2)
+    // 1. 切换字体家族：先展开 FAMILY 下拉框，再点击 FONT_FAMILY_OPTIONS 中的 Cascadia (索引 2)
     assert!(FONT_FAMILY_OPTIONS.len() > 2);
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        FONT_FAMILY_TRIGGER_PART,
+    )));
     let cascadia_node = target::id(Target::Demo(page_index, 0, FONT_FAMILY_PART_BASE + 2));
     app.click_node(cascadia_node);
     assert_eq!(
@@ -457,8 +462,13 @@ fn font_group_controls_interaction_and_live_preview() {
         "font family must update to Cascadia Mono"
     );
 
-    // 2. 切换字重：点击 FONT_WEIGHT_OPTIONS 中的 Bold 700 (索引 3)
+    // 2. 切换字重：先展开 WEIGHT 下拉框，再点击 FONT_WEIGHT_OPTIONS 中的 Bold 700 (索引 3)
     assert!(FONT_WEIGHT_OPTIONS.len() > 3);
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        FONT_WEIGHT_TRIGGER_PART,
+    )));
     let bold_node = target::id(Target::Demo(page_index, 0, FONT_WEIGHT_PART_BASE + 3));
     app.click_node(bold_node);
     assert_eq!(
@@ -1186,6 +1196,11 @@ fn text_render_global_strategy_affects_other_pages_and_isolates_preview() {
         page_index,
         0,
         FONT_SIZE_PART_BASE + 3,
+    )));
+    app.click_node(target::id(Target::Demo(
+        page_index,
+        0,
+        FONT_WEIGHT_TRIGGER_PART,
     )));
     app.click_node(target::id(Target::Demo(
         page_index,

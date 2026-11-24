@@ -15,7 +15,7 @@
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yActions, A11yNode};
 use unbound_anim::{Spring, SpringPreset};
-use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, PrimType, SubElement, CLIP_NONE};
+use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -3369,6 +3369,7 @@ impl UiWidget for NavigationViewDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unbound_gpu::data::CLIP_NONE;
     use crate::scroll::{scrollbar_track_node, ScrollbarAxis, SCROLLBAR_EDGE_INSET};
     use unbound_text::{GlyphCache, SymbolFontPolicy, TextEngine};
 
