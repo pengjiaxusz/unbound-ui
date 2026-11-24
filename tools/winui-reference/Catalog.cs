@@ -178,7 +178,11 @@ internal static class Catalog
         "NavigationViewOverflow", "NavigationViewLeftClosedOverflow",
     };
 
-    private static readonly string[] ImplementedStateList = { "normal", "disabled", "checked", "focused" };
+    private static readonly string[] ImplementedStateList =
+    {
+        "normal", "disabled", "checked", "focused",
+        "multiple_selected", "blackout", "year_mode", "decade_mode",
+    };
 
     // hover / pressed 只保留枚举，尚未实现（需要模拟指针状态，暂不纳入试点）。
     private static readonly string[] ReservedStateList = { "hover", "pressed" };
@@ -205,6 +209,7 @@ internal static class Catalog
         {
             "normal" or "disabled" or "focused" => true,
             "checked" => canonical is "CheckBox" or "ToggleSwitch" or "ToggleButton" or "RadioButton" or "AppBarToggleButton" or "ToggleSplitButton",
+            "multiple_selected" or "blackout" or "year_mode" or "decade_mode" => canonical is "CalendarView",
             _ => false,
         };
     }
@@ -1197,6 +1202,8 @@ internal static class Catalog
 
             case "CalendarView":
                 {
+                    // 静态参考采集关闭 IsTodayHighlighted，避免依赖宿主机系统时钟跨天漂移引入假阴性；
+                    // today_highlighted 视觉与状态契约由 Rust 侧无头集成测试以固定 today 全覆盖。
                     var fixedDate = new DateTimeOffset(new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc));
                     var cal = new CalendarView
                     {
@@ -1622,6 +1629,63 @@ internal static class Catalog
 
             case "focused":
                 return true;
+
+            case "multiple_selected":
+                if (element is CalendarView multiCalendar)
+                {
+                    multiCalendar.SelectionMode = CalendarViewSelectionMode.Multiple;
+                    multiCalendar.SelectedDates.Clear();
+                    multiCalendar.SelectedDates.Add(new DateTimeOffset(new DateTime(2026, 1, 10, 0, 0, 0, DateTimeKind.Utc)));
+                    multiCalendar.SelectedDates.Add(new DateTimeOffset(new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)));
+                    multiCalendar.SelectedDates.Add(new DateTimeOffset(new DateTime(2026, 1, 20, 0, 0, 0, DateTimeKind.Utc)));
+                    return true;
+                }
+
+                error = $"Control {element.GetType().Name} does not support multiple_selected state";
+                return false;
+
+            case "blackout":
+                if (element is CalendarView blackoutCalendar)
+                {
+                    // 通过 CalendarViewDayItemChanging 为确定性日期（2026-01-18、2026-01-19）设置禁选态。
+                    blackoutCalendar.CalendarViewDayItemChanging += (_, args) =>
+                    {
+                        if (args.Item is null)
+                        {
+                            return;
+                        }
+
+                        var date = args.Item.Date;
+                        if (date.Year == 2026 && date.Month == 1 && (date.Day == 18 || date.Day == 19))
+                        {
+                            args.Item.IsBlackout = true;
+                        }
+                    };
+                    return true;
+                }
+
+                error = $"Control {element.GetType().Name} does not support blackout state";
+                return false;
+
+            case "year_mode":
+                if (element is CalendarView yearCalendar)
+                {
+                    yearCalendar.DisplayMode = CalendarViewDisplayMode.Year;
+                    return true;
+                }
+
+                error = $"Control {element.GetType().Name} does not support year_mode state";
+                return false;
+
+            case "decade_mode":
+                if (element is CalendarView decadeCalendar)
+                {
+                    decadeCalendar.DisplayMode = CalendarViewDisplayMode.Decade;
+                    return true;
+                }
+
+                error = $"Control {element.GetType().Name} does not support decade_mode state";
+                return false;
 
             default:
                 error = $"Unknown state: {state}";

@@ -15,7 +15,7 @@
 use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yActions, A11yNode};
 use unbound_anim::{Spring, SpringPreset};
-use unbound_gpu::data::{GpuPrimitiveInstance, PrimType, SubElement};
+use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, PrimType, SubElement};
 use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
@@ -2561,9 +2561,30 @@ pub fn emit_navigation_view(
         );
     }
 
-    // 7. 发射所有可见主菜单与页脚行。
+    // 7. 发射所有可见主菜单与页脚行；Left 模式为主菜单视口分配局部裁剪节点，页脚/分隔线/滚动条保持 `CLIP_NONE`。
+    let pane_visible =
+        !(layout.display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open);
+    let menu_clip_idx = if !layout.is_top
+        && pane_visible
+        && layout.menu_viewport_rect.width() > 0.0
+        && layout.menu_viewport_rect.height() > 0.0
+    {
+        Some(out.push_clip(GpuClipNode::from_aabb(
+            layout.menu_viewport_rect.to_min_max_array(),
+        )))
+    } else {
+        None
+    };
     let row_clip_right = (!layout.is_top).then_some(pane_right_edge);
     for row in &layout.rows {
+        let is_main_menu_row = match &row.kind {
+            NavigationViewRowKind::Item { .. } => true,
+            NavigationViewRowKind::FooterItem { .. } | NavigationViewRowKind::Settings => false,
+            NavigationViewRowKind::Header { .. } | NavigationViewRowKind::Separator { .. } => {
+                row.rect.origin.y < layout.menu_viewport_rect.max().y
+            }
+        };
+        let row_prim_start = out.primitives.len();
         emit_navigation_row(
             node,
             row,
@@ -2578,11 +2599,17 @@ pub fn emit_navigation_view(
             text_ctx,
             &mut out,
         );
+        if is_main_menu_row {
+            if let Some(clip_idx) = menu_clip_idx {
+                for prim in &mut out.primitives[row_prim_start..] {
+                    prim.clip_idx = clip_idx;
+                }
+            }
+        }
     }
 
     // 7.4 Left 窗格菜单溢出且存在页脚时，按 WinUI 3 FooterMenuItemsTopSeparator 发射 1px 页脚顶部分隔线。
     let has_footer = desc.is_settings_visible || !desc.footer_menu_items.is_empty();
-    let pane_visible = !(layout.display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open);
     if !layout.is_top && pane_visible && has_footer && layout.menu_content_height > layout.menu_viewport_rect.height() + 0.5 {
         let sep_w = (pane_right_edge - active_pane_rect.origin.x).max(0.0);
         out.primitives.push(surface(
@@ -3342,6 +3369,7 @@ impl UiWidget for NavigationViewDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unbound_gpu::data::CLIP_NONE;
     use crate::scroll::{scrollbar_track_node, ScrollbarAxis, SCROLLBAR_EDGE_INSET};
     use unbound_text::{GlyphCache, SymbolFontPolicy, TextEngine};
 
@@ -3749,6 +3777,182 @@ mod tests {
                     track.bounds.max().x
                 );
             }
+        }
+    }
+
+    #[test]
+    fn overflowing_left_navigation_view_clips_main_menu_rows_without_clipping_footer_or_scrollbar() {
+        let rect = Rect::new(16.0, 16.0, 640.0, 260.0);
+        let owner_node = 204_u64;
+        let mut items = vec![
+            NavigationViewMenuItem::header("Workspace"),
+            NavigationViewMenuItem::item(
+                NavigationViewItem::new(1, "Home").with_icon(ShellIcon::Home),
+            ),
+            NavigationViewMenuItem::separator(),
+        ];
+        for i in 2..=12_u64 {
+            items.push(NavigationViewMenuItem::item(
+                NavigationViewItem::new(i, format!("Section {i}")).with_icon(ShellIcon::Layers),
+            ));
+        }
+        let footer = vec![NavigationViewMenuItem::item(
+            NavigationViewItem::new(900, "Account").with_icon(ShellIcon::Folder),
+        )];
+        let desc = NavigationViewDesc::new(rect, items)
+            .footer_menu_items(footer)
+            .is_settings_visible(true)
+            .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1));
+
+        let mut state = NavigationViewState::from_desc(&desc);
+        state.set_animations_enabled(false, &desc);
+
+        let mut engine = TextEngine::new();
+        engine.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        let mut cache = GlyphCache::new();
+        let mut ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        let emitted =
+            emit_navigation_view(owner_node, &desc, ControlState::default(), &state, &mut ctx);
+        let layout = &emitted.layout;
+        assert!(
+            layout.menu_content_height > layout.menu_viewport_rect.height(),
+            "test fixture must overflow the main menu viewport"
+        );
+
+        // 1. 局部裁剪表应包含精确指向 `menu_viewport_rect` 的 AABB 裁剪节点。
+        assert_eq!(emitted.output.clips.len(), 1);
+        assert_eq!(
+            emitted.output.clips[0],
+            GpuClipNode::from_aabb(layout.menu_viewport_rect.to_min_max_array())
+        );
+
+        // 2. Left 展开态窗格背景保持 `Token::NONE`（遵守 ADR-0026 云母透底）且未受主菜单裁剪。
+        let pane_bg = emitted
+            .output
+            .primitives
+            .first()
+            .expect("pane background primitive must exist");
+        assert_eq!(pane_bg.fill_token_or_uv, u32::from(Token::NONE.raw()));
+        assert_eq!(pane_bg.clip_idx, CLIP_NONE);
+
+        // 3. 主菜单行图元（从行背景到单项焦点环）全部绑定局部裁剪索引 0。
+        let approx = |a: f32, b: f32| (a - b).abs() < 0.25;
+        let prims = &emitted.output.primitives;
+        let main_item_rows: Vec<&NavigationViewRow> = layout
+            .rows
+            .iter()
+            .filter(|r| matches!(r.kind, NavigationViewRowKind::Item { .. }))
+            .collect();
+        assert!(!main_item_rows.is_empty());
+        let mut cursor = 0usize;
+        for row in &main_item_rows {
+            let rel_start = prims[cursor..]
+                .iter()
+                .position(|p| {
+                    approx(p.local_pos[0], row.rect.origin.x)
+                        && approx(p.local_pos[1], row.rect.origin.y)
+                        && approx(p.size[0], row.rect.width())
+                        && approx(p.size[1], row.rect.height())
+                })
+                .expect("main menu row background must exist");
+            let start_idx = cursor + rel_start;
+            let focus_r = row.rect.inflate(3.0);
+            let rel_end = prims[start_idx..]
+                .iter()
+                .position(|p| {
+                    approx(p.local_pos[0], focus_r.origin.x)
+                        && approx(p.local_pos[1], focus_r.origin.y)
+                        && approx(p.size[0], focus_r.width())
+                        && approx(p.size[1], focus_r.height())
+                })
+                .expect("main menu row focus ring must exist");
+            let end_idx = start_idx + rel_end + 1;
+            assert!(
+                prims[start_idx..end_idx].iter().all(|p| p.clip_idx == 0),
+                "all primitives of main menu row {:?} must bind local menu_clip_idx 0",
+                row.item_id()
+            );
+            cursor = end_idx;
+        }
+
+        // 主菜单行之后发射的图元（页脚行、页脚顶部分隔线、滚动条、外框焦点环）必须全部保持 `CLIP_NONE`。
+        let last_clipped_idx = prims
+            .iter()
+            .rposition(|p| p.clip_idx == 0)
+            .expect("main menu rows must emit clipped primitives");
+        let trailing = &prims[last_clipped_idx + 1..];
+        assert!(
+            trailing.iter().all(|p| p.clip_idx == CLIP_NONE),
+            "footer, separator, scrollbar, and outer focus primitives must keep CLIP_NONE"
+        );
+
+        // 4. 页脚行（FooterItem 与 Settings）位于主菜单裁剪区间之后且保持 `CLIP_NONE`。
+        let footer_rows: Vec<&NavigationViewRow> = layout
+            .rows
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.kind,
+                    NavigationViewRowKind::FooterItem { .. } | NavigationViewRowKind::Settings
+                )
+            })
+            .collect();
+        assert_eq!(footer_rows.len(), 2);
+        for row in &footer_rows {
+            let footer_bg = trailing
+                .iter()
+                .find(|p| {
+                    approx(p.local_pos[0], row.rect.origin.x)
+                        && approx(p.local_pos[1], row.rect.origin.y)
+                        && approx(p.size[0], row.rect.width())
+                        && approx(p.size[1], row.rect.height())
+                })
+                .expect("footer row background must exist after main menu clipped span");
+            assert_eq!(footer_bg.clip_idx, CLIP_NONE);
+        }
+
+        // 5. `FooterMenuItemsTopSeparator` 保持 `CLIP_NONE`。
+        let top_sep = trailing
+            .iter()
+            .find(|p| {
+                approx(p.local_pos[0], layout.pane_rect.origin.x)
+                    && approx(p.local_pos[1], layout.menu_viewport_rect.max().y)
+                    && approx(p.size[1], 1.0)
+                    && p.fill_token_or_uv == u32::from(Token::DIVIDER.raw())
+            })
+            .expect("FooterMenuItemsTopSeparator must be emitted");
+        assert_eq!(top_sep.clip_idx, CLIP_NONE);
+
+        // 6. 滚动条图元保持 `CLIP_NONE`。
+        let bar_desc = desc
+            .menu_scrollbar_desc(layout, &state, false)
+            .expect("overflowing pane must produce scrollbar desc");
+        let bar_out = emit_scrollbar(owner_node, &bar_desc);
+        assert!(
+            !bar_out.is_empty(),
+            "overflowing pane must emit scrollbar primitives"
+        );
+        for bar_prim in &bar_out.output.primitives {
+            let matched = trailing
+                .iter()
+                .find(|p| {
+                    approx(p.local_pos[0], bar_prim.local_pos[0])
+                        && approx(p.local_pos[1], bar_prim.local_pos[1])
+                        && approx(p.size[0], bar_prim.size[0])
+                        && approx(p.size[1], bar_prim.size[1])
+                })
+                .expect("emitted scrollbar primitive must exist in trailing unclipped span");
+            assert_eq!(matched.clip_idx, CLIP_NONE);
         }
     }
 }

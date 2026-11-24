@@ -30,56 +30,54 @@ pub mod title_bar;
 pub use slot_fixture::{
     apply_recursive_disabled_propagation, emit_canonical_annotated_scroll_bar_fixture,
     emit_canonical_app_bar_button_fixture, emit_canonical_app_bar_toggle_button_fixture,
-    emit_canonical_calendar_view_fixture, emit_canonical_command_bar_fixture,
-    emit_canonical_expander_fixture, emit_canonical_flip_view_fixture,
-    emit_canonical_flyout_fixture, emit_canonical_font_icon_fixture, emit_canonical_grid_fixture,
-    emit_canonical_image_fixture, emit_canonical_info_bar_fixture,
-    emit_canonical_list_rows_fixture, emit_canonical_menu_bar_fixture,
-    emit_canonical_menu_flyout_fixture, emit_canonical_path_fixture,
-    emit_canonical_person_picture_fixture, emit_canonical_pips_pager_fixture,
-    emit_canonical_pivot_fixture, emit_canonical_refresh_fixture, emit_canonical_segmented_fixture,
+    emit_canonical_command_bar_fixture, emit_canonical_expander_fixture,
+    emit_canonical_flip_view_fixture, emit_canonical_flyout_fixture,
+    emit_canonical_font_icon_fixture, emit_canonical_grid_fixture, emit_canonical_image_fixture,
+    emit_canonical_info_bar_fixture, emit_canonical_list_rows_fixture,
+    emit_canonical_menu_bar_fixture, emit_canonical_menu_flyout_fixture,
+    emit_canonical_path_fixture, emit_canonical_person_picture_fixture,
+    emit_canonical_pips_pager_fixture, emit_canonical_pivot_fixture,
+    emit_canonical_refresh_fixture, emit_canonical_segmented_fixture,
     emit_canonical_split_view_fixture, emit_canonical_tab_view_fixture,
     emit_canonical_text_rows_fixture, emit_canonical_time_picker_fixture,
     emit_canonical_title_bar_fixture, emit_canonical_tree_fixture, remap_token_to_disabled,
     AnnotatedScrollBarFixtureOutput, AppBarButtonFixtureOutput, AppBarToggleButtonFixtureOutput,
-    CalendarViewFixtureOutput, CommandBarFixtureOutput, ExpanderFixtureOutput, FixtureState,
-    FlipViewFixtureOutput, FlyoutFixtureOutput, FontIconFixtureOutput, GridFixtureOutput,
-    ImageFixtureOutput, InfoBarFixtureOutput, ListRowsFixtureOutput, MenuBarFixtureOutput,
-    MenuFlyoutFixtureOutput, PathFixtureOutput, PersonPictureFixtureOutput, PipsPagerFixtureOutput,
-    PivotFixtureOutput, RefreshFixtureOutput, SplitViewFixtureOutput, TabViewFixtureOutput,
-    TextRowsFixtureOutput, TimePickerFixtureOutput, TitleBarFixtureOutput, TreeFixtureOutput,
+    CommandBarFixtureOutput, ExpanderFixtureOutput, FixtureState, FlipViewFixtureOutput,
+    FlyoutFixtureOutput, FontIconFixtureOutput, GridFixtureOutput, ImageFixtureOutput,
+    InfoBarFixtureOutput, ListRowsFixtureOutput, MenuBarFixtureOutput, MenuFlyoutFixtureOutput,
+    PathFixtureOutput, PersonPictureFixtureOutput, PipsPagerFixtureOutput, PivotFixtureOutput,
+    RefreshFixtureOutput, SplitViewFixtureOutput, TabViewFixtureOutput, TextRowsFixtureOutput,
+    TimePickerFixtureOutput, TitleBarFixtureOutput, TreeFixtureOutput,
     CANONICAL_APP_BAR_BUTTON_GLYPH, CANONICAL_APP_BAR_BUTTON_HEIGHT,
     CANONICAL_APP_BAR_BUTTON_LABEL, CANONICAL_APP_BAR_BUTTON_WIDTH,
     CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH, CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT,
     CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL, CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH,
-    CANONICAL_CALENDAR_DAYS_HEADER, CANONICAL_CALENDAR_HEIGHT, CANONICAL_CALENDAR_SELECTED_DAY,
-    CANONICAL_CALENDAR_TITLE, CANONICAL_CALENDAR_WIDTH, CANONICAL_COMMAND_ITEMS,
-    CANONICAL_COMMAND_MORE_GLYPH, CANONICAL_EXPANDER_BODY, CANONICAL_EXPANDER_CHEVRON_DOWN,
-    CANONICAL_EXPANDER_CHEVRON_UP, CANONICAL_EXPANDER_CONTENT_HEIGHT, CANONICAL_EXPANDER_HEADER,
-    CANONICAL_EXPANDER_HEADER_HEIGHT, CANONICAL_EXPANDER_WIDTH, CANONICAL_FLIP_PAGES,
-    CANONICAL_FLYOUT_HEIGHT, CANONICAL_FLYOUT_TEXT, CANONICAL_FLYOUT_WIDTH,
-    CANONICAL_FONT_ICON_FONT_SIZE, CANONICAL_FONT_ICON_GLYPH, CANONICAL_FONT_ICON_SIZE,
-    CANONICAL_GRID_ITEMS, CANONICAL_IMAGE_SIZE, CANONICAL_INFOBAR_CLOSE_GLYPH,
-    CANONICAL_INFOBAR_HEIGHT, CANONICAL_INFOBAR_ICON_GLYPH, CANONICAL_INFOBAR_MESSAGE,
-    CANONICAL_INFOBAR_TITLE, CANONICAL_INFOBAR_WIDTH, CANONICAL_LIST_ITEMS,
-    CANONICAL_MENU_FLYOUT_ITEMS, CANONICAL_MENU_FLYOUT_ITEM_HEIGHT, CANONICAL_MENU_FLYOUT_WIDTH,
-    CANONICAL_MENU_ITEMS, CANONICAL_PATH_ITEMS, CANONICAL_PATH_SEPARATOR,
-    CANONICAL_PERSON_PICTURE_INITIALS, CANONICAL_PERSON_PICTURE_SIZE, CANONICAL_PIPS_COUNT,
-    CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_PIP_SIZE_NORMAL, CANONICAL_PIP_SIZE_SELECTED,
-    CANONICAL_PIP_SPACING, CANONICAL_PIVOT_CONTENT, CANONICAL_PIVOT_HEADER_HEIGHT,
-    CANONICAL_PIVOT_HEIGHT, CANONICAL_PIVOT_ITEMS, CANONICAL_PIVOT_WIDTH, CANONICAL_REFRESH_TEXT,
-    CANONICAL_ROW_ITEMS, CANONICAL_SEGMENTED_ITEMS, CANONICAL_SPLIT_VIEW_CONTENT_TEXT,
-    CANONICAL_SPLIT_VIEW_HEIGHT, CANONICAL_SPLIT_VIEW_PANE_TEXT, CANONICAL_SPLIT_VIEW_PANE_WIDTH,
-    CANONICAL_SPLIT_VIEW_WIDTH, CANONICAL_TAB_CLOSE_GLYPH, CANONICAL_TAB_CONTENT,
-    CANONICAL_TAB_ITEMS, CANONICAL_TIME_COLUMNS, CANONICAL_TIME_PICKER_HEIGHT,
-    CANONICAL_TIME_PICKER_WIDTH, CANONICAL_TITLE_BAR_SUBTITLE, CANONICAL_TITLE_BAR_TITLE,
-    CANONICAL_TREE_CHILD, CANONICAL_TREE_ROOT, STANDARD_FLIP_HEIGHT, STANDARD_FLIP_WIDTH,
-    STANDARD_FONT_SIZE, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT, STANDARD_GRID_WIDTH,
-    STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_RADIUS, STANDARD_PILL_WIDTH,
-    STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE, STANDARD_REFRESH_WIDTH,
-    STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH, STANDARD_SCROLL_BAR_WIDTH,
-    STANDARD_STACK_SPACING, STANDARD_TREE_INDENT, STANDARD_TREE_ITEM_HEIGHT,
-    WINUI_DISABLED_OPACITY,
+    CANONICAL_COMMAND_ITEMS, CANONICAL_COMMAND_MORE_GLYPH, CANONICAL_EXPANDER_BODY,
+    CANONICAL_EXPANDER_CHEVRON_DOWN, CANONICAL_EXPANDER_CHEVRON_UP,
+    CANONICAL_EXPANDER_CONTENT_HEIGHT, CANONICAL_EXPANDER_HEADER, CANONICAL_EXPANDER_HEADER_HEIGHT,
+    CANONICAL_EXPANDER_WIDTH, CANONICAL_FLIP_PAGES, CANONICAL_FLYOUT_HEIGHT, CANONICAL_FLYOUT_TEXT,
+    CANONICAL_FLYOUT_WIDTH, CANONICAL_FONT_ICON_FONT_SIZE, CANONICAL_FONT_ICON_GLYPH,
+    CANONICAL_FONT_ICON_SIZE, CANONICAL_GRID_ITEMS, CANONICAL_IMAGE_SIZE,
+    CANONICAL_INFOBAR_CLOSE_GLYPH, CANONICAL_INFOBAR_HEIGHT, CANONICAL_INFOBAR_ICON_GLYPH,
+    CANONICAL_INFOBAR_MESSAGE, CANONICAL_INFOBAR_TITLE, CANONICAL_INFOBAR_WIDTH,
+    CANONICAL_LIST_ITEMS, CANONICAL_MENU_FLYOUT_ITEMS, CANONICAL_MENU_FLYOUT_ITEM_HEIGHT,
+    CANONICAL_MENU_FLYOUT_WIDTH, CANONICAL_MENU_ITEMS, CANONICAL_PATH_ITEMS,
+    CANONICAL_PATH_SEPARATOR, CANONICAL_PERSON_PICTURE_INITIALS, CANONICAL_PERSON_PICTURE_SIZE,
+    CANONICAL_PIPS_COUNT, CANONICAL_PIPS_SELECTED_INDEX, CANONICAL_PIP_SIZE_NORMAL,
+    CANONICAL_PIP_SIZE_SELECTED, CANONICAL_PIP_SPACING, CANONICAL_PIVOT_CONTENT,
+    CANONICAL_PIVOT_HEADER_HEIGHT, CANONICAL_PIVOT_HEIGHT, CANONICAL_PIVOT_ITEMS,
+    CANONICAL_PIVOT_WIDTH, CANONICAL_REFRESH_TEXT, CANONICAL_ROW_ITEMS, CANONICAL_SEGMENTED_ITEMS,
+    CANONICAL_SPLIT_VIEW_CONTENT_TEXT, CANONICAL_SPLIT_VIEW_HEIGHT, CANONICAL_SPLIT_VIEW_PANE_TEXT,
+    CANONICAL_SPLIT_VIEW_PANE_WIDTH, CANONICAL_SPLIT_VIEW_WIDTH, CANONICAL_TAB_CLOSE_GLYPH,
+    CANONICAL_TAB_CONTENT, CANONICAL_TAB_ITEMS, CANONICAL_TIME_COLUMNS,
+    CANONICAL_TIME_PICKER_HEIGHT, CANONICAL_TIME_PICKER_WIDTH, CANONICAL_TITLE_BAR_SUBTITLE,
+    CANONICAL_TITLE_BAR_TITLE, CANONICAL_TREE_CHILD, CANONICAL_TREE_ROOT, STANDARD_FLIP_HEIGHT,
+    STANDARD_FLIP_WIDTH, STANDARD_FONT_SIZE, STANDARD_GRID_CELL_RADIUS, STANDARD_GRID_HEIGHT,
+    STANDARD_GRID_WIDTH, STANDARD_LIST_ITEM_HEIGHT, STANDARD_PILL_HEIGHT, STANDARD_PILL_RADIUS,
+    STANDARD_PILL_WIDTH, STANDARD_REFRESH_HEIGHT, STANDARD_REFRESH_INDICATOR_SIZE,
+    STANDARD_REFRESH_WIDTH, STANDARD_SCROLL_BAR_HEIGHT, STANDARD_SCROLL_BAR_TRACK_WIDTH,
+    STANDARD_SCROLL_BAR_WIDTH, STANDARD_STACK_SPACING, STANDARD_TREE_INDENT,
+    STANDARD_TREE_ITEM_HEIGHT, WINUI_DISABLED_OPACITY,
 };
 
 pub use column_header_bar::{
@@ -579,8 +577,10 @@ pub use curve_editor::{
 };
 pub use data_grid::{emit_data_grid, DataGridDesc, DataGridState};
 pub use date_picker::{
-    days_in_month, emit_calendar, is_leap_year, CalendarCell, CalendarState, DatePickerDesc,
-    NaiveDate, SelectionMode, YearMonth,
+    calendar_cell_node, calendar_header_node, calendar_next_node, calendar_prev_node,
+    days_in_month, emit_calendar, emit_calendar_view, is_leap_year, CalendarCell,
+    CalendarDisplayMode, CalendarHitTarget, CalendarSelectionMode, CalendarState, DatePickerDesc,
+    NaiveDate, SelectionMode, YearMonth, CALENDAR_CHEVRON_DOWN_GLYPH, CALENDAR_CHEVRON_UP_GLYPH,
 };
 pub use date_range_picker::{
     emit_date_range_picker, DateRange, DateRangePickerDesc, DateRangePickerState,
@@ -1022,6 +1022,8 @@ pub struct WidgetOutput {
     pub primitives: Vec<GpuPrimitiveInstance>,
     /// 图元引用的载荷数据。
     pub payloads: Vec<GpuPayload>,
+    /// 控件内部声明的局部裁剪节点表（图元通过局部索引引用，合入全局场景时自动求交并重定位）。
+    pub clips: Vec<GpuClipNode>,
     /// 可拾取表面（若控件接受输入）。
     pub hit: Option<HitRegion>,
     /// 多部件子命中区域（例如确认/取消按钮、关闭按钮、分页项）。
@@ -1087,19 +1089,110 @@ impl WidgetOutput {
         uses_by_type || has_gradient
     }
 
-    /// 合并子控件输出的图元与载荷，并在拼接前自动按当前 `self.payloads.len()` 重定位 `extra_payload_idx`。
+    /// 追加一条局部裁剪节点并返回其局部索引。
+    pub fn push_clip(&mut self, node: GpuClipNode) -> u32 {
+        let index = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
+        self.clips.push(node);
+        index
+    }
+
+    /// 合并另一份 [`WidgetOutput`]，自动重定位载荷与局部裁剪索引，并保留命中区域、无障碍与焦点顺序。
+    pub fn extend(&mut self, mut other: WidgetOutput) {
+        let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
+        let clip_base = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
+        if payload_base != 0 || clip_base != 0 {
+            for prim in &mut other.primitives {
+                if payload_base != 0 && Self::primitive_uses_payload(prim) {
+                    prim.extra_payload_idx = prim.extra_payload_idx.saturating_add(payload_base);
+                }
+                if clip_base != 0 && prim.clip_idx != CLIP_NONE {
+                    prim.clip_idx = prim.clip_idx.saturating_add(clip_base);
+                }
+            }
+        }
+        self.primitives.extend(other.primitives);
+        self.payloads.extend(other.payloads);
+        self.clips.extend(other.clips);
+        let other_root_node = other.hit.as_ref().map(|hit| hit.node);
+        if self.hit.is_none() {
+            self.hit = other.hit;
+        } else if let Some(hit) = other.hit {
+            self.sub_hits.push(hit);
+        }
+        self.sub_hits.extend(other.sub_hits);
+        if self.a11y.is_none() {
+            self.a11y = other.a11y;
+        } else if let Some(node) = other.a11y {
+            let sub_key = other_root_node
+                .or_else(|| other.sub_a11y.first().map(|(k, _)| k.wrapping_sub(1)))
+                .unwrap_or_else(|| {
+                    self.hit
+                        .as_ref()
+                        .map_or(0, |hit| hit.node)
+                        .wrapping_add(self.sub_a11y.len() as u64 + 1)
+                });
+            self.sub_a11y.push((sub_key, node));
+        }
+        self.sub_a11y.extend(other.sub_a11y);
+        self.focusable |= other.focusable;
+        self.sub_focus_order.extend(other.sub_focus_order);
+    }
+
+    /// 合并子控件输出的图元、载荷与局部裁剪节点，并在拼接前自动重定位 `extra_payload_idx` 与 `clip_idx`。
     pub fn append_child_primitives(&mut self, mut child: WidgetOutput) {
         let payload_base = u32::try_from(self.payloads.len()).unwrap_or(u32::MAX);
-        if payload_base != 0 {
+        let clip_base = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
+        if payload_base != 0 || clip_base != 0 {
             for prim in &mut child.primitives {
-                if Self::primitive_uses_payload(prim) {
+                if payload_base != 0 && Self::primitive_uses_payload(prim) {
                     prim.extra_payload_idx = prim.extra_payload_idx.saturating_add(payload_base);
+                }
+                if clip_base != 0 && prim.clip_idx != CLIP_NONE {
+                    prim.clip_idx = prim.clip_idx.saturating_add(clip_base);
                 }
             }
         }
         self.primitives.extend(child.primitives);
         self.payloads.extend(child.payloads);
+        self.clips.extend(child.clips);
     }
+}
+
+/// 将外层裁剪节点与控件局部裁剪节点求交，生成合并后的 [`GpuClipNode`]。
+///
+/// AABB 取精确矩形交集；非退化圆角 SDF 槽位（`radii != [0; 4]`）按外层优先顺序填入
+/// `rounded_clip_0` / `rounded_clip_1`，若外层已占满 2 槽则保留外层圆角槽并叠加精确 AABB 交集。
+#[must_use]
+pub fn intersect_clip_nodes(outer: &GpuClipNode, inner: &GpuClipNode) -> GpuClipNode {
+    let aabb = [
+        outer.aabb_clip[0].max(inner.aabb_clip[0]),
+        outer.aabb_clip[1].max(inner.aabb_clip[1]),
+        outer.aabb_clip[2].min(inner.aabb_clip[2]),
+        outer.aabb_clip[3].min(inner.aabb_clip[3]),
+    ];
+    let mut node = GpuClipNode::from_aabb(aabb);
+    let mut slots: [Option<([f32; 4], [u16; 4])>; 2] = [None, None];
+    let mut count = 0usize;
+    for (rect, radii) in [
+        (outer.rounded_clip_0, outer.radii_0),
+        (outer.rounded_clip_1, outer.radii_1),
+        (inner.rounded_clip_0, inner.radii_0),
+        (inner.rounded_clip_1, inner.radii_1),
+    ] {
+        if radii != [0; 4] && count < 2 {
+            slots[count] = Some((rect, radii));
+            count += 1;
+        }
+    }
+    if let Some((rect, radii)) = slots[0] {
+        node.rounded_clip_0 = rect;
+        node.radii_0 = radii;
+    }
+    if let Some((rect, radii)) = slots[1] {
+        node.rounded_clip_1 = rect;
+        node.radii_1 = radii;
+    }
+    node
 }
 
 /// 将多个控件的输出收集到同一帧中。
@@ -1426,12 +1519,35 @@ impl SceneCollector {
             }
         }
 
-        if let Some((clip_idx, clip_rect)) = self.clip_stack.last().copied() {
-            for primitive in &mut output.primitives {
-                if primitive.clip_idx == CLIP_NONE {
+        let active_clip = self.clip_stack.last().copied();
+        let local_clip_base = if output.clips.is_empty() {
+            None
+        } else {
+            let base = u32::try_from(self.clips.len()).unwrap_or(CLIP_NONE - 1);
+            let outer = active_clip
+                .filter(|&(idx, _)| idx != CLIP_NONE)
+                .and_then(|(idx, _)| self.clips.get(idx as usize).copied());
+            for local_clip in &output.clips {
+                let merged = match outer {
+                    Some(ref outer_node) => intersect_clip_nodes(outer_node, local_clip),
+                    None => *local_clip,
+                };
+                self.clips.push(merged);
+            }
+            Some(base)
+        };
+
+        for primitive in &mut output.primitives {
+            if primitive.clip_idx == CLIP_NONE {
+                if let Some((clip_idx, _)) = active_clip {
                     primitive.clip_idx = clip_idx;
                 }
+            } else if let Some(clip_base) = local_clip_base {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
             }
+        }
+
+        if let Some((_, clip_rect)) = active_clip {
             if let Some(node) = output.a11y.as_mut() {
                 node.bounds = node.bounds.intersect(&clip_rect);
             }
@@ -1898,5 +2014,106 @@ mod tests {
         assert_eq!(animated.extra_payload_idx, 1);
         assert_eq!(animated.transform_idx, TRANSFORM_ANIMATED_BIT | 3);
         assert_eq!(animated.clip_idx, CLIP_NONE);
+    }
+
+    #[test]
+    fn widget_output_extend_relocates_local_clips_and_preserves_clip_none() {
+        let mut first = WidgetOutput::default();
+        let c0 = first.push_clip(GpuClipNode::from_aabb([0.0, 0.0, 100.0, 100.0]));
+        assert_eq!(c0, 0);
+        first.primitives.push(GpuPrimitiveInstance {
+            clip_idx: c0,
+            ..Default::default()
+        });
+
+        let mut second = WidgetOutput::default();
+        let s0 = second.push_clip(GpuClipNode::from_aabb([10.0, 10.0, 80.0, 80.0]));
+        let s1 = second.push_clip(GpuClipNode::from_aabb([20.0, 20.0, 60.0, 60.0]));
+        assert_eq!(s0, 0);
+        assert_eq!(s1, 1);
+        second.primitives.push(GpuPrimitiveInstance {
+            clip_idx: s0,
+            ..Default::default()
+        });
+        second.primitives.push(GpuPrimitiveInstance {
+            clip_idx: CLIP_NONE,
+            ..Default::default()
+        });
+        second.primitives.push(GpuPrimitiveInstance {
+            clip_idx: s1,
+            ..Default::default()
+        });
+
+        first.extend(second);
+
+        assert_eq!(first.clips.len(), 3);
+        assert_eq!(first.primitives[0].clip_idx, 0);
+        assert_eq!(first.primitives[1].clip_idx, 1);
+        assert_eq!(first.primitives[2].clip_idx, CLIP_NONE);
+        assert_eq!(first.primitives[3].clip_idx, 2);
+    }
+
+    #[test]
+    fn intersect_clip_nodes_handles_aabb_single_rounded_and_full_slots() {
+        // 1. 纯 AABB 与纯 AABB 求精确矩形交集。
+        let outer_aabb = GpuClipNode::from_aabb([0.0, 10.0, 200.0, 300.0]);
+        let inner_aabb = GpuClipNode::from_aabb([50.0, 0.0, 150.0, 250.0]);
+        let merged_aabb = intersect_clip_nodes(&outer_aabb, &inner_aabb);
+        assert_eq!(merged_aabb.aabb_clip, [50.0, 10.0, 150.0, 250.0]);
+        assert_eq!(merged_aabb.radii_0, [0; 4]);
+        assert_eq!(merged_aabb.radii_1, [0; 4]);
+
+        // 2. 单圆角外层 + 纯 AABB 内层：保留外层圆角槽并收紧 AABB。
+        let outer_r = Rect::new(0.0, 0.0, 200.0, 200.0);
+        let outer_rounded = rounded_clip(outer_r, 12.0);
+        let inner_rect = GpuClipNode::from_aabb([20.0, 30.0, 180.0, 190.0]);
+        let merged_single = intersect_clip_nodes(&outer_rounded, &inner_rect);
+        assert_eq!(merged_single.aabb_clip, [20.0, 30.0, 180.0, 190.0]);
+        assert_eq!(merged_single.rounded_clip_0, outer_rounded.rounded_clip_0);
+        assert_eq!(merged_single.radii_0, outer_rounded.radii_0);
+        assert_eq!(merged_single.radii_1, [0; 4]);
+
+        // 3. 双圆角满槽外层 + 圆角内层：保留外层 2 个圆角槽并叠加精确 AABB 交集。
+        let outer_r1 = Rect::new(10.0, 10.0, 180.0, 180.0);
+        let mut outer_full = rounded_clip(outer_r, 16.0);
+        outer_full.rounded_clip_1 = outer_r1.to_center_half();
+        outer_full.radii_1 = [f32_to_f16(8.0); 4];
+        let inner_r = Rect::new(20.0, 25.0, 120.0, 100.0);
+        let inner_rounded = rounded_clip(inner_r, 6.0);
+        let merged_full = intersect_clip_nodes(&outer_full, &inner_rounded);
+        assert_eq!(merged_full.aabb_clip, [20.0, 25.0, 140.0, 125.0]);
+        assert_eq!(merged_full.rounded_clip_0, outer_full.rounded_clip_0);
+        assert_eq!(merged_full.radii_0, outer_full.radii_0);
+        assert_eq!(merged_full.rounded_clip_1, outer_full.rounded_clip_1);
+        assert_eq!(merged_full.radii_1, outer_full.radii_1);
+    }
+
+    #[test]
+    fn scene_collector_push_intersects_and_relocates_local_clips() {
+        let mut collector = SceneCollector::new(0);
+        let outer_rect = Rect::new(10.0, 10.0, 200.0, 200.0);
+        let outer_idx = collector.push_clip(rounded_clip(outer_rect, 8.0), outer_rect);
+        assert_eq!(outer_idx, 0);
+
+        let mut out = WidgetOutput::default();
+        let local_idx = out.push_clip(GpuClipNode::from_aabb([0.0, 40.0, 180.0, 160.0]));
+        out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: local_idx,
+            ..Default::default()
+        });
+        out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: CLIP_NONE,
+            ..Default::default()
+        });
+
+        collector.push(42, out);
+
+        assert_eq!(collector.clips.len(), 2);
+        // 局部裁剪图元重定位到索引 1，且与外层求交保留圆角槽。
+        assert_eq!(collector.primitives[0].clip_idx, 1);
+        assert_eq!(collector.clips[1].aabb_clip, [10.0, 40.0, 180.0, 160.0]);
+        assert_eq!(collector.clips[1].radii_0, collector.clips[0].radii_0);
+        // `CLIP_NONE` 图元沿用外层栈顶索引 0。
+        assert_eq!(collector.primitives[1].clip_idx, outer_idx);
     }
 }

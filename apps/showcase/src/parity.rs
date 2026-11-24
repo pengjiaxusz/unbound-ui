@@ -24,8 +24,9 @@ use unbound_widgets::slot_fixture::{
     emit_canonical_text_rows_fixture, FixtureState, STANDARD_STACK_SPACING,
 };
 use unbound_widgets::{
-    emit_rich_edit_box, emit_scroll_view, AppBarSeparatorDesc, ButtonDesc, ButtonVariant,
-    CalendarDatePickerDesc, CalendarDatePickerState, CheckboxDesc, ControlState,
+    emit_calendar_view, emit_rich_edit_box, emit_scroll_view, AppBarSeparatorDesc, ButtonDesc,
+    ButtonVariant, CalendarDatePickerDesc, CalendarDatePickerState, CalendarDisplayMode,
+    CalendarSelectionMode, CalendarState, CheckboxDesc, ControlState, DatePickerDesc,
     DatePickerWheelDesc, DatePickerWheelState, DropDownButtonDesc, DropDownButtonState,
     HyperlinkButtonDesc, NaiveDate, PasswordBoxDesc, PasswordBoxState, PointerPhase,
     RepeatButtonDesc, RepeatButtonState, RichEditBoxDesc, ScrollState, ScrollViewDesc, SelectDesc,
@@ -3632,40 +3633,60 @@ fn emit_case(
             fixture.total_size
         }
         "CalendarView" => {
-            let first = scene.primitives.len();
-            let fixture_state = FixtureState::from_control_state(control, checked);
-            let fixture = unbound_widgets::slot_fixture::emit_canonical_calendar_view_fixture(
-                rect,
-                fixture_state,
-                text_ctx,
-                700,
-            );
-            push(scene, fixture.output);
-            // 外框裁剪节点：保留完整外框底边与圆角。
-            let outer_clip_idx = scene.clips.len() as u32;
-            scene.clips.push(GpuClipNode::from_aabb([
-                rect.origin.x,
-                rect.origin.y,
-                rect.max().x,
-                rect.max().y,
-            ]));
-            // 日期网格内缩裁剪节点：使底部第 4 行在 y = 272 截断，留出空白不压穿底边框。
-            let grid_clip_idx = scene.clips.len() as u32;
-            scene.clips.push(GpuClipNode::from_aabb([
-                rect.origin.x,
-                rect.origin.y,
-                rect.max().x,
-                rect.max().y - 3.0,
-            ]));
-            // 深度 >= 703 为日期网格图元（15 号选中圆环 703、日期数字 704），其余外框/分隔线/表头走外框裁剪。
-            for primitive in &mut scene.primitives[first..] {
-                primitive.clip_idx = if primitive.depth_u16() >= 703 {
-                    grid_clip_idx
-                } else {
-                    outer_clip_idx
-                };
+            // 直连真实单一真源控件 emit_calendar_view（ADR-0043），自带 ADR-0042 局部裁剪，
+            // 不再使用 slot_fixture 静态假人或外挂手工裁剪节点。
+            let w = if rect.width() > 0.0 {
+                rect.width()
+            } else {
+                300.0
+            };
+            let h = if rect.height() > 0.0 {
+                rect.height()
+            } else {
+                260.0
+            };
+            let cal_rect = Rect::new(rect.origin.x, rect.origin.y, w, h);
+            let fixed_date = NaiveDate::new(2026, 1, 15).expect("valid parity calendar date");
+            let mut state = CalendarState::new(fixed_date, CalendarSelectionMode::Single);
+            state.set_first_day_of_week(0);
+            // 与 Catalog.cs 保持一致，静态参考对比关闭 IsTodayHighlighted 以避免跨天时钟漂移；
+            // today_highlighted 视觉与状态契约在无头集成测试中以固定 today 全覆盖。
+            state.is_today_highlighted = false;
+
+            match case.state {
+                "multiple_selected" => {
+                    state.set_mode(CalendarSelectionMode::Multiple);
+                    for day in [10, 15, 20] {
+                        let d = NaiveDate::new(2026, 1, day).expect("valid multi-select date");
+                        state.select(d);
+                    }
+                }
+                "blackout" => {
+                    state.select(fixed_date);
+                    state.blackout_dates = vec![
+                        NaiveDate::new(2026, 1, 18).expect("valid blackout date"),
+                        NaiveDate::new(2026, 1, 19).expect("valid blackout date"),
+                    ];
+                }
+                "year_mode" => {
+                    state.select(fixed_date);
+                    state.display_mode = CalendarDisplayMode::Year;
+                }
+                "decade_mode" => {
+                    state.select(fixed_date);
+                    state.display_mode = CalendarDisplayMode::Decade;
+                }
+                _ => {
+                    state.select(fixed_date);
+                }
             }
-            fixture.total_size
+
+            let desc = DatePickerDesc::new(cal_rect)
+                .with_z(700)
+                .disabled(control.disabled);
+            let output = emit_calendar_view(NODE, &desc, &state, control, text_ctx);
+            push(scene, output);
+            cal_rect.size
         }
         "TimePicker" => {
             let fixture_state = FixtureState::from_control_state(control, checked);
@@ -4152,13 +4173,25 @@ fn navigation_view_parity_desc(
 /// 字形、图像与曲线图元的载荷索引是相对其所属发射输出的，合并进场景时
 /// 必须整体平移到当前载荷长度之后，否则后续控件会采样到先前图元的 UV。
 fn push(scene: &mut Gallery, mut output: unbound_widgets::WidgetOutput) {
-    let base = scene.payloads.len() as u32;
+    let payload_base = scene.payloads.len() as u32;
+    let clip_base = if output.clips.is_empty() {
+        None
+    } else {
+        let base = scene.clips.len() as u32;
+        scene.clips.extend(output.clips);
+        Some(base)
+    };
     for primitive in &mut output.primitives {
         if matches!(
             primitive.prim_type(),
             PrimType::Glyph | PrimType::GlyphColor | PrimType::Image | PrimType::Curve
         ) {
-            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(base);
+            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+        }
+        if let Some(base) = clip_base {
+            if primitive.clip_idx != unbound_gpu::data::CLIP_NONE {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(base);
+            }
         }
     }
     scene.primitives.extend(output.primitives);
@@ -4497,5 +4530,44 @@ mod tests {
             ),
             "NavigationViewTop must emit zero scrollbar hit regions"
         );
+    }
+
+    #[test]
+    fn test_calendar_view_direct_real_widget_and_multi_state_parity() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 300.0, 260.0);
+
+        for state in [
+            "normal",
+            "disabled",
+            "focused",
+            "multiple_selected",
+            "blackout",
+            "year_mode",
+            "decade_mode",
+        ] {
+            let case = ParityCase::new("CalendarView", state, "light");
+            let mut scene = Gallery::new();
+            let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
+            let size =
+                res.unwrap_or_else(|err| panic!("CalendarView state '{state}' emit failed: {err}"));
+            assert_eq!(size, Vec2::new(300.0, 260.0));
+            assert!(
+                !scene.primitives.is_empty(),
+                "CalendarView state '{state}' must emit primitives"
+            );
+            assert!(
+                !scene.clips.is_empty(),
+                "CalendarView state '{state}' must emit ADR-0042 local clip node"
+            );
+        }
     }
 }
