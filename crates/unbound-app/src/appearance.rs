@@ -477,3 +477,55 @@ pub fn apply_appearance_diff_to_window(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_backdrop_dark_mode_flips_once_at_transition_midpoint() {
+        let caps = AppearanceCaps::new(Some(22631), true, true);
+        let mut ledger = WindowAppearance::new();
+        let set = unbound_theme::ThemeSet::default_set();
+        let light = set.palette(ThemeKind::Light);
+        let dark = set.palette(ThemeKind::Dark);
+
+        // 初始 Light 状态。
+        let init = ledger.set_intent(
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
+            caps,
+            ThemeKind::Light,
+        );
+        assert_eq!(init.dark_mode, Some(false));
+
+        let mut tr = unbound_theme::ThemeTransition::new(light);
+        assert!(tr.begin(dark, 0.0, 0.24));
+
+        // t < 0.5：原生 DWM 深色标记不提前翻转。
+        assert!(tr.advance(0.08));
+        let early = ledger.set_intent(
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
+            caps,
+            tr.effective_backdrop_theme(),
+        );
+        assert_eq!(early.dark_mode, None);
+
+        // t >= 0.5：精确翻转一次。
+        assert!(tr.advance(0.12));
+        let mid = ledger.set_intent(
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
+            caps,
+            tr.effective_backdrop_theme(),
+        );
+        assert_eq!(mid.dark_mode, Some(true));
+
+        // 后续帧继续去重，不再重复下发。
+        assert!(!tr.advance(0.24));
+        let done = ledger.set_intent(
+            AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
+            caps,
+            tr.effective_backdrop_theme(),
+        );
+        assert_eq!(done.dark_mode, None);
+    }
+}

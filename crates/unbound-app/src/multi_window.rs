@@ -27,7 +27,7 @@ use unbound_platform::{
     begin_outbound_file_drag, FramePacer, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
     PopupWindowConfig, WindowId, WindowRegistry,
 };
-use unbound_theme::{ThemeSet, ThemeState};
+use unbound_theme::{ThemeSet, ThemeState, ThemeTransition};
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
@@ -191,6 +191,8 @@ pub struct WindowContext<A: Application> {
     os_scale: f32,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
     theme: ThemeState,
+    /// 本窗口的主题过渡状态机（多可见窗口共享协调器时间戳同步推进）。
+    theme_transition: ThemeTransition,
     uploaded_theme: Option<(
         ThemeKind,
         unbound_theme::ProductPreset,
@@ -222,6 +224,7 @@ impl<A: Application> WindowContext<A> {
             ),
             ctx.theme,
         );
+        let theme_transition = ThemeTransition::new(theme.active_palette());
         let surface_alpha = match config.backdrop {
             Some(material) if material != WindowBackdropMaterial::None => {
                 SurfaceAlpha::PreMultiplied
@@ -246,6 +249,7 @@ impl<A: Application> WindowContext<A> {
             os_scale: 1.0,
             frame_metrics: None,
             theme,
+            theme_transition,
             uploaded_theme: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
@@ -270,6 +274,8 @@ impl<A: Application> WindowContext<A> {
         if self.was_suspended {
             self.was_suspended = false;
             self.frame_dropped = true;
+            // ADR 0030 & ADR 0033：Suspended 窗口恢复可见时直接吸附至目标主题终态，不补播过期动画。
+            self.snap_theme_to_current_context();
             self.runtime.invalidate();
         }
         false
@@ -283,31 +289,95 @@ impl<A: Application> WindowContext<A> {
         self.os_scale
     }
 
-    fn sync_theme(&mut self, window: &NativeWindow) {
-        let ctx = self.runtime.context();
-        let sys_accent = ctx.resolved_system_accent();
-        let sys_bits =
-            sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
-        let key = (ctx.theme, ctx.preset, ctx.accent, sys_bits);
-        if self.uploaded_theme == Some(key) {
+    /// 将当前上下文中的主题立即吸附为终态（用于 Suspended 恢复可见或首帧初始化）。
+    pub(crate) fn snap_theme_to_current_context(&mut self) {
+        let (key, sys_accent) = {
+            let ctx = self.runtime.context();
+            let sys_accent = ctx.resolved_system_accent();
+            let sys_bits =
+                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+            ((ctx.theme, ctx.preset, ctx.accent, sys_bits), sys_accent)
+        };
+        self.theme = ThemeState::new(
+            ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
+            key.0,
+        );
+        self.theme_transition.snap_to(self.theme.active_palette());
+        self.runtime.context_mut().theme_transition_remaining_secs = 0.0;
+        if let Some(renderer) = &mut self.renderer {
+            let lut = self.theme_transition.lut().clone();
+            let _ = renderer.write_theme_lut(&lut);
+        }
+        self.uploaded_theme = Some(key);
+    }
+
+    /// 以协调器共享时钟同步本窗口主题过渡状态（无头测试与运行器共用接缝）。
+    ///
+    /// 返回 `true` 表示需要继续请求重绘；`Suspended` 窗口不唤醒，直接返回 `false`。
+    pub(crate) fn sync_theme_state_at(
+        &mut self,
+        now_secs: f64,
+        shared_trigger_secs: f64,
+        reduced_motion: bool,
+    ) -> bool {
+        if self.pacer.is_suspended() {
+            return false;
+        }
+        let (key, sys_accent, transition_cfg) = {
+            let ctx = self.runtime.context();
+            let sys_accent = ctx.resolved_system_accent();
+            let sys_bits =
+                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+            (
+                (ctx.theme, ctx.preset, ctx.accent, sys_bits),
+                sys_accent,
+                ctx.theme_transition,
+            )
+        };
+        let key_changed = self.uploaded_theme != Some(key);
+        if !key_changed && !self.theme_transition.is_active() {
+            return false;
+        }
+        if key_changed {
+            let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
+            if prev_preset_accent != Some((key.1, key.2, key.3)) {
+                self.theme = ThemeState::new(
+                    ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
+                    key.0,
+                );
+            } else {
+                self.theme.switch(key.0);
+            }
+            if self.uploaded_theme.is_none() {
+                self.theme_transition.snap_to(self.theme.active_palette());
+            } else {
+                let duration = transition_cfg.effective_duration_secs(reduced_motion);
+                let _ = self.theme_transition.begin(
+                    self.theme.active_palette(),
+                    shared_trigger_secs,
+                    duration,
+                );
+            }
+        }
+        let still_active = self.theme_transition.advance(now_secs);
+        self.runtime.context_mut().theme_transition_remaining_secs =
+            self.theme_transition.remaining_secs(now_secs);
+        self.uploaded_theme = Some(key);
+        still_active || key_changed
+    }
+
+    fn sync_theme_at(&mut self, window: &NativeWindow, now_secs: f64, shared_trigger_secs: f64) {
+        let reduced_motion = unbound_platform::prefers_reduced_motion();
+        let needs_upload = self.sync_theme_state_at(now_secs, shared_trigger_secs, reduced_motion);
+        if !needs_upload {
             return;
         }
-        let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
-        if prev_preset_accent != Some((key.1, key.2, key.3)) {
-            self.theme = ThemeState::new(
-                ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
-                key.0,
-            );
-        } else {
-            self.theme.switch(key.0);
-        }
-        let lut = self.theme.lut().clone();
+        let lut = self.theme_transition.lut().clone();
         let Some(renderer) = &mut self.renderer else {
             return;
         };
         match renderer.write_theme_lut(&lut) {
             Ok(()) => {
-                self.uploaded_theme = Some(key);
                 window.request_redraw();
             }
             Err(error) => {
@@ -322,7 +392,7 @@ impl<A: Application> WindowContext<A> {
             self.runtime.premultiplied_surface(),
             unbound_platform::accent_policy_export_available(),
         );
-        let theme = self.runtime.context().theme;
+        let theme = self.theme_transition.effective_backdrop_theme();
         self.appearance
             .set_host_clear_alpha(self.runtime.clear_alpha());
         let diff = self
@@ -486,6 +556,18 @@ pub struct MultiWindowCoordinator<A: Application> {
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// 多窗口共享主题过渡单调时钟基准。
+    theme_clock_epoch: Instant,
+    /// 最近一次全局主题切换对应的共享触发时间戳（秒），确保并排可见窗口同拍推进。
+    shared_theme_trigger: Option<(
+        (
+            ThemeKind,
+            unbound_theme::ProductPreset,
+            unbound_theme::AccentBrand,
+            Option<[u32; 4]>,
+        ),
+        f64,
+    )>,
 }
 
 impl<A: Application> MultiWindowCoordinator<A> {
@@ -508,6 +590,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
             primary_config,
             factory: Box::new(factory),
             waker: None,
+            theme_clock_epoch: Instant::now(),
+            shared_theme_trigger: None,
         }
     }
 
@@ -785,7 +869,22 @@ impl<A: Application> MultiWindowCoordinator<A> {
         state.set_present_extensions(&device_extensions);
         let client_screen = window.client_rect_on_screen();
         ctx.screen_origin = (client_screen.x, client_screen.y);
-        ctx.sync_theme(window);
+        let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
+        let trigger_secs = {
+            let app_ctx = ctx.runtime.context();
+            let sys_accent = app_ctx.resolved_system_accent();
+            let sys_bits =
+                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+            let key = (app_ctx.theme, app_ctx.preset, app_ctx.accent, sys_bits);
+            match self.shared_theme_trigger {
+                Some((prev_key, ts)) if prev_key == key => ts,
+                _ => {
+                    self.shared_theme_trigger = Some((key, now_secs));
+                    now_secs
+                }
+            }
+        };
+        ctx.sync_theme_at(window, now_secs, trigger_secs);
         ctx.sync_appearance(window);
         ctx.last_frame = Instant::now();
 
@@ -1333,7 +1432,22 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
-        ctx.sync_theme(window);
+        let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
+        let trigger_secs = {
+            let app_ctx = ctx.runtime.context();
+            let sys_accent = app_ctx.resolved_system_accent();
+            let sys_bits =
+                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
+            let key = (app_ctx.theme, app_ctx.preset, app_ctx.accent, sys_bits);
+            match self.shared_theme_trigger {
+                Some((prev_key, ts)) if prev_key == key => ts,
+                _ => {
+                    self.shared_theme_trigger = Some((key, now_secs));
+                    now_secs
+                }
+            }
+        };
+        ctx.sync_theme_at(window, now_secs, trigger_secs);
         ctx.sync_appearance(window);
         ctx.process_external_texture_ops(report.external_texture_ops, window);
 
@@ -1687,5 +1801,108 @@ mod tests {
         assert_eq!(coord.registry().primary(), Some(WindowId(20)));
         assert!(coord.shared_gpu().is_none());
         assert!(coord.shared_atlases().is_none());
+    }
+
+    #[test]
+    fn multi_window_theme_transition_shares_timestamp_and_skips_suspended_windows() {
+        struct DummyApp;
+        impl Application for DummyApp {
+            type State = ();
+            fn init(&mut self, _ctx: &mut crate::AppContext) {}
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+            fn view(&mut self, _state: &Self::State, _view: &mut crate::ViewBuilder<'_>) {}
+        }
+
+        let cfg = WindowConfig::default();
+        let mut win_a = WindowContext::new(DummyApp, &cfg);
+        let mut win_b = WindowContext::new(DummyApp, &cfg);
+        let mut win_suspended = WindowContext::new(DummyApp, &cfg);
+
+        // 首帧全部强制瞬切至 Dark。
+        assert!(win_a.sync_theme_state_at(0.0, 0.0, false));
+        assert!(win_b.sync_theme_state_at(0.0, 0.0, false));
+        assert!(win_suspended.sync_theme_state_at(0.0, 0.0, false));
+        assert!(!win_a.theme_transition.is_active());
+
+        // 第三个窗口进入 Suspended 停绘态。
+        win_suspended.pacer.set_minimized(true);
+        assert!(win_suspended.should_skip_frame_for_throttle());
+
+        // 全局切换至 Light，所有可见窗口共享 trigger_secs = 1.0。
+        win_a.runtime.set_theme(ThemeKind::Light);
+        win_b.runtime.set_theme(ThemeKind::Light);
+        win_suspended.runtime.set_theme(ThemeKind::Light);
+
+        // 校验零布局重排不变量：清空脏标记后推进过渡帧，脏标记保持 NONE。
+        let _ = win_a.runtime.frame(0.0);
+        assert_eq!(win_a.runtime.dirty(), crate::DirtyFlags::NONE);
+
+        assert!(win_a.sync_theme_state_at(1.10, 1.0, false));
+        assert!(win_b.sync_theme_state_at(1.10, 1.0, false));
+        assert_eq!(win_a.runtime.dirty(), crate::DirtyFlags::NONE);
+        // 两可见窗口进度与当前 LUT 表面色严格一致。
+        assert!(
+            (win_a.theme_transition.progress() - win_b.theme_transition.progress()).abs() < 1e-6
+        );
+        assert_eq!(
+            win_a
+                .theme_transition
+                .lut()
+                .color(unbound_theme::Token::SURFACE),
+            win_b
+                .theme_transition
+                .lut()
+                .color(unbound_theme::Token::SURFACE)
+        );
+
+        // Suspended 窗口不唤醒重绘。
+        assert!(!win_suspended.sync_theme_state_at(1.10, 1.0, false));
+        assert!(!win_suspended.theme_transition.is_active());
+
+        // 恢复可见后直接吸附终态 Light（t = 1.0），不补播过期动画。
+        win_suspended.pacer.set_minimized(false);
+        assert!(!win_suspended.should_skip_frame_for_throttle());
+        assert!(!win_suspended.theme_transition.is_active());
+        assert_eq!(
+            win_suspended.theme_transition.target_kind(),
+            ThemeKind::Light
+        );
+        assert_eq!(win_suspended.theme_transition.progress(), 1.0);
+    }
+
+    #[test]
+    fn reduced_motion_forces_instant_theme_snap_in_runner() {
+        struct DummyApp;
+        impl Application for DummyApp {
+            type State = ();
+            fn init(&mut self, _ctx: &mut crate::AppContext) {}
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+            fn view(&mut self, _state: &Self::State, _view: &mut crate::ViewBuilder<'_>) {}
+        }
+
+        let cfg = WindowConfig::default();
+        let mut win = WindowContext::new(DummyApp, &cfg);
+        assert!(win.sync_theme_state_at(0.0, 0.0, false));
+
+        win.runtime.set_theme(ThemeKind::Light);
+        // 系统开启减弱动画（reduced_motion = true）：立即到达终态，不进入过渡态。
+        assert!(win.sync_theme_state_at(1.0, 1.0, true));
+        assert!(!win.theme_transition.is_active());
+        assert_eq!(win.theme_transition.target_kind(), ThemeKind::Light);
+        assert_eq!(win.theme_transition.progress(), 1.0);
     }
 }
