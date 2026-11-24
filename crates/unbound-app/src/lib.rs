@@ -58,6 +58,7 @@ use unbound_world::{NodeId, UiWorld};
 pub mod appearance;
 pub mod assets;
 pub mod backdrop;
+pub mod bc7_assets;
 pub mod form;
 pub mod guest_bridge;
 pub mod i18n;
@@ -86,6 +87,7 @@ pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
     WindowBackdropController, MICA_READY_EVENT_ID,
 };
+pub use bc7_assets::{Bc7GpuOp, DEFAULT_BC7_VRAM_BUDGET_BYTES};
 pub use form::{FormBindingStore, FormMutator, WidgetValue};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
@@ -106,6 +108,11 @@ pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use theme_driver::{
     make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
 };
+pub use unbound_asset::{
+    AtlasPageId, CompressedPixelFormat, CompressedTextureError, CompressedTexturePayload,
+    UploadPacingBudget,
+};
+pub use unbound_gpu::device::{CompressedTextureBackend, CompressedTextureCapabilities};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
@@ -4613,6 +4620,20 @@ pub struct FrameReport {
     pub atlas_uploads: Vec<AtlasUpload>,
     /// 本帧待窗口运行器执行的外部纹理槽上传、更新与释放操作队列。
     pub external_texture_ops: Vec<ExternalTextureOp>,
+    /// 当前活跃的 BC7 动态多页图集页数量。
+    pub bc7_active_pages: usize,
+    /// 当前已驻留 BC7 压缩资产占用的真实显存字节数（1 B/px）。
+    pub bc7_vram_bytes: u64,
+    /// 本帧按上传节拍出队上传的 BC7 纹理数量。
+    pub bc7_uploads_this_frame: usize,
+    /// 当前仍在上传队列中等待后续帧排空的 BC7 纹理数量。
+    pub bc7_pending_uploads: usize,
+    /// 累计因显存预算超限触发的 BC7 离屏 LRU 驱逐次数。
+    pub bc7_eviction_count: u64,
+    /// 当前是否处于非原生 BC7 透明降级模式。
+    pub bc7_fallback_active: bool,
+    /// 本帧待窗口运行器执行的 BC7 图集与独立纹理 GPU 操作队列。
+    pub bc7_ops: Vec<Bc7GpuOp>,
 }
 
 /// 单帧已挂载上下文菜单的点击反解条目。
@@ -5977,6 +5998,9 @@ impl<A: Application> AppRuntime<A> {
         self.dirty = self.dirty.merge(asset_dirty);
         let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         if dirty == DirtyFlags::NONE && !self.force_rebuild {
+            if self.asset_hub.finish_bc7_frame_lru() {
+                self.dirty = self.dirty.merge(DirtyFlags::PAINT);
+            }
             return FrameReport {
                 diff: SceneDiff::Identical,
                 dirty,
@@ -5986,6 +6010,13 @@ impl<A: Application> AppRuntime<A> {
                 backdrops: self.backdrops.clone(),
                 atlas_uploads: self.collect_atlas_uploads(),
                 external_texture_ops: self.asset_hub.take_external_texture_ops(),
+                bc7_active_pages: self.asset_hub.bc7_active_pages(),
+                bc7_vram_bytes: self.asset_hub.bc7_vram_bytes(),
+                bc7_uploads_this_frame: self.asset_hub.bc7_uploads_this_frame(),
+                bc7_pending_uploads: self.asset_hub.bc7_pending_uploads(),
+                bc7_eviction_count: self.asset_hub.bc7_eviction_count(),
+                bc7_fallback_active: self.asset_hub.bc7_fallback_active(),
+                bc7_ops: self.asset_hub.take_bc7_ops(),
             };
         }
 
@@ -5995,6 +6026,7 @@ impl<A: Application> AppRuntime<A> {
         // 读取的仍是上一帧发布的顺序表，语义不受影响。
         self.sync_focus_context();
 
+        self.asset_hub.begin_bc7_view_pass();
         self.collector.reset(ROOT);
         self.pending.clear();
         self.semantic_intents.clear();
@@ -6229,6 +6261,10 @@ impl<A: Application> AppRuntime<A> {
         // 即便没有其他元素变脏。
         self.force_rebuild = inspector_active;
 
+        if self.asset_hub.finish_bc7_frame_lru() {
+            self.dirty = self.dirty.merge(DirtyFlags::PAINT);
+        }
+
         FrameReport {
             diff,
             dirty,
@@ -6238,6 +6274,13 @@ impl<A: Application> AppRuntime<A> {
             backdrops: self.backdrops.clone(),
             atlas_uploads: self.collect_atlas_uploads(),
             external_texture_ops: self.asset_hub.take_external_texture_ops(),
+            bc7_active_pages: self.asset_hub.bc7_active_pages(),
+            bc7_vram_bytes: self.asset_hub.bc7_vram_bytes(),
+            bc7_uploads_this_frame: self.asset_hub.bc7_uploads_this_frame(),
+            bc7_pending_uploads: self.asset_hub.bc7_pending_uploads(),
+            bc7_eviction_count: self.asset_hub.bc7_eviction_count(),
+            bc7_fallback_active: self.asset_hub.bc7_fallback_active(),
+            bc7_ops: self.asset_hub.take_bc7_ops(),
         }
     }
 

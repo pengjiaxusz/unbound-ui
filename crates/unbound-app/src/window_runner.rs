@@ -5,6 +5,10 @@ use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeTransitionDriver};
 use rustc_hash::FxHashMap;
+use unbound_asset::{
+    decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
+    BC7_ATLAS_PAGE_SIZE,
+};
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -27,7 +31,7 @@ use unbound_theme::ThemeSet;
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
-    AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
+    AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind,
 };
 
@@ -195,6 +199,10 @@ pub struct WindowedRunner<A: Application> {
     appearance: WindowAppearance,
     /// 已上传至当前渲染器的外部纹理句柄映射：`handle -> (slot, width, height, srgb)`。
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    /// 非 BC7 硬件降级路径下的 RGBA8 图集页缓冲：`page_id -> (bindless_slot, rgba_canvas)`。
+    bc7_fallback_pages: FxHashMap<AtlasPageId, (u32, Vec<u8>)>,
+    /// 非 BC7 硬件降级路径下的独立大图外部槽映射：`asset_id -> bindless_slot`。
+    bc7_fallback_standalone: FxHashMap<AssetId, u32>,
     /// 主窗口平台 ID（用于与原生弹出窗区分，避免弹出窗覆写或销毁主窗口渲染资源）。
     primary_window_id: Option<WindowId>,
     /// 主窗口客户区左上角在屏幕坐标系中的物理像素原点。
@@ -261,6 +269,8 @@ impl<A: Application> WindowedRunner<A> {
             frame_metrics: None,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            bc7_fallback_pages: FxHashMap::default(),
+            bc7_fallback_standalone: FxHashMap::default(),
             primary_window_id: None,
             main_screen_origin: (0, 0),
             native_popup_windows: FxHashMap::default(),
@@ -587,11 +597,231 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    fn process_bc7_ops(&mut self, ops: Vec<Bc7GpuOp>, window: &NativeWindow) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
+        let mut needs_redraw = false;
+
+        for op in ops {
+            match op {
+                Bc7GpuOp::CreateAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        match renderer.create_bc7_atlas_page(page_id.0) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create BC7 atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        let page_bytes =
+                            (BC7_ATLAS_PAGE_SIZE as usize) * (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                        let canvas = vec![0u8; page_bytes];
+                        let desc = ManagedExternalTextureDesc::new(
+                            BC7_ATLAS_PAGE_SIZE,
+                            BC7_ATLAS_PAGE_SIZE,
+                            false,
+                        );
+                        match renderer.upload_external_rgba8(desc, &canvas) {
+                            Ok(slot) => {
+                                self.bc7_fallback_pages.insert(page_id, (slot, canvas));
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadAtlasRegion {
+                    page_id,
+                    x,
+                    y,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer
+                            .stage_bc7_atlas_subregion(page_id.0, x, y, width, height, &bytes)
+                        {
+                            eprintln!(
+                                "[unbound-app] Could not stage BC7 atlas region on {page_id:?} ({x}, {y}, {width}x{height}): {error:?}"
+                            );
+                        } else {
+                            needs_redraw = true;
+                        }
+                    } else if let Some((slot, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let page_stride = (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                                let row_bytes = (width as usize) * 4;
+                                for row in 0..(height as usize) {
+                                    let dst_offset =
+                                        ((y as usize) + row) * page_stride + (x as usize) * 4;
+                                    let src_offset = row * row_bytes;
+                                    if dst_offset + row_bytes <= canvas.len()
+                                        && src_offset + row_bytes <= rgba.len()
+                                    {
+                                        canvas[dst_offset..dst_offset + row_bytes].copy_from_slice(
+                                            &rgba[src_offset..src_offset + row_bytes],
+                                        );
+                                    }
+                                }
+                                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                                    eprintln!(
+                                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                                    );
+                                } else {
+                                    needs_redraw = true;
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid BC7 payload for RGBA8 fallback page {page_id:?}: {error}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_bc7_atlas_page(page_id.0) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy BC7 atlas page {page_id:?}: {error:?}"
+                            );
+                        }
+                    } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadStandalone {
+                    asset_id,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        match renderer.upload_external_bc7(width, height, &bytes) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not upload standalone BC7 texture {asset_id:?} ({width}x{height}): {error:?}"
+                                );
+                                self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                    asset_id,
+                                    Err(format!("{error:?}")),
+                                );
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let desc = ManagedExternalTextureDesc::new(width, height, false);
+                                match renderer.upload_external_rgba8(desc, &rgba) {
+                                    Ok(slot) => {
+                                        self.bc7_fallback_standalone.insert(asset_id, slot);
+                                        self.runtime
+                                            .asset_hub_mut()
+                                            .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                        needs_redraw = true;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[unbound-app] Could not upload standalone RGBA8 fallback texture {asset_id:?}: {error:?}"
+                                        );
+                                        self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                            asset_id,
+                                            Err(format!("{error:?}")),
+                                        );
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid standalone BC7 payload for {asset_id:?}: {error}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Err(error.to_string()));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyStandalone { asset_id, slot } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_external_bc7(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone BC7 texture {asset_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    } else {
+                        let target_slot = self
+                            .bc7_fallback_standalone
+                            .remove(&asset_id)
+                            .unwrap_or(slot);
+                        if let Err(error) = renderer.destroy_external_texture(target_slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone RGBA8 fallback texture {asset_id:?} (slot {target_slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -615,9 +845,12 @@ impl<A: Application> WindowedRunner<A> {
         // `ERROR_NATIVE_WINDOW_IN_USE_KHR`。必须先销毁子对象，再让持有设备的
         // renderer 拆除设备本身。
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -707,6 +940,8 @@ impl<A: Application> WindowedRunner<A> {
         match recovered {
             Ok(((renderer, swapchain, surface, atlases, premultiplied), attempts)) => {
                 eprintln!("[unbound-app] GPU recovered successfully after {attempts} attempt(s).");
+                let bc7_caps = renderer.compressed_texture_capabilities();
+                self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
                 self.renderer = Some(renderer);
                 self.swapchain = Some(swapchain);
                 self.surface = Some(surface);
@@ -885,6 +1120,8 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             os_scale,
         );
 
+        let bc7_caps = renderer.compressed_texture_capabilities();
+        self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
         self.atlases = Some(atlases);
         self.swapchain = Some(swapchain);
         self.surface = Some(surface);
@@ -1241,6 +1478,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.sync_appearance(window);
 
         self.process_external_texture_ops(report.external_texture_ops, window);
+        self.process_bc7_ops(report.bc7_ops, window);
 
         if let (Some(renderer), Some(atlases)) = (&mut self.renderer, &self.atlases) {
             if !report.atlas_uploads.is_empty() {
