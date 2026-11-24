@@ -653,13 +653,46 @@ fn flip_view_fixture_disabled_downgrades_tokens() {
     });
 }
 
+/// 采样 `RefreshContainer` 插桩中全部 `PrimType::Curve` 图元的描边墨迹包围盒 `[min_x, min_y, max_x, max_y]`。
+fn sample_refresh_curve_bbox(output: &WidgetOutput) -> [f32; 4] {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for prim in &output.primitives {
+        if prim.prim_type() != PrimType::Curve {
+            continue;
+        }
+        let payload = &output.payloads[prim.extra_payload_idx as usize];
+        let half_w = payload.line_width * 0.5;
+        let ox = prim.local_pos[0];
+        let oy = prim.local_pos[1];
+        let p0 = [ox + payload.p0[0], oy + payload.p0[1]];
+        let p1 = [ox + payload.p1[0], oy + payload.p1[1]];
+        let p2 = [ox + payload.p2[0], oy + payload.p2[1]];
+        for step in 0_u16..=32 {
+            let t = f32::from(step) / 32.0;
+            let u = 1.0 - t;
+            let x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0];
+            let y = u * u * p0[1] + 2.0 * u * t * p1[1] + t * t * p2[1];
+            min_x = min_x.min(x - half_w);
+            min_y = min_y.min(y - half_w);
+            max_x = max_x.max(x + half_w);
+            max_y = max_y.max(y + half_w);
+        }
+    }
+
+    [min_x, min_y, max_x, max_y]
+}
+
 #[test]
 fn refresh_fixture_normal_outputs_indicator_and_card() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
         let fixture = emit_canonical_refresh_fixture(rect, FixtureState::normal(), text_ctx, 300);
 
-        // 1. 尺寸校验
+        // 1. 尺寸校验（保持 indicator_rect 为 24×24）
         assert_eq!(fixture.total_size.x, STANDARD_REFRESH_WIDTH);
         assert_eq!(fixture.total_size.y, STANDARD_REFRESH_HEIGHT);
         assert_eq!(
@@ -671,16 +704,45 @@ fn refresh_fixture_normal_outputs_indicator_and_card() {
             STANDARD_REFRESH_INDICATOR_SIZE
         );
 
-        // 2. 使用内置矢量 ShellIcon::Redo 绘制刷新图标，不依赖 Windows PUA 字体
-        let arc_count = fixture
+        // 2. 发射 6 条浅灰矢量曲线（4 段圆弧 + 2 段 V 形箭头），覆盖 20×20px 参考区域
+        let curve_tokens: Vec<Token> = fixture
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
-            .count();
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert_eq!(
+            curve_tokens.len(),
+            6,
+            "RefreshContainer must emit 6 vector curve primitives"
+        );
         assert!(
-            arc_count > 0,
-            "RefreshContainer must emit vector ShellIcon primitives"
+            curve_tokens.iter().all(|&tok| tok == Token::TEXT_DISABLED),
+            "RefreshContainer ring icon must use Token::TEXT_DISABLED"
+        );
+
+        // 相对控件原点 `(0, 0)`，参考区域对应 x=[120..139], y=[40..59]
+        let bbox = sample_refresh_curve_bbox(&fixture.output);
+        assert!(
+            bbox[0] <= 120.5 && bbox[0] >= 119.5,
+            "normal refresh icon left edge out of range: {}",
+            bbox[0]
+        );
+        assert!(
+            bbox[2] >= 139.5 && bbox[2] <= 140.5,
+            "normal refresh icon right edge out of range: {}",
+            bbox[2]
+        );
+        assert!(
+            bbox[1] <= 40.5 && bbox[1] >= 39.0,
+            "normal refresh icon top edge out of range: {}",
+            bbox[1]
+        );
+        assert!(
+            bbox[3] >= 59.0 && bbox[3] <= 60.0,
+            "normal refresh icon bottom edge out of range: {}",
+            bbox[3]
         );
 
         // 3. 内容卡片文本
@@ -696,21 +758,49 @@ fn refresh_fixture_normal_outputs_indicator_and_card() {
 }
 
 #[test]
-fn refresh_fixture_disabled_suppresses_arc_and_downgrades_tokens() {
+fn refresh_fixture_disabled_keeps_ring_and_downgrades_tokens() {
     with_test_ctx(|text_ctx| {
         let rect = Rect::new(0.0, 0.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
         let fixture = emit_canonical_refresh_fixture(rect, FixtureState::disabled(), text_ctx, 300);
 
-        // 抑制强调弧线
-        let curve_count = fixture
+        // 禁用态仍绘制 6 条浅灰刷新曲线，保证恒定图元数与参考图一致
+        let curve_tokens: Vec<Token> = fixture
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
-            .count();
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
         assert_eq!(
-            curve_count, 0,
-            "disabled refresh ring suppresses accent arc"
+            curve_tokens.len(),
+            6,
+            "disabled refresh ring must keep all 6 curve primitives"
+        );
+        assert!(
+            curve_tokens.iter().all(|&tok| tok == Token::TEXT_DISABLED),
+            "disabled refresh ring icon must use Token::TEXT_DISABLED"
+        );
+
+        let bbox = sample_refresh_curve_bbox(&fixture.output);
+        assert!(
+            bbox[0] <= 120.5 && bbox[0] >= 119.5,
+            "disabled refresh icon left edge out of range: {}",
+            bbox[0]
+        );
+        assert!(
+            bbox[2] >= 139.5 && bbox[2] <= 140.5,
+            "disabled refresh icon right edge out of range: {}",
+            bbox[2]
+        );
+        assert!(
+            bbox[1] <= 40.5 && bbox[1] >= 39.0,
+            "disabled refresh icon top edge out of range: {}",
+            bbox[1]
+        );
+        assert!(
+            bbox[3] >= 59.0 && bbox[3] <= 60.0,
+            "disabled refresh icon bottom edge out of range: {}",
+            bbox[3]
         );
 
         // 文本变灰

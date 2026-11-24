@@ -2071,17 +2071,109 @@ pub fn emit_canonical_flip_view_fixture(
     }
 }
 
-/// 发射标准化下拉刷新容器插桩（顶部环形指示器 + 下方内容卡片）。
+/// 发射 `RefreshContainer` 的 20×20px 顺时针环形刷新箭头图标。
+///
+/// 由 4 段二次贝塞尔圆弧（`quad_curve_stroke`）与 2 段右上角 V 形箭头（`curve_stroke`）组成，
+/// 共计 6 条 `PrimType::Curve` 图元；圆心位于 `(cx, cy)`、半径 `r = 9.2`、线宽 `stroke = 1.5`，
+/// 像素墨迹覆盖参考图对应的 `20×20px` 区域（画布原点 `(16, 16)` 时为 `x=[136..155], y=[56..75]`）。
+fn emit_refresh_ring_icon(
+    cx: f32,
+    cy: f32,
+    color: Token,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<unbound_gpu::data::GpuPayload>,
+) {
+    #[allow(clippy::too_many_arguments)]
+    fn quad_curve_stroke(
+        p0: [f32; 2],
+        p1: [f32; 2],
+        p2: [f32; 2],
+        thickness: f32,
+        color: Token,
+        z: u16,
+        primitives: &mut Vec<GpuPrimitiveInstance>,
+        payloads: &mut Vec<unbound_gpu::data::GpuPayload>,
+    ) {
+        let pad = (thickness * 0.5 + 1.5).ceil();
+        let origin_x = p0[0].min(p1[0]).min(p2[0]) - pad;
+        let origin_y = p0[1].min(p1[1]).min(p2[1]) - pad;
+        let w = (p0[0].max(p1[0]).max(p2[0]) - origin_x + pad).max(1.0);
+        let h = (p0[1].max(p1[1]).max(p2[1]) - origin_y + pad).max(1.0);
+        let payload_idx = payloads.len() as u32;
+        payloads.push(unbound_gpu::data::GpuPayload::curve(
+            [p0[0] - origin_x, p0[1] - origin_y],
+            [p1[0] - origin_x, p1[1] - origin_y],
+            [p2[0] - origin_x, p2[1] - origin_y],
+            thickness,
+        ));
+        let mut prim = primitive::instance(
+            Rect::new(origin_x, origin_y, w, h),
+            [0.0; 4],
+            color,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::Curve,
+            SubElement::Content,
+            z,
+        );
+        prim.extra_payload_idx = payload_idx;
+        primitives.push(prim);
+    }
+
+    let r = 9.2_f32;
+    let stroke = 1.5_f32;
+    // 顺时针开口圆弧：从 2°（3 点钟方向）顺时针旋转至 328°（右上缺口处），等分为 4 段。
+    let start_deg = 2.0_f32;
+    let end_deg = 328.0_f32;
+    let step_deg = (end_deg - start_deg) / 4.0;
+    let half_step_rad = (step_deg * 0.5).to_radians();
+    // 使每段二次贝塞尔曲线的中点精确落在半径 `r` 的圆弧上，避免大角度弧段向外鼓出。
+    let ctrl_r = r * (2.0 - half_step_rad.cos());
+
+    for seg in 0_u8..4 {
+        let a0 = (start_deg + step_deg * f32::from(seg)).to_radians();
+        let a1 = (start_deg + step_deg * f32::from(seg + 1)).to_radians();
+        let mid = (a0 + a1) * 0.5;
+        let p0 = [cx + r * a0.cos(), cy + r * a0.sin()];
+        let p1 = [cx + ctrl_r * mid.cos(), cy + ctrl_r * mid.sin()];
+        let p2 = [cx + r * a1.cos(), cy + r * a1.sin()];
+        quad_curve_stroke(p0, p1, p2, stroke, color, z, primitives, payloads);
+    }
+
+    // 右上角 V 形箭头（2 段直线描边），尖端衔接圆弧终点。
+    let end_rad = end_deg.to_radians();
+    let tip = [cx + r * end_rad.cos(), cy + r * end_rad.sin()];
+    primitive::curve_stroke(
+        [tip[0], tip[1] - 3.8],
+        tip,
+        stroke,
+        color,
+        z,
+        primitives,
+        payloads,
+    );
+    primitive::curve_stroke(
+        [tip[0] - 4.6, tip[1]],
+        tip,
+        stroke,
+        color,
+        z,
+        primitives,
+        payloads,
+    );
+}
+
+/// 发射标准化下拉刷新容器插桩（左上内容文本 + 上方居中 20×20px 浅灰环形刷新箭头）。
 ///
 /// 几何与排版规则：
 /// - 固有尺寸宽 260px、高 160px；
-/// - 顶部包含 24px 直径的 ProgressRing 环形指示器（圆心位于水平居中、距顶 16px 处）：
-///   - 未禁用时：绘制环形底轨、内部掏空与右上四分之一强调色圆弧（[`Token::PRIMARY`]，线宽 2.5px）；
-///   - 禁用时：抑制强调色圆弧，底轨降级为变灰底色；
-/// - 下方为内容卡片（宽 252px、高 120px，圆角 8px）：
-///   - 位于 y = 36px 处，背景为 [`Token::CARD_BG`]、边框为 [`Token::CARD_BORDER`]；
-///   - 内部左内边距 16px、垂直居中排版文本 `"Pull to refresh"`（字号 14px，字重 400）；
-/// - 递归禁用态传播：当 `state.disabled` 为 true 时，指示器与卡片内容全量半透明变灰衰减。
+/// - 指示器包围框 `indicator_rect` 保持 24×24px（圆心位于水平居中、距顶 49.5px 处）：
+///   - `normal` 与 `disabled` 均绘制 6 条 [`PrimType::Curve`] 构成的浅灰（[`Token::TEXT_DISABLED`]）
+///     顺时针环形刷新箭头（半径 `9.2`、线宽 `1.5`，像素墨迹覆盖 20×20px），保持恒定图元数不变量；
+/// - 左上排版文本 `"Pull to refresh"`（字号 14px，字重 400）：
+///   - 未禁用时使用 [`Token::TEXT_PRIMARY`]，禁用时降级为 [`Token::TEXT_DISABLED`]。
 pub fn emit_canonical_refresh_fixture(
     rect: Rect,
     state: FixtureState,
@@ -2101,10 +2193,10 @@ pub fn emit_canonical_refresh_fixture(
     };
     let refresh_rect = Rect::new(rect.origin.x, rect.origin.y, refresh_w, refresh_h);
 
-    // WinUI RefreshContainer 静态无卡片底板：左上显示内容文本，上方居中绘制浅灰刷新图标。
+    // WinUI RefreshContainer 静态无卡片底板：左上显示内容文本，上方居中绘制浅灰环形刷新图标。
     let ring_size = STANDARD_REFRESH_INDICATOR_SIZE;
     let ring_cx = refresh_rect.origin.x + refresh_w * 0.5;
-    let ring_cy = refresh_rect.origin.y + 49.0;
+    let ring_cy = refresh_rect.origin.y + 49.5;
     let ring_rect = Rect::new(
         ring_cx - ring_size * 0.5,
         ring_cy - ring_size * 0.5,
@@ -2113,18 +2205,16 @@ pub fn emit_canonical_refresh_fixture(
     );
     let card_rect = refresh_rect;
 
+    // 正常态与禁用态均绘制浅灰环形刷新箭头，与 WinUI 3 参考图及恒定图元数不变量保持一致。
     let refresh_icon_ink = Token::TEXT_DISABLED;
-    if !state.disabled {
-        crate::shell::emit_shell_icon_primitives(
-            crate::shell::ShellIcon::Redo,
-            ring_rect,
-            refresh_icon_ink,
-            Token::SURFACE,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
-    }
+    emit_refresh_ring_icon(
+        ring_cx,
+        ring_cy,
+        refresh_icon_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
 
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
