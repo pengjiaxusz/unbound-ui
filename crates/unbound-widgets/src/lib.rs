@@ -20,6 +20,7 @@ pub mod canonical;
 pub mod catalog;
 pub mod column_header_bar;
 pub mod diff;
+pub mod docking_overlay;
 pub mod ergonomics;
 pub mod primitive;
 pub mod shell;
@@ -88,6 +89,13 @@ pub use column_header_bar::{
     ColumnHeaderEvent, ColumnHeaderHitKind, ColumnHeaderSpec, ColumnResizeDrag,
     COLUMN_DEFAULT_MAX_WIDTH, COLUMN_DEFAULT_MIN_WIDTH, COLUMN_DIVIDER_WIDTH,
     COLUMN_FILTER_BUTTON_WIDTH, COLUMN_HEADER_BAR_HEIGHT, COLUMN_RESIZE_HANDLE_WIDTH,
+};
+pub use docking_overlay::{
+    compute_hint_pill_rect, compute_reorder_indicator, emit_docking_overlay, emit_drag_proxy,
+    DockCandidatePane, DockCandidateWindow, DockDragPayloadKind, DockDragProxy, DockDropKind,
+    DockDropSemantic, DockDropTarget, DockEdge, DockOverlayState, DockOverlayTokens,
+    DEFAULT_ROOT_EDGE_BAND_PX, REORDER_LINE_WIDTH_PX, SHELL_DWELL_DURATION_SECS,
+    SHELL_DWELL_THRESHOLD_PX,
 };
 pub use shell::{
     emit_brand_badge, emit_feature_card, emit_hero_backdrop, emit_icon_button,
