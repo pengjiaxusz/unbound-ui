@@ -120,16 +120,24 @@ pub fn emit_widget(
     emit_widget_with_params(id, node, state, rect, label, 0.5, 0)
 }
 
-/// 合并子组件输出，重定位载荷索引并保留子命中区域与无障碍节点（同时去重相同节点 ID 的命中区）。
+/// 合并子组件输出，重定位载荷与局部裁剪索引并保留子命中区域与无障碍节点（同时去重相同节点 ID 的命中区）。
 fn merge_output(dst: &mut WidgetOutput, mut src: WidgetOutput) {
     let payload_base = u32::try_from(dst.payloads.len()).unwrap_or(u32::MAX);
-    if payload_base != 0 {
+    let clip_base = u32::try_from(dst.clips.len()).unwrap_or(unbound_gpu::data::CLIP_NONE - 1);
+    if payload_base != 0 || clip_base != 0 {
         for primitive in &mut src.primitives {
-            primitive.extra_payload_idx = primitive.extra_payload_idx.saturating_add(payload_base);
+            if payload_base != 0 {
+                primitive.extra_payload_idx =
+                    primitive.extra_payload_idx.saturating_add(payload_base);
+            }
+            if clip_base != 0 && primitive.clip_idx != unbound_gpu::data::CLIP_NONE {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
+            }
         }
     }
     dst.primitives.extend(src.primitives);
     dst.payloads.extend(src.payloads);
+    dst.clips.extend(src.clips);
     if dst.hit.is_none() {
         dst.hit = src.hit;
     } else if let Some(hit) = src.hit {

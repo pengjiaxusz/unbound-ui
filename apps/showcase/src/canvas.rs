@@ -673,6 +673,23 @@ impl<'a> Canvas<'a> {
     pub fn control_output(&mut self, node: u64, output: &WidgetOutput) {
         let start = self.scene.primitives.len();
         let payload_base = self.scene.payloads.len() as u32;
+        let outer_clip_idx = self.clip_index();
+        let local_clip_base = if output.clips.is_empty() {
+            None
+        } else {
+            let base = self.scene.clips.len() as u32;
+            let outer_node = (outer_clip_idx != CLIP_NONE)
+                .then(|| self.scene.clips.get(outer_clip_idx as usize).copied())
+                .flatten();
+            for local_clip in &output.clips {
+                let merged = match outer_node {
+                    Some(ref outer) => unbound_widgets::intersect_clip_nodes(outer, local_clip),
+                    None => *local_clip,
+                };
+                self.scene.clips.push(merged);
+            }
+            Some(base)
+        };
         for mut primitive in output.primitives.iter().copied() {
             primitive.z_and_opacity =
                 GpuPrimitiveInstance::pack_z_opacity(self.next_z(), primitive.opacity());
@@ -680,11 +697,15 @@ impl<'a> Canvas<'a> {
                 primitive.extra_payload_idx =
                     primitive.extra_payload_idx.saturating_add(payload_base);
             }
+            if primitive.clip_idx == CLIP_NONE {
+                primitive.clip_idx = outer_clip_idx;
+            } else if let Some(clip_base) = local_clip_base {
+                primitive.clip_idx = primitive.clip_idx.saturating_add(clip_base);
+            }
             self.scene.primitives.push(primitive);
         }
         self.scene.payloads.extend(output.payloads.iter().copied());
         self.glyphs_emitted += output.payloads.len();
-        self.apply_clip(start);
         if node != 0 {
             self.record_span(node, start);
         }
@@ -1386,5 +1407,36 @@ mod tests {
             has_card_border,
             "tooltip shell must use CARD_BORDER and 4px radius"
         );
+    }
+
+    #[test]
+    fn control_output_intersects_local_clips_with_outer_clip_stack() {
+        let mut scene = Gallery::new();
+        let mut labels = Labels::new();
+        let palette = palette();
+        let mut canvas = canvas(&mut scene, &mut labels, &palette);
+
+        let outer = Rect::new(10.0, 10.0, 200.0, 200.0);
+        canvas.begin_clip_rounded(outer, 8.0);
+
+        let mut widget_out = WidgetOutput::default();
+        let local_idx = widget_out.push_clip(GpuClipNode::from_aabb([0.0, 40.0, 180.0, 150.0]));
+        widget_out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: local_idx,
+            ..Default::default()
+        });
+        widget_out.primitives.push(GpuPrimitiveInstance {
+            clip_idx: CLIP_NONE,
+            ..Default::default()
+        });
+
+        canvas.control_output(0, &widget_out);
+        canvas.end_clip();
+
+        assert_eq!(canvas.scene.clips.len(), 2);
+        assert_eq!(canvas.scene.primitives[0].clip_idx, 1);
+        assert_eq!(canvas.scene.clips[1].aabb_clip, [10.0, 40.0, 180.0, 150.0]);
+        assert_eq!(radii_of(&canvas.scene.clips[1], 0), [8.0; 4]);
+        assert_eq!(canvas.scene.primitives[1].clip_idx, 0);
     }
 }

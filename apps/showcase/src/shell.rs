@@ -4865,6 +4865,7 @@ fn draw_navigation_view_pane(
     let pane_out = WidgetOutput {
         primitives: nav_output.primitives[backdrop_count..].to_vec(),
         payloads: nav_output.payloads.clone(),
+        clips: nav_output.clips.clone(),
         hit: None,
         a11y: None,
         focusable: false,
