@@ -1308,6 +1308,8 @@ pub fn draw_control_tile(
         palette.card_border
     };
     canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+    // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
+    canvas.begin_clip(rect);
 
     // 左侧语义图标盒（取代原先单字母圆标）
     let cat = id.category();
@@ -1354,29 +1356,26 @@ pub fn draw_control_tile(
 
     // 控件规范名 + 一句话用途
     let label = component_nav_label_localized(id, state.locale);
-    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
-    canvas.text(
+    let title_x = icon_box.max().x + 10.0;
+    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
+    canvas.text_elided(
         label,
-        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
         12.0,
         palette.text,
         AlignX::Start,
         AlignY::Center,
     );
     let desc = super::category_localized_summary(cat, state.locale);
-    canvas.text(
+    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
+    canvas.text_wrapped_clamped(
         desc,
-        Rect::new(
-            icon_box.max().x + 10.0,
-            rect.origin.y + 34.0,
-            (rect.size.x - 66.0).max(40.0),
-            30.0,
-        ),
+        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
         10.0,
         palette.text_muted,
-        AlignX::Start,
-        AlignY::Top,
+        2,
     );
+    canvas.end_clip();
 
     // 主卡片命中区排除右上角收藏星标，避免重叠误触
     let card_hit = Rect::new(
@@ -1618,6 +1617,8 @@ pub fn draw_control_tile_demo(
         palette.card_border
     };
     canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+    // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
+    canvas.begin_clip(rect);
 
     let cat = id.category();
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
@@ -1660,29 +1661,26 @@ pub fn draw_control_tile_demo(
     crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
 
     let label = component_nav_label_localized(id, state.locale);
-    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
-    canvas.text(
+    let title_x = icon_box.max().x + 10.0;
+    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
+    canvas.text_elided(
         label,
-        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
         12.0,
         palette.text,
         AlignX::Start,
         AlignY::Center,
     );
     let desc = super::category_localized_summary(cat, state.locale);
-    canvas.text(
+    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
+    canvas.text_wrapped_clamped(
         desc,
-        Rect::new(
-            icon_box.max().x + 10.0,
-            rect.origin.y + 34.0,
-            (rect.size.x - 66.0).max(40.0),
-            30.0,
-        ),
+        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
         10.0,
         palette.text_muted,
-        AlignX::Start,
-        AlignY::Top,
+        2,
     );
+    canvas.end_clip();
 
     let card_hit = Rect::new(
         rect.origin.x,

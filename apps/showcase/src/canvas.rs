@@ -826,6 +826,129 @@ impl<'a> Canvas<'a> {
         ink
     }
 
+    /// 在 `rect` 内绘制单行尾省略标签，并在内部施加矩形裁剪兜底防溢出。
+    #[allow(clippy::too_many_arguments)]
+    pub fn text_elided(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        color: u16,
+        align_x: AlignX,
+        align_y: AlignY,
+    ) -> Rect {
+        let scale = self.labels.raster_scale();
+        let style = TextStyle::sized(size * scale);
+        let max_width = (rect.size.x * scale).max(1.0);
+        let shaped = self.labels.engine.shape_elided(text, &style, max_width);
+        let width = shaped.width / scale;
+        let line_height = (shaped.ascent + shaped.descent) / scale;
+        let x = match align_x {
+            AlignX::Start => rect.origin.x,
+            AlignX::Center => rect.origin.x + (rect.size.x - width) * 0.5,
+            AlignX::End => rect.max().x - width,
+        };
+        let y = match align_y {
+            AlignY::Top => rect.origin.y,
+            AlignY::Center => rect.origin.y + (rect.size.y - line_height) * 0.5,
+            AlignY::Bottom => rect.max().y - line_height,
+        };
+        let x = self.snap_value(x);
+        let y = self.snap_value(y);
+        let labels = &mut *self.labels;
+        let mut quads = labels.cache.quads_for(
+            &mut labels.engine,
+            &shaped,
+            Vec2::new(x, y) * scale,
+            400,
+            false,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, width, size));
+        self.begin_clip(rect);
+        let z = self.next_z();
+        let start = self.scene.primitives.len();
+        for quad in &quads {
+            self.scene.glyph(quad, color, z);
+        }
+        self.glyphs_emitted += quads.len();
+        self.apply_clip(start);
+        self.end_clip();
+        ink
+    }
+
+    /// 在 `rect` 内绘制自动换行并限制最大行数的段落，超出时末行尾省略并在内部施加矩形裁剪兜底防溢出。
+    pub fn text_wrapped_clamped(
+        &mut self,
+        text: &str,
+        rect: Rect,
+        size: f32,
+        color: u16,
+        max_lines: usize,
+    ) -> Rect {
+        let x = self.snap_value(rect.origin.x);
+        let y = self.snap_value(rect.origin.y);
+        let scale = self.labels.raster_scale();
+        let style = TextStyle::sized(size * scale);
+        let max_width = (rect.size.x * scale).max(1.0);
+        let full_line_count = self.labels.engine.wrap(text, &style, max_width).lines.len();
+        let wrapped = self
+            .labels
+            .engine
+            .wrap_clamped(text, &style, max_width, max_lines);
+        let was_clamped = max_lines > 0 && full_line_count > max_lines;
+        let line_h = wrapped.line_height.max(size * scale * 1.4);
+        let mut quads = Vec::new();
+        let labels = &mut *self.labels;
+        for (idx, line) in wrapped.lines.iter().enumerate() {
+            let start = (line.start as usize).min(text.len());
+            let end = (line.end as usize).min(text.len()).max(start);
+            let slice = text
+                .get(start..end)
+                .unwrap_or("")
+                .trim_end_matches(['\r', '\n']);
+            let is_elided_last = was_clamped && idx + 1 == wrapped.lines.len();
+            let shaped_line = if is_elided_last {
+                let elided = format!("{}\u{2026}", slice.trim_end());
+                labels.engine.shape(&elided, &style)
+            } else {
+                labels.engine.shape(slice, &style)
+            };
+            let line_origin = Vec2::new(x * scale, y * scale + idx as f32 * line_h);
+            let mut line_quads =
+                labels
+                    .cache
+                    .quads_for(&mut labels.engine, &shaped_line, line_origin, 400, false);
+            if (scale - 1.0).abs() > 1e-6 {
+                for quad in &mut line_quads {
+                    quad.rect.origin.x /= scale;
+                    quad.rect.origin.y /= scale;
+                    quad.rect.size.x /= scale;
+                    quad.rect.size.y /= scale;
+                }
+            }
+            quads.extend(line_quads);
+        }
+        let ink = quads_bounds(&quads).unwrap_or(Rect::new(x, y, 0.0, 0.0));
+        self.begin_clip(rect);
+        let z = self.next_z();
+        let start = self.scene.primitives.len();
+        for quad in &quads {
+            self.scene.glyph(quad, color, z);
+        }
+        self.glyphs_emitted += quads.len();
+        self.apply_clip(start);
+        self.end_clip();
+        ink
+    }
+
     /// 在场景空间中绘制已在别处完成布局的字形。
     pub fn glyphs(&mut self, quads: &[GlyphQuad], color: u16) {
         let z = self.next_z();
