@@ -18,6 +18,12 @@
 
 use unbound_math::Vec2;
 
+pub mod tokens;
+
+pub use tokens::{
+    DurationToken, EasingToken, MotionPolicy, MotionToken, Tween, MAX_SPEED_SCALE, MIN_SPEED_SCALE,
+};
+
 /// 最大积分时间步长；4 ms 可确保半隐式欧拉法即使面对高刚度弹簧也保持稳定。
 ///
 pub const MAX_SUBSTEP: f32 = 0.004;
@@ -178,6 +184,25 @@ impl Spring {
         }
     }
 
+    /// 在全局 [`MotionPolicy`] 约束下推进 `dt` 秒。
+    ///
+    /// 当 `policy.reduced_motion == true` 时立即瞬切至终态并返回 `false`；
+    /// 否则按 `policy.effective_dt(dt)` 步进弹簧。
+    pub fn step_with_policy(&mut self, dt: f32, policy: MotionPolicy) -> bool {
+        if !self.target.is_finite() {
+            self.value = 0.0;
+            self.target = 0.0;
+            self.velocity = 0.0;
+            return false;
+        }
+        if policy.reduced_motion {
+            self.value = self.target;
+            self.velocity = 0.0;
+            return false;
+        }
+        self.step(policy.effective_dt(dt))
+    }
+
     /// 上一步的过冲量（占总行程的比例）。供测试验证预设确实为临界阻尼。
     ///
     #[must_use]
@@ -230,6 +255,13 @@ impl Spring2 {
     pub fn step(&mut self, dt: f32) -> bool {
         let a = self.x.step(dt);
         let b = self.y.step(dt);
+        a || b
+    }
+
+    /// 在全局 [`MotionPolicy`] 约束下推进双轴；任一轴仍在运动则返回 `true`。
+    pub fn step_with_policy(&mut self, dt: f32, policy: MotionPolicy) -> bool {
+        let a = self.x.step_with_policy(dt, policy);
+        let b = self.y.step_with_policy(dt, policy);
         a || b
     }
 
@@ -324,6 +356,8 @@ pub struct Animator {
     animations: Vec<Animation>,
     /// 上一步仍在运动的弹簧数量（用于驱动帧调度）。
     active_count: u32,
+    /// 统一治理所有弹簧的全局动效策略（减弱动画瞬切与速率倍率）。
+    policy: MotionPolicy,
     /// 实际发生运动的帧数。
     pub moving_frames: u64,
     /// 无任何运动的帧数（调度器可进入休眠）。
@@ -334,6 +368,31 @@ impl Animator {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 返回当前生效的全局动效策略。
+    #[must_use]
+    pub const fn policy(&self) -> MotionPolicy {
+        self.policy
+    }
+
+    /// 更新全局动效策略。
+    ///
+    /// 当 `policy.reduced_motion == true` 时立即将所有在途弹簧吸附到各自终态，
+    /// 避免在减弱动画开启后继续产生空间位移帧。
+    pub fn set_policy(&mut self, policy: MotionPolicy) {
+        self.policy = MotionPolicy::new(policy.reduced_motion, policy.speed_scale);
+        if self.policy.reduced_motion {
+            for anim in &mut self.animations {
+                let target = if anim.spring.target.is_finite() {
+                    anim.spring.target
+                } else {
+                    0.0
+                };
+                anim.spring.snap_to(target);
+            }
+            self.active_count = 0;
+        }
     }
 
     #[must_use]
@@ -369,7 +428,13 @@ impl Animator {
             let (stiffness, damping) = preset.config();
             existing.spring.stiffness = stiffness;
             existing.spring.damping = damping;
-            existing.spring.set_target(target);
+            if self.policy.reduced_motion {
+                existing
+                    .spring
+                    .snap_to(if target.is_finite() { target } else { 0.0 });
+            } else {
+                existing.spring.set_target(target);
+            }
             return;
         }
         let (stiffness, damping) = preset.config();
@@ -378,7 +443,11 @@ impl Animator {
             damping,
             ..Default::default()
         };
-        spring.set_target(target);
+        if self.policy.reduced_motion {
+            spring.snap_to(if target.is_finite() { target } else { 0.0 });
+        } else {
+            spring.set_target(target);
+        }
         self.animations.push(Animation {
             node,
             channel,
@@ -402,8 +471,12 @@ impl Animator {
             .iter_mut()
             .find(|a| a.node == node && a.channel == channel)
         {
-            a.spring.value = from;
-            a.spring.velocity = 0.0;
+            if self.policy.reduced_motion {
+                a.spring.snap_to(if to.is_finite() { to } else { 0.0 });
+            } else {
+                a.spring.value = from;
+                a.spring.velocity = 0.0;
+            }
         }
     }
 
@@ -419,10 +492,15 @@ impl Animator {
     /// 推进所有弹簧。已静止的动画会被移除，使数组长度仅与*运动中*节点数成正比，
     /// 而非总节点数。
     pub fn step(&mut self, dt: f32) {
+        self.step_with_policy(dt, self.policy);
+    }
+
+    /// 在显式传入的 [`MotionPolicy`] 下推进所有弹簧并压缩已静止条目。
+    pub fn step_with_policy(&mut self, dt: f32, policy: MotionPolicy) {
         let mut active = 0u32;
         let mut i = 0;
         while i < self.animations.len() {
-            let still_moving = self.animations[i].spring.step(dt);
+            let still_moving = self.animations[i].spring.step_with_policy(dt, policy);
             if still_moving {
                 active += 1;
                 i += 1;
@@ -786,5 +864,54 @@ mod tests {
         animator.animate_from(9, Channel::TranslateX, SpringPreset::Heavy, 50.0, 50.0);
         animator.step(1.0 / 60.0);
         assert_eq!(animator.active_animations(), 0);
+    }
+
+    #[test]
+    fn animator_reduced_motion_snaps_springs_immediately() {
+        let mut animator = Animator::new();
+        animator.set_policy(MotionPolicy::reduced());
+        animator.animate_from(42, Channel::TranslateX, SpringPreset::Gentle, 0.0, 240.0);
+        assert_eq!(animator.value(42, Channel::TranslateX), Some(240.0));
+        assert_eq!(animator.active_animations(), 0);
+
+        animator.step(1.0 / 120.0);
+        assert!(animator.is_empty());
+        assert_eq!(animator.active_animations(), 0);
+    }
+
+    #[test]
+    fn animator_toggling_reduced_motion_mid_flight_snaps_existing_springs() {
+        let mut animator = Animator::new();
+        animator.animate_from(7, Channel::Opacity, SpringPreset::Gentle, 0.0, 1.0);
+        animator.step(1.0 / 120.0);
+        assert_eq!(animator.active_animations(), 1);
+
+        animator.set_policy(MotionPolicy::reduced());
+        assert_eq!(animator.value(7, Channel::Opacity), Some(1.0));
+        assert_eq!(animator.active_animations(), 0);
+
+        animator.step(1.0 / 120.0);
+        assert!(animator.is_empty());
+    }
+
+    #[test]
+    fn animator_speed_scale_accelerates_spring_convergence() {
+        let mut normal = Animator::new();
+        normal.animate_from(1, Channel::TranslateY, SpringPreset::Gentle, 0.0, 100.0);
+
+        let mut fast = Animator::new();
+        fast.set_policy(MotionPolicy::new(false, 2.0));
+        fast.animate_from(1, Channel::TranslateY, SpringPreset::Gentle, 0.0, 100.0);
+
+        for _ in 0..8 {
+            normal.step(1.0 / 120.0);
+            fast.step(1.0 / 120.0);
+        }
+        let normal_val = normal.value(1, Channel::TranslateY).unwrap_or(100.0);
+        let fast_val = fast.value(1, Channel::TranslateY).unwrap_or(100.0);
+        assert!(
+            fast_val > normal_val,
+            "2x speed_scale should advance further: fast={fast_val} vs normal={normal_val}"
+        );
     }
 }

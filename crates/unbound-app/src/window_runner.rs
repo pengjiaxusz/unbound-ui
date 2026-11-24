@@ -465,11 +465,54 @@ impl<A: Application> WindowedRunner<A> {
                         "[unbound-app] WindowCommand::OpenWindow requires MultiWindowCoordinator"
                     );
                 }
-                crate::WindowCommand::CloseWindow(target) => {
+                crate::WindowCommand::CloseWindow(target)
+                | crate::WindowCommand::CloseFloatingWindow(target) => {
                     if target == WindowId(window.id().0 as u64) {
                         window.request_close();
                         return Flow::Exit;
                     }
+                }
+                crate::WindowCommand::OpenFloatingWindow { .. } => {
+                    eprintln!(
+                        "[unbound-app] WindowCommand::OpenFloatingWindow requires MultiWindowCoordinator"
+                    );
+                }
+                crate::WindowCommand::UpdateFloatingPolicy { id, policy } => {
+                    if id == WindowId(window.id().0 as u64) {
+                        let caps = window.capabilities();
+                        let eff = crate::effective_policy(policy, caps);
+                        window.set_always_on_top(eff.always_on_top);
+                        window.set_click_through(eff.click_through);
+                    }
+                }
+                crate::WindowCommand::SetWindowVisibleNoActivate { id, visible } => {
+                    if id == WindowId(window.id().0 as u64) {
+                        window.set_visible_no_activate(visible);
+                    }
+                }
+                crate::WindowCommand::SetWindowAlwaysOnTop { id, topmost } => {
+                    if id == WindowId(window.id().0 as u64) {
+                        let caps = window.capabilities();
+                        window.set_always_on_top(topmost && caps.supports_topmost);
+                    }
+                }
+                crate::WindowCommand::SetWindowClickThrough { id, click_through } => {
+                    if id == WindowId(window.id().0 as u64) {
+                        let caps = window.capabilities();
+                        window.set_click_through(click_through && caps.supports_click_through);
+                    }
+                }
+                crate::WindowCommand::SetWindowOuterRect { id, rect } => {
+                    if id == WindowId(window.id().0 as u64)
+                        && window.capabilities().supports_global_positioning
+                    {
+                        window.set_outer_rect(rect);
+                    }
+                }
+                crate::WindowCommand::SnapFloatingWindow { .. } => {
+                    eprintln!(
+                        "[unbound-app] WindowCommand::SnapFloatingWindow requires MultiWindowCoordinator"
+                    );
                 }
             }
         }
