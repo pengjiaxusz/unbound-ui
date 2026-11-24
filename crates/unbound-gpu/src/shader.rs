@@ -64,9 +64,21 @@ embedded!(blur_up, "blur_up.comp", "blur_up.comp");
 embedded!(backdrop_vert, "backdrop.vert", "backdrop.vert");
 embedded!(backdrop_frag, "backdrop.frag", "backdrop.frag");
 
+/// 视频 YUV/HDR 转 RGBA8（sRGB 编码）计算着色器常量模块。
+pub const VIDEO_CONVERT_COMP: ShaderModule = ShaderModule {
+    name: "video_convert.comp",
+    spirv: include_bytes!(concat!(env!("OUT_DIR"), "/spv/video_convert.comp.spv")),
+};
+
+/// 获取视频转换计算着色器模块。
+#[must_use]
+pub fn video_convert() -> ShaderModule {
+    VIDEO_CONVERT_COMP
+}
+
 /// 所有着色器模块列表，用于校验与诊断。
 #[must_use]
-pub fn all() -> [ShaderModule; 16] {
+pub fn all() -> [ShaderModule; 17] {
     [
         uber_vert(),
         uber_frag(),
@@ -84,6 +96,7 @@ pub fn all() -> [ShaderModule; 16] {
         blur_up(),
         backdrop_vert(),
         backdrop_frag(),
+        VIDEO_CONVERT_COMP,
     ]
 }
 
@@ -119,5 +132,6 @@ mod tests {
         assert_ne!(uber_vert().spirv, uber_frag().spirv);
         assert_ne!(cull().spirv, scatter().spirv);
         assert_ne!(sort_hist().spirv, sort_scatter().spirv);
+        assert_ne!(blur_down().spirv, VIDEO_CONVERT_COMP.spirv);
     }
 }

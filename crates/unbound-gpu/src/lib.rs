@@ -14,6 +14,7 @@
 //! | [`shader`] | M1 | 已编译的 SPIR-V 模块 |
 //! | [`pipeline`] | M1 | Uber 着色器与计算管线 |
 //! | [`frame`] | M1 | Pass 调度与间接绘制提交 |
+//! | [`video`] | M2 | 双路径视频上传、YUV/HDR 计算转换与能力画像 |
 //!
 //! 前六个模块为纯 CPU 实现，覆盖单元测试，可在无 GPU 的任意机器（含 CI）上运行。
 
@@ -41,6 +42,7 @@ pub mod surface_extensions;
 pub mod swapchain;
 pub mod timing;
 pub mod tlsf;
+pub mod video;
 
 pub use atlas::{AtlasKind, AtlasSet, AtlasTexture, AtlasUpload};
 pub use bc7_atlas::{
@@ -88,4 +90,10 @@ pub use inspector::{
 };
 pub use pipeline::{
     EXTERNAL_TEXTURE_BASE, EXTERNAL_TEXTURE_SLOTS, MAX_ATLAS_LAYERS, MAX_RGBA_BINDLESS_SLOTS,
+};
+pub use video::{
+    convert_video_frame_cpu, convert_yuv_pixel_cpu, convert_yuv_pixel_cpu_with_peak,
+    resolve_upload_tier, StagingRingScheduler, VideoAsyncStagingRing, VideoConvertPush,
+    VideoDeferredDestroyQueue, VideoFormatMask, VideoFrameUploadResult, VideoUploadCapabilities,
+    VideoUploadTier, DEFAULT_HDR_PEAK_NITS, SDR_REFERENCE_WHITE_NITS,
 };

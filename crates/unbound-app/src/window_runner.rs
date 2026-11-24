@@ -32,7 +32,7 @@ use unbound_theme::ThemeSet;
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
     AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
-    Modifiers as AppModifiers, ThemeKind,
+    Modifiers as AppModifiers, ThemeKind, VideoSurfaceOp,
 };
 
 /// 按表面能力解析交换链合成方式。
@@ -745,6 +745,74 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
+    /// 消费本帧视频表面上传、离屏驱逐与主动释放操作，并将分配结果回写至 `AssetHub`。
+    fn process_video_surface_ops(&mut self, ops: Vec<VideoSurfaceOp>, window: &NativeWindow) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let mut needs_redraw = false;
+        for op in ops {
+            match op {
+                VideoSurfaceOp::UploadFrame {
+                    handle,
+                    frame,
+                    target_slot,
+                } => match renderer.upload_video_frame(target_slot, &frame) {
+                    Ok(result) => {
+                        let old_slot = self.runtime.asset_hub_mut().commit_video_surface_slot(
+                            handle,
+                            result.slot,
+                            frame.width,
+                            frame.height,
+                            frame.format,
+                            result.vram_bytes,
+                        );
+                        if let Some(stale_slot) = old_slot {
+                            if let Err(error) = renderer.destroy_video_surface(stale_slot) {
+                                eprintln!(
+                                    "[unbound-app] Could not destroy previous video surface {handle:?} (slot {stale_slot}): {error:?}"
+                                );
+                            }
+                        }
+                        if target_slot != Some(result.slot) {
+                            needs_redraw = true;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "[unbound-app] Could not upload video frame for {handle:?} ({}x{}): {error:?}",
+                            frame.width, frame.height
+                        );
+                    }
+                },
+                VideoSurfaceOp::Evict { handle, slot } => {
+                    if let Err(error) = renderer.destroy_video_surface(slot) {
+                        eprintln!(
+                            "[unbound-app] Could not destroy evicted video surface {handle:?} (slot {slot}): {error:?}"
+                        );
+                    }
+                    needs_redraw = true;
+                }
+                VideoSurfaceOp::Release { handle, slot } => {
+                    if let Some(slot) = slot {
+                        if let Err(error) = renderer.destroy_video_surface(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy released video surface {handle:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     /// 同步本帧活跃的 3D 视口离屏渲染目标、暂停未挂载/零尺寸视口，并回写 Bindless 槽位及派发计数。
     fn sync_viewports_3d(
         &mut self,
@@ -1036,6 +1104,7 @@ impl<A: Application> WindowedRunner<A> {
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.asset_hub_mut().invalidate_all_video_surfaces();
         self.runtime.invalidate_all_viewport_3d_slots();
         self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
         self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
@@ -1067,6 +1136,7 @@ impl<A: Application> WindowedRunner<A> {
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
+        self.runtime.asset_hub_mut().invalidate_all_video_surfaces();
         self.runtime.invalidate_all_viewport_3d_slots();
         self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
         self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
@@ -1159,6 +1229,10 @@ impl<A: Application> WindowedRunner<A> {
         match recovered {
             Ok(((renderer, swapchain, surface, atlases, premultiplied), attempts)) => {
                 eprintln!("[unbound-app] GPU recovered successfully after {attempts} attempt(s).");
+                let video_tier = renderer.video_upload_capabilities().active_tier;
+                self.runtime
+                    .asset_hub_mut()
+                    .set_video_upload_tier(video_tier);
                 let bc7_caps = renderer.compressed_texture_capabilities();
                 self.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
                 self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
@@ -1346,6 +1420,10 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         self.atlases = Some(atlases);
         self.swapchain = Some(swapchain);
+        let video_tier = renderer.video_upload_capabilities().active_tier;
+        self.runtime
+            .asset_hub_mut()
+            .set_video_upload_tier(video_tier);
         self.surface = Some(surface);
         self.renderer = Some(renderer);
         self.register_all_viewport_passes();
@@ -1702,6 +1780,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         self.sync_appearance(window);
 
         self.process_external_texture_ops(report.external_texture_ops, window);
+        self.process_video_surface_ops(report.video_surface_ops, window);
         self.sync_viewports_3d(&report.viewports_3d, window);
         self.process_bc7_ops(report.bc7_ops, window);
 

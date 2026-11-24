@@ -1190,6 +1190,8 @@ pub struct Renderer {
     managed_external: HashMap<u32, ManagedExternalTexture>,
     /// 已解绑等待在飞帧退役的托管外部纹理延迟销毁队列。
     deferred_external_destroys: DeferredDestroyQueue<ManagedExternalTexture>,
+    /// 双路径视频表面上传管理器（Tier 1 零拷贝导入 + Tier 2 异步 Staging 环 + 延迟销毁）。
+    video: crate::video::VideoSurfaceManager,
     /// 已注册的自定义离屏 3D 视口渲染 Pass 映射表。
     viewport_passes: HashMap<ViewportId, ManagedViewport3D>,
     /// 视口重建或注销后等待在飞帧退役的旧附件延迟销毁队列。
@@ -1398,6 +1400,7 @@ impl Renderer {
     pub fn new_shared(gpu: Arc<Gpu>, width: u32, height: u32) -> Result<Self, GpuError> {
         let (command_pool, frames) = create_renderer_frames(&gpu)?;
         let pipelines = Pipelines::new(&gpu)?;
+        let video = crate::video::VideoSurfaceManager::new(&gpu, &pipelines)?;
         let target = RenderTarget::new(&gpu, width, height)?;
         // 标记“帧已完全绘制完成”的二值信号量，供呈现引擎等待。
         let present_semaphore = unsafe {
@@ -1600,6 +1603,7 @@ impl Renderer {
             external_slots: ExternalTextureSlots::default(),
             managed_external: HashMap::new(),
             deferred_external_destroys: DeferredDestroyQueue::new(),
+            video,
             viewport_passes: HashMap::new(),
             deferred_viewport_destroys: DeferredDestroyQueue::new(),
             viewport_pass_dispatches: 0,
@@ -1888,6 +1892,7 @@ impl Renderer {
         // 围栏等待完成后，至少 `frames_in_flight` 帧前解绑的托管外部纹理已不再被 GPU 引用。
         let completed_generation = self.frame_index.saturating_add(1);
         self.reclaim_deferred_external_textures(completed_generation);
+        self.video.reclaim_deferred(&self.gpu, completed_generation);
         self.reclaim_deferred_viewports(completed_generation);
         self.promote_pending_viewport_attachments()?;
         self.bc7_atlas
@@ -2858,6 +2863,9 @@ impl Renderer {
         if self.managed_external.contains_key(&slot) {
             return self.destroy_external_texture(slot);
         }
+        if self.video.contains_slot(slot) {
+            return self.destroy_video_surface(slot);
+        }
         if self.bc7_atlas.contains_external(slot) {
             return self.destroy_external_bc7(slot);
         }
@@ -2993,6 +3001,57 @@ impl Renderer {
     #[must_use]
     pub fn pending_external_texture_destroys(&self) -> usize {
         self.deferred_external_destroys.len()
+    }
+
+    /// 返回当前渲染器设备协商后的视频帧上传能力与层级画像。
+    #[must_use]
+    pub fn video_upload_capabilities(&self) -> crate::video::VideoUploadCapabilities {
+        self.gpu.video_upload_capabilities()
+    }
+
+    /// 上传一帧 YUV/HDR 视频并转换为目标 Bindless 外部 RGBA8 纹理槽。
+    ///
+    /// * 当 `target_slot` 为 `None` 时自动分配新的外部纹理槽位（`48..304`）；
+    /// * 当 `target_slot` 为 `Some(slot)` 时原地复用该视频表面槽位（分辨率变化时自动重建并延迟销毁旧图像）；
+    /// * Tier 1（Windows DXGI 零拷贝导入）不可用或失败且带有 `fallback_cpu` 时无缝回退至 Tier 2 异步 Staging 环。
+    ///
+    /// # Errors
+    /// 当帧载荷校验失败、槽位非法/耗尽、外部句柄无法导入且无 CPU 回退或底层 Vulkan 调用失败时返回 [`GpuError`]。
+    pub fn upload_video_frame(
+        &mut self,
+        target_slot: Option<u32>,
+        frame: &unbound_asset::video::VideoFramePayload,
+    ) -> Result<crate::video::VideoFrameUploadResult, GpuError> {
+        self.video.upload_video_frame(
+            &self.gpu,
+            &self.pipelines,
+            &mut self.external_slots,
+            self.frame_index,
+            self.frames.len() as u32,
+            target_slot,
+            frame,
+        )
+    }
+
+    /// 解绑并延迟销毁指定视频表面槽位，底层图像资源将在在飞帧退役后自动回收。
+    ///
+    /// # Errors
+    /// 当 `slot` 非有效视频表面槽位或解绑描述符失败时返回 [`GpuError`]。
+    pub fn destroy_video_surface(&mut self, slot: u32) -> Result<(), GpuError> {
+        self.video.destroy_video_surface(
+            &self.gpu,
+            &self.pipelines,
+            &mut self.external_slots,
+            self.frame_index,
+            self.frames.len() as u32,
+            slot,
+        )
+    }
+
+    /// 当前处于视频延迟销毁队列中等待在飞帧退役的视频资源数量。
+    #[must_use]
+    pub fn pending_video_surface_destroys(&self) -> usize {
+        self.video.pending_destroys()
     }
 
     /// 回收已完成全部在飞帧引用的延迟销毁外部纹理。
@@ -4509,6 +4568,11 @@ impl Renderer {
         // SAFETY: 设备处于空闲状态。
         unsafe {
             this.pipelines.destroy(&this.gpu);
+        }
+        // 销毁全部活跃与延迟销毁的视频表面以及异步 Staging 环，避免任何显存或句柄泄漏。
+        // SAFETY: 设备已空闲，且管线描述符集已销毁。
+        unsafe {
+            this.video.destroy(&this.gpu);
         }
         // 清空全部存活、挂起及延迟销毁队列中的 3D 视口附件，避免任何显存或句柄泄漏。
         for (_, entry) in this.viewport_passes.drain() {

@@ -1,0 +1,219 @@
+#version 460
+
+// ---------------------------------------------------------------------------
+// 视频帧多平面 YUV / HDR 至 RGBA8（sRGB 编码）计算着色器。
+//
+// 支持格式：
+//   * 0 = NV12（平面 0 为 R8_UNORM Y，平面 1 为 R8G8_UNORM 交织 CbCr）
+//   * 1 = P010（平面 0 为 R16_UNORM 高位对齐 10-bit Y，平面 1 为 R16G16_UNORM 交织 CbCr）
+//   * 2 = I420（平面 0 为 R8_UNORM Y，平面 1 为 R8_UNORM Cb，平面 2 为 R8_UNORM Cr）
+//
+// 输出约定：
+//   写入 R8G8B8A8_UNORM 目标外部纹理槽位时输出 sRGB 编码值，与 `uber.frag`
+//   中 `PRIM_IMAGE` 分支的单次 `srgb_to_linear` 形成闭环，避免二次伽马偏移。
+// ---------------------------------------------------------------------------
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_plane0;
+layout(set = 0, binding = 1) uniform sampler2D u_plane1;
+layout(set = 0, binding = 2) uniform sampler2D u_plane2;
+layout(set = 0, binding = 3, rgba8) uniform writeonly image2D u_dst_rgba;
+
+layout(push_constant) uniform VideoConvertPush {
+    uint width;
+    uint height;
+    uint format;
+    uint color_matrix;
+    uint color_range;
+    uint transfer_fn;
+    float hdr_peak_nits;
+    uint _pad;
+} pc;
+
+const uint FMT_NV12 = 0u;
+const uint FMT_P010 = 1u;
+const uint FMT_I420 = 2u;
+
+const uint MATRIX_BT601  = 0u;
+const uint MATRIX_BT709  = 1u;
+const uint MATRIX_BT2020 = 2u;
+
+const uint RANGE_LIMITED = 0u;
+const uint RANGE_FULL    = 1u;
+
+const uint TRANSFER_SDR = 0u;
+const uint TRANSFER_PQ  = 1u;
+const uint TRANSFER_HLG = 2u;
+
+// SDR 参考白亮度（ITU-R BT.2408 基准 203 nits）。
+const float SDR_REFERENCE_WHITE_NITS = 203.0;
+
+// SMPTE ST 2084（PQ）EOTF：将归一化非线性信号解码为绝对线性亮度比（1.0 = 10000 nits）。
+vec3 pq_eotf(vec3 e) {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 32.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 128.0;
+    const float c3 = 2392.0 / 128.0;
+
+    vec3 p = pow(max(e, vec3(0.0)), vec3(1.0 / m2));
+    vec3 num = max(p - vec3(c1), vec3(0.0));
+    vec3 den = max(vec3(c2) - c3 * p, vec3(1e-6));
+    return pow(num / den, vec3(1.0 / m1));
+}
+
+// ARIB STD-B67 / ITU-R BT.2100（HLG）单通道逆 OETF：将归一化信号解码为场景线性光 [0, 1]。
+float hlg_oetf_inv_ch(float e) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    if (e <= 0.5) {
+        return (e * e) / 3.0;
+    }
+    return (exp((e - c) / a) + b) / 12.0;
+}
+
+vec3 hlg_eotf_relative(vec3 e, float peak_nits) {
+    vec3 scene = vec3(
+        hlg_oetf_inv_ch(e.r),
+        hlg_oetf_inv_ch(e.g),
+        hlg_oetf_inv_ch(e.b)
+    );
+    // HLG OOTF（参考峰值 1000 nits 时系统伽马为 1.2）。
+    float ys = dot(scene, vec3(0.2627, 0.6780, 0.0593));
+    float ootf_scale = pow(max(ys, 1e-6), 0.2);
+    return scene * ootf_scale * (peak_nits / SDR_REFERENCE_WHITE_NITS);
+}
+
+// ITU-R BT.2020 线性色域至 BT.709 线性色域映射矩阵。
+vec3 bt2020_to_bt709(vec3 rgb2020) {
+    vec3 rgb709 = vec3(
+         1.6604910 * rgb2020.r - 0.5876411 * rgb2020.g - 0.0728499 * rgb2020.b,
+        -0.1245505 * rgb2020.r + 1.1328999 * rgb2020.g - 0.0083494 * rgb2020.b,
+        -0.0181508 * rgb2020.r - 0.1005789 * rgb2020.g + 1.1187297 * rgb2020.b
+    );
+    return max(rgb709, vec3(0.0));
+}
+
+// 扩展 Reinhard 亮度色调压缩：将高动态线性光平滑压缩至 SDR [0, 1] 区间。
+vec3 reinhard_extended_tonemap(vec3 linear_rgb, float white_point) {
+    float luma = dot(linear_rgb, vec3(0.2126, 0.7152, 0.0722));
+    if (luma <= 1e-6) {
+        return vec3(0.0);
+    }
+    float wp = max(white_point, 1.0);
+    float w2 = wp * wp;
+    float mapped_luma = (luma * (1.0 + luma / w2)) / (1.0 + luma);
+    return clamp(linear_rgb * (mapped_luma / luma), vec3(0.0), vec3(1.0));
+}
+
+// 线性光转 sRGB 编码（单通道）。
+float linear_to_srgb_ch(float c) {
+    float x = clamp(c, 0.0, 1.0);
+    if (x <= 0.0031308) {
+        return 12.92 * x;
+    }
+    return 1.055 * pow(x, 1.0 / 2.4) - 0.055;
+}
+
+vec3 linear_to_srgb(vec3 linear_rgb) {
+    return vec3(
+        linear_to_srgb_ch(linear_rgb.r),
+        linear_to_srgb_ch(linear_rgb.g),
+        linear_to_srgb_ch(linear_rgb.b)
+    );
+}
+
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.width) || p.y >= int(pc.height)) {
+        return;
+    }
+
+    vec2 uv = (vec2(p) + 0.5) / vec2(float(pc.width), float(pc.height));
+
+    // 按像素格式采样归一化 Y、Cb、Cr 原始值。
+    float y_raw = texture(u_plane0, uv).r;
+    vec2 cbcr_raw;
+    if (pc.format == FMT_I420) {
+        cbcr_raw = vec2(texture(u_plane1, uv).r, texture(u_plane2, uv).r);
+    } else {
+        cbcr_raw = texture(u_plane1, uv).rg;
+    }
+
+    // 量化范围解包：P010 为 R16_UNORM 高位对齐 10-bit，NV12/I420 为 8-bit UNORM。
+    float y;
+    float u;
+    float v;
+    if (pc.format == FMT_P010) {
+        float y10 = round(y_raw * 65535.0) / 64.0;
+        float u10 = round(cbcr_raw.x * 65535.0) / 64.0;
+        float v10 = round(cbcr_raw.y * 65535.0) / 64.0;
+        if (pc.color_range == RANGE_LIMITED) {
+            // Limited 10-bit：Y 位于 [64..940]/1023，CbCr 位于 [64..960]/1023。
+            y = clamp((y10 - 64.0) / 876.0, 0.0, 1.0);
+            u = clamp((u10 - 512.0) / 896.0, -0.5, 0.5);
+            v = clamp((v10 - 512.0) / 896.0, -0.5, 0.5);
+        } else {
+            // Full 10-bit：[0..1023]/1023。
+            y = clamp(y10 / 1023.0, 0.0, 1.0);
+            u = clamp((u10 - 512.0) / 1023.0, -0.5, 0.5);
+            v = clamp((v10 - 512.0) / 1023.0, -0.5, 0.5);
+        }
+    } else {
+        if (pc.color_range == RANGE_LIMITED) {
+            // Limited 8-bit：Y 位于 [16..235]/255，CbCr 位于 [16..240]/255。
+            y = clamp((y_raw - (16.0 / 255.0)) * (255.0 / 219.0), 0.0, 1.0);
+            u = clamp((cbcr_raw.x - (128.0 / 255.0)) * (255.0 / 224.0), -0.5, 0.5);
+            v = clamp((cbcr_raw.y - (128.0 / 255.0)) * (255.0 / 224.0), -0.5, 0.5);
+        } else {
+            // Full 8-bit：[0..255]/255。
+            y = clamp(y_raw, 0.0, 1.0);
+            u = clamp(cbcr_raw.x - (128.0 / 255.0), -0.5, 0.5);
+            v = clamp(cbcr_raw.y - (128.0 / 255.0), -0.5, 0.5);
+        }
+    }
+
+    // YCbCr 至非线性 R'G'B' 色彩矩阵转换。
+    vec3 rgb;
+    if (pc.color_matrix == MATRIX_BT601) {
+        rgb = vec3(
+            y + 1.4020 * v,
+            y - 0.344136286 * u - 0.714136286 * v,
+            y + 1.7720 * u
+        );
+    } else if (pc.color_matrix == MATRIX_BT2020) {
+        rgb = vec3(
+            y + 1.4746 * v,
+            y - 0.164553127 * u - 0.571353127 * v,
+            y + 1.8814 * u
+        );
+    } else {
+        // 默认 BT.709。
+        rgb = vec3(
+            y + 1.5748 * v,
+            y - 0.187324273 * u - 0.468124273 * v,
+            y + 1.8556 * u
+        );
+    }
+    rgb = clamp(rgb, vec3(0.0), vec3(1.0));
+
+    // HDR（PQ / HLG）路径：EOTF 线性化 → BT.2020 至 BT.709 色域映射 → Reinhard 压缩 → sRGB 编码。
+    // SDR 路径：信号已为显示参考伽马编码，直接写入目标纹理，由 uber.frag 执行单次 srgb_to_linear。
+    if (pc.transfer_fn == TRANSFER_PQ || pc.transfer_fn == TRANSFER_HLG) {
+        float peak_nits = pc.hdr_peak_nits > 0.0 ? max(pc.hdr_peak_nits, SDR_REFERENCE_WHITE_NITS) : 1000.0;
+        float white_point = peak_nits / SDR_REFERENCE_WHITE_NITS;
+        vec3 linear_rgb;
+        if (pc.transfer_fn == TRANSFER_PQ) {
+            linear_rgb = pq_eotf(rgb) * (10000.0 / SDR_REFERENCE_WHITE_NITS);
+        } else {
+            linear_rgb = hlg_eotf_relative(rgb, peak_nits);
+        }
+        vec3 rgb709 = bt2020_to_bt709(linear_rgb);
+        vec3 sdr_linear = reinhard_extended_tonemap(rgb709, white_point);
+        rgb = linear_to_srgb(sdr_linear);
+    }
+
+    imageStore(u_dst_rgba, p, vec4(rgb, 1.0));
+}

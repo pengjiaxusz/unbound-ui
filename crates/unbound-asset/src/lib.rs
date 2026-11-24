@@ -25,6 +25,7 @@ pub mod decode;
 pub mod pipeline;
 pub mod ring;
 pub mod transfer;
+pub mod video;
 
 pub use compressed::{
     bc7_solid_mode6_block, decode_bc7_to_rgba8_fallback, route_compressed_texture, AtlasAllocation,
@@ -41,6 +42,11 @@ pub use ring::{StagingError, StagingRef, StagingRing};
 pub use transfer::{
     ownership_barrier, AssetError, AssetId, AssetKind, AssetStatus, DecodedAsset, ImageLayout,
     OwnershipTransfer, Placeholder, QueueFamily, TimelineGate, TransferBarrier,
+};
+pub use video::{
+    LatestFrameMailbox, VideoColorMatrix, VideoColorRange, VideoColorSpace,
+    VideoExternalHandleDesc, VideoExternalHandleKind, VideoFrameError, VideoFramePayload,
+    VideoFramePlane, VideoFrameStorage, VideoPixelFormat, VideoTransferFunction,
 };
 
 /// 在渲染线程之外从磁盘读取文件。
