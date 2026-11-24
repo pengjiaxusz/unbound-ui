@@ -16,7 +16,9 @@ use unbound_layout::{LayoutEngine, LayoutStats};
 use unbound_math::Rect;
 use unbound_world::{NodeId, UiWorld};
 
-use crate::pages::{DemoKind, ExampleDef, KnobSpec, PageId};
+use unbound_widgets::WidgetCatalogId;
+
+use crate::pages::{DemoKind, ExampleDef, KnobSpec, PageId, PageTemplate};
 use crate::state::GalleryState;
 
 /// 对照报告尚未载入（或为空）时舞台的最小高度，确保空态卡片不会被裁掉。
@@ -138,7 +140,9 @@ pub struct CardLayout {
 #[derive(Clone, Debug)]
 pub struct PageLayout {
     pub page: PageId,
+    pub template: PageTemplate,
     pub header: Rect,
+    pub template_body: Rect,
     pub cards: Vec<CardLayout>,
     pub content_height: f32,
 }
@@ -169,6 +173,7 @@ struct KnobNodes {
 /// 构成单个卡片的节点。
 #[derive(Clone, Debug)]
 struct CardNodes {
+    example_index: usize,
     card: NodeId,
     body: NodeId,
     stage: NodeId,
@@ -197,7 +202,8 @@ pub struct ShellTree {
     cards_list: NodeId,
     chrome: ChromeNodes,
     cards: Vec<CardNodes>,
-    page_id: Option<PageId>,
+    template_body: Option<NodeId>,
+    page_key: Option<(PageId, Option<WidgetCatalogId>)>,
     /// 上次求解的统计信息。
     last_stats: LayoutStats,
 }
@@ -416,7 +422,8 @@ impl ShellTree {
             cards_list,
             chrome,
             cards: Vec::new(),
-            page_id: None,
+            template_body: None,
+            page_key: None,
             last_stats: LayoutStats::default(),
         }
     }
@@ -509,14 +516,15 @@ impl ShellTree {
             };
         }
 
-        self.ensure_page(state.active_page);
+        self.ensure_page(state);
         // 第一遍假设选项面板位于舞台旁。它实际是否并排由引擎决定，而非我们：
         // 若弹性行空间不足，第二遍会将面板折叠到下方。
         //
-        self.update_page(state, page_width, false);
+        let avail_body_h = (viewport.size.y - TOP_BAR_HEIGHT - PAGE_PAD_TOP - PAGE_PAD_BOTTOM).max(560.0);
+        self.update_page(state, page_width, avail_body_h, false);
         self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         if self.options_folded() {
-            self.update_page(state, page_width, true);
+            self.update_page(state, page_width, avail_body_h, true);
             self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         }
 
@@ -573,7 +581,7 @@ impl ShellTree {
         };
         let rect = |id: NodeId| shift(self.rect_of(id));
         let mut cards = Vec::with_capacity(self.cards.len());
-        for (index, nodes) in self.cards.iter().enumerate() {
+        for nodes in &self.cards {
             let mut knob_rows = Vec::with_capacity(nodes.rows.len());
             for (row_index, row) in nodes.rows.iter().enumerate() {
                 knob_rows.push(KnobRow {
@@ -584,7 +592,7 @@ impl ShellTree {
                 });
             }
             cards.push(CardLayout {
-                index,
+                index: nodes.example_index,
                 rect: rect(nodes.card),
                 stage: rect(nodes.stage),
                 knobs: nodes.knobs.map_or_else(Rect::default, rect),
@@ -595,7 +603,9 @@ impl ShellTree {
         }
         PageLayout {
             page: state.active_page,
+            template: state.page_template(),
             header: rect(self.header),
+            template_body: self.template_body.map_or(Rect::ZERO, rect),
             cards,
             content_height: self.content_height(),
         }
@@ -623,23 +633,54 @@ impl ShellTree {
         })
     }
 
-    /// 在用户导航后重建页面子树。
-    fn ensure_page(&mut self, page: PageId) {
-        if self.page_id == Some(page) {
+    /// 在用户导航或切换单控件详情后重建页面子树。
+    fn ensure_page(&mut self, state: &GalleryState) {
+        let key = (state.active_page, state.active_component);
+        if self.page_key == Some(key) {
             return;
         }
-        self.page_id = Some(page);
-        self.rebuild_page(page);
+        self.page_key = Some(key);
+        self.rebuild_page(state);
     }
 
-    /// 丢弃页面现有卡片并为 `page` 重新构建。
-    fn rebuild_page(&mut self, page: PageId) {
+    /// 丢弃页面现有卡片并为当前页面模板重新构建。
+    fn rebuild_page(&mut self, state: &GalleryState) {
         for nodes in &self.cards {
             self.world.remove(nodes.card);
         }
         self.cards.clear();
+        if let Some(node) = self.template_body.take() {
+            self.world.remove(node);
+        }
 
-        for example in page.examples() {
+        let template = state.page_template();
+        if matches!(
+            template,
+            PageTemplate::Landing | PageTemplate::CategoryHub | PageTemplate::Inspector
+        ) {
+            let mut body_desc = column();
+            body_desc.width = Dim::px(0.0);
+            body_desc.height = Dim::px(0.0);
+            self.template_body = Some(insert(&mut self.world, self.cards_list, body_desc));
+            return;
+        }
+
+        let page = state.active_page;
+        let examples = page.examples();
+        let selected_indices: Vec<usize> = if page == PageId::Components {
+            if let Some(comp_id) = state.active_component {
+                vec![crate::pages::component_card_index(comp_id)]
+            } else {
+                Vec::new()
+            }
+        } else {
+            (0..examples.len()).collect()
+        };
+
+        for example_index in selected_indices {
+            let Some(example) = examples.get(example_index) else {
+                continue;
+            };
             let mut card_desc = column();
             card_desc.width = Dim::px(0.0);
             card_desc.height = Dim::px(0.0);
@@ -765,6 +806,7 @@ impl ShellTree {
             let code_bar = insert(&mut self.world, card, code_desc);
 
             self.cards.push(CardNodes {
+                example_index,
                 card,
                 body,
                 stage,
@@ -778,17 +820,46 @@ impl ShellTree {
     }
 
     /// 按当前状态刷新页面几何信息。
-    fn update_page(&mut self, state: &GalleryState, page_width: f32, folded: bool) {
+    fn update_page(&mut self, state: &GalleryState, page_width: f32, avail_body_h: f32, folded: bool) {
         let page = state.active_page;
+        let template = state.page_template();
+
+        // 根据页面模板动态调整页头高度：首页落地页与 Parity 检视台自带顶栏，不保留冗长默认页头。
+        let header_h = match template {
+            PageTemplate::Landing | PageTemplate::Inspector => 0.0,
+            PageTemplate::CategoryHub => 88.0,
+            PageTemplate::Workshop => 118.0,
+        };
+        self.world.node_mut(self.header).desc.height = Dim::px(header_h);
+        self.world.node_mut(self.cards_list).desc.margin.top = if header_h > 0.0 {
+            PAGE_HEAD_GAP
+        } else {
+            0.0
+        };
+
+        if let Some(body_node) = self.template_body {
+            let body_h = match template {
+                PageTemplate::Landing => crate::pages::home::landing_height(page_width, state),
+                PageTemplate::CategoryHub => crate::pages::components::hub_height(page_width, state),
+                PageTemplate::Inspector => avail_body_h.max(PARITY_STAGE_MIN),
+                PageTemplate::Workshop => 0.0,
+            };
+            let desc = &mut self.world.node_mut(body_node).desc;
+            desc.width = Dim::px(page_width);
+            desc.height = Dim::px(body_h);
+            return;
+        }
+
         let inner = (page_width - CARD_PAD_X * 2.0).max(0.0);
         let mut open_panels: Vec<(usize, NodeId)> = Vec::new();
         let mut closed_panels: Vec<NodeId> = Vec::new();
 
-        for (index, nodes) in self.cards.iter().enumerate() {
-            let Some(example) = page.examples().get(index) else {
+        for (vec_index, nodes) in self.cards.iter().enumerate() {
+            let example_index = nodes.example_index;
+            let Some(example) = page.examples().get(example_index) else {
                 continue;
             };
-            let open = state.code_open(page, index as u8);
+            let open = state.code_open(page, example_index as u8);
             let panel_height = if open {
                 code_panel_height(example)
             } else {
@@ -882,7 +953,7 @@ impl ShellTree {
                         bottom: 0.0,
                     };
                     let panel = insert(&mut self.world, nodes.card, desc);
-                    open_panels.push((index, panel));
+                    open_panels.push((vec_index, panel));
                 }
                 (false, Some(panel)) => closed_panels.push(panel),
                 (true, Some(panel)) => {
