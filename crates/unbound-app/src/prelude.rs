@@ -41,11 +41,10 @@ pub use unbound_platform::{
     save_file, save_file_async, set_taskbar_progress, set_tray_icon, set_tray_menu,
     set_tray_rescue_menu, show_tray_balloon, system_accent_color, update_tray_heartbeat,
     DisplayWorkArea, FileDialogConfig, FileDragEffect, FrameHitMetrics, MonitorWorkArea,
-    OutboundFileDragOutcome,
-    OutboundFileDragRequest, PlatformError, PopupWindowConfig, RenderThrottlePolicy,
-    RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState, TrayEvent, TrayMenuItem,
-    TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig, WindowId, WindowPlacement,
-    WindowPosition,
+    OutboundFileDragOutcome, OutboundFileDragRequest, PlatformError, PopupWindowConfig,
+    RenderThrottlePolicy, RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState,
+    TrayEvent, TrayMenuItem, TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig,
+    WindowId, WindowPlacement, WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,
