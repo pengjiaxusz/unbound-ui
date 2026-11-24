@@ -71,6 +71,7 @@ pub mod scene_upload;
 pub mod scheduler;
 pub mod settings;
 pub mod state_store;
+pub mod theme_driver;
 pub mod window_runner;
 
 pub use appearance::{
@@ -102,6 +103,9 @@ pub use settings::{
     SettingsCard,
 };
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use theme_driver::{
+    make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
+};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
