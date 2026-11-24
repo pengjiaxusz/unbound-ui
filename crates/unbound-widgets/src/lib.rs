@@ -816,7 +816,7 @@ pub use toggle_split_button::{
 };
 
 pub use canonical::{
-    ControlClass, OverflowStrategy, WidgetCapabilities, BASELINE_COUNT, EXCLUSIVE_COUNT,
+    ControlCategory, ControlClass, OverflowStrategy, WidgetCapabilities, BASELINE_COUNT, EXCLUSIVE_COUNT,
     TOOLKIT_COUNT,
 };
 
