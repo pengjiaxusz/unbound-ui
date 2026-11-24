@@ -2188,7 +2188,7 @@ where
             // 此处保留旧版 DateRangePickerDesc / emit_date_range_picker 符号引用以兼容外部调用方与 build.rs 校验。
             let _ = (
                 core::any::type_name::<crate::date_range_picker::DateRangePickerDesc>,
-                crate::date_range_picker::emit_date_range_picker as fn(_, _, _, _, _) -> _,
+                crate::date_range_picker::emit_date_range_picker,
             );
             let drp_r = Rect::new(o.x, o.y, rect.size.x.min(320.0), rect.size.y.max(260.0));
             let desc = DatePickerDesc::new(drp_r).with_label("DateRangePicker");

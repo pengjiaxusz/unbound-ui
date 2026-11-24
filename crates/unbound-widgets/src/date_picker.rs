@@ -621,10 +621,10 @@ impl CalendarState {
             CalendarDisplayMode::Month => self
                 .min_date
                 .is_none_or(|min| self.view.prev() >= YearMonth::of(min)),
-            CalendarDisplayMode::Year => self.min_date.is_none_or(|min| self.view.year - 1 >= min.year),
+            CalendarDisplayMode::Year => self.min_date.is_none_or(|min| self.view.year > min.year),
             CalendarDisplayMode::Decade => self
                 .min_date
-                .is_none_or(|min| self.decade_start() - 1 >= min.year),
+                .is_none_or(|min| self.decade_start() > min.year),
         }
     }
 
@@ -635,7 +635,7 @@ impl CalendarState {
             CalendarDisplayMode::Month => self
                 .max_date
                 .is_none_or(|max| self.view.next() <= YearMonth::of(max)),
-            CalendarDisplayMode::Year => self.max_date.is_none_or(|max| self.view.year + 1 <= max.year),
+            CalendarDisplayMode::Year => self.max_date.is_none_or(|max| self.view.year < max.year),
             CalendarDisplayMode::Decade => self
                 .max_date
                 .is_none_or(|max| self.decade_start() + 10 <= max.year),
