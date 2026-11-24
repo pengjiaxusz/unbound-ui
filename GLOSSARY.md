@@ -270,3 +270,17 @@ WinUI 3 官方控件库中不存在、面向专业工具与工业工作台场景
 **主题过渡（Theme Transition）**：
 在运行期切换深浅色、产品预设或品牌强调色时，通过按帧在 Oklab 空间插值 4 KiB 语义颜色 LUT 并协同双路径后景完成的框架级平滑配色切换，全程不触发布局重算、不重传图元实例，且在首帧、减弱动画与差分采集下强制瞬切。它不是控件局部几何微动画，也不是依赖离屏快照的整帧转场。
 *避免使用*：换肤动画、全屏淡入淡出、主题转场特效
+
+## 幽灵窗与悬浮浮岛宿主
+
+**幽灵窗（Ghost Window）**：
+以 `WindowRole::Ghost` 运行于 `MultiWindowCoordinator` 的独立渲染无激活顶层窗口（默认 `no_activate + topmost + skip_taskbar + click_through`，支持运行期热切为可交互态），用于瞬时预览或轻量浮层展示且绝不抢占主窗键盘焦点。它区别于无独立 `AppRuntime` 的父窗绑定 `PopupHostRegistry` 弹出窗。
+*避免使用*：预览弹窗、非模态对话框
+
+**悬浮浮岛宿主（Floating Island Host）**：
+以 `WindowRole::FloatingIsland` 托管常驻可拖拽置顶迷你窗口的多窗宿主抽象（`FloatingHost`），共享主进程 GPU 与图集资源并持有独立 `Surface`/`AppRuntime`，支持不抢焦点交互、运行期热切换置顶/穿透以及跨显示器工作区边缘磁吸。
+*避免使用*：工具窗口补丁、画中画控件
+
+**工作区磁吸定位（Work-Area Edge Snap）**：
+基于公开多显示器工作区查询与 64 位安全钳制算法的纯逻辑窗口定位策略（含 `CursorMonitorAvoid`、`AnchorRectAvoid` 与 `EdgeSnap`），确保幽灵窗与悬浮浮岛在负坐标辅屏、任务栏遮挡与跨屏 DPI 切换下始终落在合法可见工作区内。
+*避免使用*：裸屏幕坐标定位、主屏居中写死
