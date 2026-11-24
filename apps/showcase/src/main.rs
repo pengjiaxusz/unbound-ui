@@ -920,8 +920,8 @@ impl PlatformApp for Showcase {
 
     fn next_wake(&self) -> Option<Instant> {
         // 待处理的定时器或被挂起的后台任务必须唤醒事件循环；
-        // pacer 的帧截止时间由后端单独考量。
-        self.app.next_wake_in().map(|delay| Instant::now() + delay)
+        // 基于 `last_frame` 锚定绝对截止时刻，避免中途虚假唤醒把延迟不断推后（ADR-0035）。
+        self.app.next_wake_in().map(|delay| self.last_frame + delay)
     }
 
     fn attach_waker(&mut self, waker: std::sync::Arc<dyn Fn() + Send + Sync>) {
@@ -1088,15 +1088,18 @@ impl PlatformApp for Showcase {
                         .wheel(self.logical(self.pointer), Vec2::new(0.0, delta_y as f32));
                 }
             }
-            PlatformEvent::Focused(false) => {
-                // 窗口失去焦点：指针正在进行的任何操作均已结束。
-                // 必须清除捕获、滚动条抓取与演示拖拽，否则外壳会一直保留幽灵拖拽，
-                // 直到用户恰好点击别处为止。
-                //
-                self.shell_mut().cancel_interactions();
-                self.app.cancel_pointer();
-                self.app
-                    .pointer_up(self.logical(self.pointer), PointerButton::Left);
+            PlatformEvent::Focused(focused) => {
+                self.app.set_window_focused(focused);
+                if !focused {
+                    // 窗口失去焦点：指针正在进行的任何操作均已结束。
+                    // 必须清除捕获、滚动条抓取与演示拖拽，否则外壳会一直保留幽灵拖拽，
+                    // 直到用户恰好点击别处为止。
+                    //
+                    self.shell_mut().cancel_interactions();
+                    self.app.cancel_pointer();
+                    self.app
+                        .pointer_up(self.logical(self.pointer), PointerButton::Left);
+                }
             }
             PlatformEvent::RedrawRequested => {
                 // OS 请求重绘（窗口被取消遮挡，或合成器丢失了 surface）。
@@ -1433,6 +1436,16 @@ impl Showcase {
         }
 
         let mut now = Instant::now();
+        // 若 `TimerQueue`（含托管/壳层 Tooltip 延迟）已到期，强制请求立即渲染，
+        // 防止休眠态被 `pacer.should_render(now)` 短路而永远吞掉定时器唤醒（ADR-0035）。
+        let raw_elapsed = now.saturating_duration_since(self.last_frame);
+        let timer_due = self
+            .app
+            .next_wake_in()
+            .is_some_and(|delay| delay <= raw_elapsed);
+        if timer_due {
+            state.pacer.request_immediate(now);
+        }
         // 在触及帧时钟*之前*检查节奏：早退曾导致从未绘制的帧也更新了
         // `last_frame` 和 FPS 计数器。
         //
@@ -1451,10 +1464,8 @@ impl Showcase {
         // 在借用渲染器前推进时间并重建场景：应用与 GPU 对象互不相交，
         // 但辅助方法会借用整个 `self`。
         //
-        let dt = now
-            .saturating_duration_since(self.last_frame)
-            .as_secs_f32()
-            .min(0.1);
+        let raw_dt = now.saturating_duration_since(self.last_frame).as_secs_f32();
+        let dt = raw_dt.min(0.1);
         self.last_frame = now;
         if dt > 0.0 {
             // 指数移动平均：单次卡顿不得让 HUD 在 40 与 120 之间剧烈跳动。
@@ -1469,9 +1480,9 @@ impl Showcase {
         // 共享实例池一次只能保存一个修补基准。
         //
         let multi = !self.extras.is_empty();
-        // 运行时归约 tick、重建场景并返回本帧的上传计划。
+        // 运行时按钳制步长推进动画、按真实时钟推进 `TimerQueue`，重建场景并返回本帧上传计划。
         //
-        let dirty = self.app.tick(dt);
+        let dirty = self.app.tick_with_clock(dt, raw_dt);
         let moving = dirty != DirtyFlags::NONE;
         let report = self.advance_scene(0.0);
         self.write_theme_if_needed();

@@ -1758,6 +1758,74 @@ pub struct ActiveSelectPopup {
     pub option_keys: Vec<u64>,
 }
 
+/// 托管工具提示的触发输入源（ADR-0035）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum TooltipTriggerSource {
+    /// 鼠标悬停触发（受 400ms 默认延迟与 300ms 悬停预热窗口约束）。
+    Pointer,
+    /// 键盘导航聚焦触发（`focus_visible == true` 时 0ms 即时显示）。
+    Keyboard,
+}
+
+/// 运行时全局唯一的托管工具提示状态机（ADR-0035）。
+#[derive(Clone, Debug, Default)]
+struct ManagedTooltipState {
+    active_anchor: Option<u64>,
+    visible: bool,
+    source: Option<TooltipTriggerSource>,
+    pending_timer: Option<TimerToken>,
+    last_hidden_ms: Option<u64>,
+    suppressed_focus_anchor: Option<u64>,
+    last_pointer_hover: Option<u64>,
+    last_focus_anchor: Option<u64>,
+    registered_anchors: FxHashMap<u64, u64>,
+}
+
+impl ManagedTooltipState {
+    const WARMUP_MS: u64 = unbound_widgets::TOOLTIP_WARMUP_MS as u64;
+
+    fn visible_anchor(&self) -> Option<u64> {
+        self.visible.then_some(self.active_anchor).flatten()
+    }
+
+    fn in_warmup(&self, now_ms: u64) -> bool {
+        if self.visible {
+            return true;
+        }
+        self.last_hidden_ms
+            .is_some_and(|t| now_ms >= t && now_ms.saturating_sub(t) <= Self::WARMUP_MS)
+    }
+
+    fn cancel_timer(&mut self, timers: &mut TimerQueue) {
+        if let Some(token) = self.pending_timer.take() {
+            timers.cancel(token);
+        }
+    }
+
+    fn hide(&mut self, timers: &mut TimerQueue, now_ms: u64) -> bool {
+        self.cancel_timer(timers);
+        let was_visible = self.visible;
+        if was_visible {
+            self.last_hidden_ms = Some(now_ms);
+        }
+        self.visible = false;
+        self.active_anchor = None;
+        self.source = None;
+        was_visible
+    }
+
+    fn on_timer(&mut self, token: TimerToken) -> bool {
+        if self.pending_timer == Some(token) {
+            self.pending_timer = None;
+            if self.active_anchor.is_some() {
+                self.visible = true;
+                return true;
+            }
+        }
+        false
+    }
+}
+
 pub struct ViewBuilder<'a> {
     collector: &'a mut SceneCollector,
     /// 不可变帧上下文。
@@ -1793,6 +1861,10 @@ pub struct ViewBuilder<'a> {
     overlay_pending_ranges: &'a mut Vec<(u64, NodeId, usize, usize)>,
     /// 当前是否处于 `OverlayKind::Tooltip` 构建作用域内（用于强制剥离命中区与焦点）。
     in_tooltip_overlay: bool,
+    /// 本帧通过 `tooltip_for` / `tooltip_for_with` 声明的托管工具提示锚点表：`anchor_key -> delay_ms`。
+    managed_tooltip_anchors: &'a mut FxHashMap<u64, u64>,
+    /// 本帧处于激活显示态的托管工具提示锚点键（未激活时 `tooltip_for_with` 闭包不求值）。
+    active_managed_tooltip_anchor: Option<u64>,
 }
 
 impl<'a> ViewBuilder<'a> {
@@ -3139,6 +3211,65 @@ impl<'a> ViewBuilder<'a> {
                 ));
             ov.container(content_key, content_desc, build);
         })
+    }
+
+    /// 声明式托管纯文本工具提示（ADR-0035）：
+    ///
+    /// 锚定到 `anchor_key`，由运行时自动托管悬停延迟（默认 `400ms`）、
+    /// `300ms` 悬停预热窗口免延迟切换、键盘焦点（`focus_visible`）即时触发与自动隐藏。
+    /// 未激活时仅登记锚点，不挂载浮层也不参与布局。
+    pub fn tooltip_for(
+        &mut self,
+        anchor_key: u64,
+        mut desc: unbound_widgets::TooltipDesc,
+    ) -> Option<NodeId> {
+        let effective_anchor = self.scoped_key(anchor_key);
+        let delay_ms = desc.delay_ms.max(0.0).round() as u64;
+        self.managed_tooltip_anchors
+            .insert(effective_anchor, delay_ms);
+        if self.active_managed_tooltip_anchor != Some(effective_anchor) {
+            return None;
+        }
+        if desc.anchor.width() <= 0.0 && desc.anchor.height() <= 0.0 {
+            if let Some(r) = self.widget_rect(effective_anchor) {
+                desc.anchor = r;
+            }
+        }
+        if desc.viewport.width() <= 0.0 && desc.viewport.height() <= 0.0 {
+            desc.viewport = self.viewport_rect();
+        }
+        let tip_key = mix_key(anchor_key, 0x5454_4950);
+        let effective_tip_key = self.scoped_key(tip_key);
+        let bounds = desc.rect();
+        let entry = unbound_widgets::overlay::OverlayEntry::tooltip(
+            effective_tip_key,
+            effective_anchor,
+            bounds,
+        );
+        Some(self.overlay_layer(tip_key, entry, |ov| {
+            ov.add(tip_key, desc);
+        }))
+    }
+
+    /// 声明式托管富内容工具提示（ADR-0035）：
+    ///
+    /// 与 [`Self::tooltip_for`] 共享同一运行时托管状态机；闭包 `build` 采用惰性求值，
+    /// 仅当 `anchor_key` 当前处于激活显示态时才执行，未触发时零子树与布局开销。
+    pub fn tooltip_for_with(
+        &mut self,
+        anchor_key: u64,
+        desc: unbound_widgets::TooltipDesc,
+        build: impl FnOnce(&mut Self),
+    ) -> Option<NodeId> {
+        let effective_anchor = self.scoped_key(anchor_key);
+        let delay_ms = desc.delay_ms.max(0.0).round() as u64;
+        self.managed_tooltip_anchors
+            .insert(effective_anchor, delay_ms);
+        if self.active_managed_tooltip_anchor != Some(effective_anchor) {
+            return None;
+        }
+        let tip_key = mix_key(anchor_key, 0x5454_5249);
+        Some(self.tooltip_with(tip_key, anchor_key, desc, build))
     }
 
     /// 声明式右键上下文菜单浮层：打开时自动定位并交由 [`OverlayManager`] 管理。
@@ -4577,6 +4708,8 @@ pub struct AppRuntime<A: Application> {
     active_native_popups: FxHashMap<u64, unbound_platform::PopupWindowConfig>,
     /// 本帧归属于 `OverlayKind::Tooltip` 浮层的 `pending` 索引集合（发射后强制剥离命中区与焦点）。
     tooltip_pending_indices: FxHashSet<usize>,
+    /// 运行时全局唯一的托管工具提示状态机（ADR-0035）。
+    managed_tooltip: ManagedTooltipState,
 }
 
 impl<A: Application> AppRuntime<A> {
@@ -4648,6 +4781,7 @@ impl<A: Application> AppRuntime<A> {
             window_owner_id: unbound_platform::WindowId(0),
             active_native_popups: FxHashMap::default(),
             tooltip_pending_indices: FxHashSet::default(),
+            managed_tooltip: ManagedTooltipState::default(),
         };
         // `init` 中调度的定时器相对于零时钟可能已到期；
         // 在首帧推进越过它之前先将其入队。
@@ -4821,9 +4955,190 @@ impl<A: Application> AppRuntime<A> {
         let due = self.timers.due(self.now_ms());
         let mut flags = DirtyFlags::NONE;
         for event in due {
+            if let AppEvent::Timer { token } = event {
+                if self.handle_managed_tooltip_timer(token) {
+                    flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                    continue;
+                }
+            }
             flags = flags.merge(self.dispatch(event));
         }
         flags
+    }
+
+    /// 查询当前处于激活显示态的托管工具提示锚点键（ADR-0035）。
+    #[must_use]
+    pub fn active_managed_tooltip(&self) -> Option<u64> {
+        self.managed_tooltip.visible_anchor()
+    }
+
+    fn resolve_tooltip_anchor(&self, raw_key: Option<u64>) -> Option<u64> {
+        let key = raw_key?;
+        if self.managed_tooltip.registered_anchors.contains_key(&key) {
+            return Some(key);
+        }
+        let owner = self.hit_owners.get(&key).copied()?;
+        self.managed_tooltip
+            .registered_anchors
+            .contains_key(&owner)
+            .then_some(owner)
+    }
+
+    fn has_tooltip_blocking_overlay(&self) -> bool {
+        !self.active_select_popups.is_empty()
+            || !self.active_context_menus.is_empty()
+            || self
+                .overlays
+                .stack()
+                .entries()
+                .iter()
+                .any(|e| e.kind != unbound_widgets::overlay::OverlayKind::Tooltip)
+    }
+
+    fn handle_managed_tooltip_timer(&mut self, token: TimerToken) -> bool {
+        if self.managed_tooltip.pending_timer != Some(token) {
+            return false;
+        }
+        if !self.ctx.window_focused || self.has_tooltip_blocking_overlay() {
+            let now_ms = self.now_ms();
+            let _ = self.managed_tooltip.hide(&mut self.timers, now_ms);
+            return true;
+        }
+        if self.managed_tooltip.on_timer(token) {
+            self.force_rebuild = true;
+            self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+            return true;
+        }
+        false
+    }
+
+    fn dismiss_managed_tooltip(&mut self, suppress_focus: bool) -> bool {
+        let now_ms = self.now_ms();
+        if suppress_focus && self.managed_tooltip.source == Some(TooltipTriggerSource::Keyboard) {
+            self.managed_tooltip.suppressed_focus_anchor = self.managed_tooltip.active_anchor;
+        }
+        let changed = self.managed_tooltip.hide(&mut self.timers, now_ms);
+        if changed {
+            self.force_rebuild = true;
+            self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+        }
+        changed
+    }
+
+    fn update_managed_tooltip_pointer(&mut self) -> bool {
+        let hovered = self.resolve_tooltip_anchor(self.router.hover());
+        if hovered == self.managed_tooltip.last_pointer_hover {
+            return false;
+        }
+        self.managed_tooltip.last_pointer_hover = hovered;
+        let now_ms = self.now_ms();
+        match hovered {
+            Some(anchor) if self.ctx.window_focused && !self.has_tooltip_blocking_overlay() => {
+                let delay_ms = self
+                    .managed_tooltip
+                    .registered_anchors
+                    .get(&anchor)
+                    .copied()
+                    .unwrap_or(unbound_widgets::TOOLTIP_DELAY_MS as u64);
+                let warm = self.managed_tooltip.in_warmup(now_ms);
+                self.managed_tooltip.cancel_timer(&mut self.timers);
+                let was_visible = self.managed_tooltip.visible;
+                let prev_anchor = self.managed_tooltip.active_anchor;
+                if was_visible && prev_anchor != Some(anchor) {
+                    self.managed_tooltip.last_hidden_ms = Some(now_ms);
+                }
+                self.managed_tooltip.active_anchor = Some(anchor);
+                self.managed_tooltip.source = Some(TooltipTriggerSource::Pointer);
+                if warm || delay_ms == 0 {
+                    self.managed_tooltip.visible = true;
+                    let changed = !was_visible || prev_anchor != Some(anchor);
+                    if changed {
+                        self.force_rebuild = true;
+                        self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                    }
+                    changed
+                } else {
+                    self.managed_tooltip.visible = false;
+                    let token = self.ctx.allocate_timer();
+                    self.timers
+                        .schedule(token, now_ms, delay_ms, None, AppEvent::Timer { token });
+                    self.managed_tooltip.pending_timer = Some(token);
+                    if was_visible {
+                        self.force_rebuild = true;
+                        self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                    }
+                    was_visible
+                }
+            }
+            _ => {
+                if self.managed_tooltip.source == Some(TooltipTriggerSource::Pointer) {
+                    self.dismiss_managed_tooltip(false)
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn update_managed_tooltip_focus(&mut self) -> bool {
+        let raw_focus = self.ctx.focused.filter(|_| self.ctx.focus_visible);
+        let focus_anchor = self.resolve_tooltip_anchor(raw_focus);
+        if focus_anchor != self.managed_tooltip.suppressed_focus_anchor {
+            self.managed_tooltip.suppressed_focus_anchor = None;
+        }
+        if focus_anchor == self.managed_tooltip.last_focus_anchor {
+            return false;
+        }
+        self.managed_tooltip.last_focus_anchor = focus_anchor;
+        let now_ms = self.now_ms();
+        match focus_anchor {
+            Some(anchor)
+                if self.ctx.window_focused
+                    && !self.has_tooltip_blocking_overlay()
+                    && self.managed_tooltip.suppressed_focus_anchor != Some(anchor) =>
+            {
+                self.managed_tooltip.cancel_timer(&mut self.timers);
+                let changed = !self.managed_tooltip.visible
+                    || self.managed_tooltip.active_anchor != Some(anchor);
+                self.managed_tooltip.active_anchor = Some(anchor);
+                self.managed_tooltip.source = Some(TooltipTriggerSource::Keyboard);
+                self.managed_tooltip.visible = true;
+                if changed {
+                    self.force_rebuild = true;
+                    self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                }
+                changed
+            }
+            _ => {
+                if self.managed_tooltip.source == Some(TooltipTriggerSource::Keyboard) {
+                    let changed = self.managed_tooltip.hide(&mut self.timers, now_ms);
+                    if changed {
+                        self.force_rebuild = true;
+                        self.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                    }
+                    changed
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn reconcile_managed_tooltip_after_view(&mut self) {
+        let now_ms = self.now_ms();
+        if !self.ctx.window_focused || self.has_tooltip_blocking_overlay() {
+            let _ = self.managed_tooltip.hide(&mut self.timers, now_ms);
+            return;
+        }
+        if let Some(active) = self.managed_tooltip.active_anchor {
+            if !self
+                .managed_tooltip
+                .registered_anchors
+                .contains_key(&active)
+            {
+                let _ = self.managed_tooltip.hide(&mut self.timers, now_ms);
+            }
+        }
     }
 
     /// 按键访问单个局部状态值。
@@ -4920,8 +5235,19 @@ impl<A: Application> AppRuntime<A> {
     /// 使时间驱动型应用仅在真正需要时报告脏帧，而非每次 vsync 都重建。
     ///
     pub fn tick(&mut self, dt: f32) -> DirtyFlags {
-        self.advance(dt);
-        self.dispatch(AppEvent::Tick { dt })
+        self.tick_with_clock(dt, dt)
+    }
+
+    /// 分别按动画步长 `anim_dt` 与真实时钟增量 `clock_dt` 推进运行时（ADR-0035）。
+    ///
+    /// 宿主从 `WaitUntil` 休眠唤醒后可能经历数百毫秒间隔：动画与弹簧使用钳制后的
+    /// `anim_dt` 防数值爆炸，而 `TimerQueue` 与托管工具提示延迟必须按真实流逝时间
+    /// `clock_dt` 推进，确保一次性定时器在单次唤醒即精确触发。
+    pub fn tick_with_clock(&mut self, anim_dt: f32, clock_dt: f32) -> DirtyFlags {
+        self.advance_with_clock(anim_dt, clock_dt);
+        let timer_dirty = self.poll_timers();
+        let tick_dirty = self.dispatch(AppEvent::Tick { dt: anim_dt });
+        timer_dirty.merge(tick_dirty)
     }
 
     /// 获取当前应用上下文。
@@ -5049,6 +5375,9 @@ impl<A: Application> AppRuntime<A> {
         if let Some(event) = event {
             flags = flags.merge(self.reduce_pointer(event));
         }
+        if self.update_managed_tooltip_pointer() {
+            flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+        }
         self.mark(flags);
         flags
     }
@@ -5066,7 +5395,11 @@ impl<A: Application> AppRuntime<A> {
 
     /// 打开覆盖层，并自动管理焦点陷阱与焦点恢复。
     pub fn open_overlay(&mut self, entry: unbound_widgets::overlay::OverlayEntry) -> u64 {
+        let is_blocking = entry.kind != unbound_widgets::overlay::OverlayKind::Tooltip;
         let key = self.overlays.open(entry, &mut self.focus);
+        if is_blocking {
+            let _ = self.dismiss_managed_tooltip(false);
+        }
         self.sync_focus_context();
         self.mark(DirtyFlags::PAINT);
         key
@@ -5085,6 +5418,9 @@ impl<A: Application> AppRuntime<A> {
     /// 按下 `button`。
     pub fn pointer_down(&mut self, pos: Vec2, button: PointerButton) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
+        if self.dismiss_managed_tooltip(false) {
+            flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+        }
         if button == PointerButton::Left && !self.active_select_popups.is_empty() {
             let in_any = self.active_select_popups.iter().any(|p| {
                 p.bounds.contains_point(pos)
@@ -5140,6 +5476,8 @@ impl<A: Application> AppRuntime<A> {
     pub fn cancel_pointer(&mut self) -> DirtyFlags {
         let _ = self.router.cancel();
         self.sync_router_context();
+        self.managed_tooltip.last_pointer_hover = None;
+        let _ = self.dismiss_managed_tooltip(false);
         self.mark(DirtyFlags::LAYOUT);
         DirtyFlags::LAYOUT
     }
@@ -5153,6 +5491,9 @@ impl<A: Application> AppRuntime<A> {
     ///
     pub fn wheel(&mut self, pos: Vec2, delta: Vec2) -> DirtyFlags {
         let mut scroll_dirty = DirtyFlags::NONE;
+        if self.dismiss_managed_tooltip(false) {
+            scroll_dirty = scroll_dirty.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+        }
         // 若当前存在位于 Portal / 模态层的滚动区或遮罩覆盖，背景层的滚动区不得越界抢夺滚轮。
         let has_portal_layer = self
             .router
@@ -5275,6 +5616,7 @@ impl<A: Application> AppRuntime<A> {
     /// 处理按键按下或释放。
     pub fn key(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
         let mut flags = DirtyFlags::NONE;
+        let prev_focus = self.ctx.focused.filter(|_| self.ctx.focus_visible);
         if pressed && matches!(key, AppKey::F(12)) {
             // F12 为 DevTools 开关；绝不传递至应用。
             self.toggle_inspector();
@@ -5309,6 +5651,9 @@ impl<A: Application> AppRuntime<A> {
         }
 
         if stopped {
+            if pressed && self.dismiss_managed_tooltip(true) {
+                flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+            }
             self.mark(flags);
             return flags;
         }
@@ -5375,6 +5720,16 @@ impl<A: Application> AppRuntime<A> {
                     modifiers,
                 })
                 .merge(flags);
+        }
+        if pressed {
+            let next_focus = self.ctx.focused.filter(|_| self.ctx.focus_visible);
+            if next_focus != prev_focus {
+                if self.update_managed_tooltip_focus() {
+                    flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+                }
+            } else if self.dismiss_managed_tooltip(true) {
+                flags = flags.merge(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+            }
         }
         self.mark(flags);
         flags
@@ -5521,8 +5876,13 @@ impl<A: Application> AppRuntime<A> {
 
     /// 推进时钟但不产生 `Tick` 事件。
     pub fn advance(&mut self, dt: f32) {
-        let step = dt.max(0.0);
-        self.time += f64::from(step);
+        self.advance_with_clock(dt, dt);
+    }
+
+    fn advance_with_clock(&mut self, anim_dt: f32, clock_dt: f32) {
+        let step = anim_dt.max(0.0);
+        let clock_step = clock_dt.max(step);
+        self.time += f64::from(clock_step);
         self.ctx.time = self.time;
         if self.ctx.scale_osd_remaining > 0.0 {
             self.ctx.scale_osd_remaining = (self.ctx.scale_osd_remaining - step).max(0.0);
@@ -5678,6 +6038,12 @@ impl<A: Application> AppRuntime<A> {
         let mut declared_overlays = FxHashSet::default();
         let mut overlay_pending_ranges = Vec::new();
         let event_sender = self.ctx.event_sender();
+        if !self.ctx.window_focused || self.has_tooltip_blocking_overlay() {
+            let now_ms = self.now_ms();
+            let _ = self.managed_tooltip.hide(&mut self.timers, now_ms);
+        }
+        self.managed_tooltip.registered_anchors.clear();
+        let active_managed_tooltip_anchor = self.managed_tooltip.visible_anchor();
         let mut view = ViewBuilder {
             collector: &mut self.collector,
             ctx: view_ctx,
@@ -5705,11 +6071,14 @@ impl<A: Application> AppRuntime<A> {
             declared_overlays: &mut declared_overlays,
             overlay_pending_ranges: &mut overlay_pending_ranges,
             in_tooltip_overlay: false,
+            managed_tooltip_anchors: &mut self.managed_tooltip.registered_anchors,
+            active_managed_tooltip_anchor,
         };
         self.app.view(&self.state, &mut view);
         view.render_open_select_popups();
         drop(view);
         self.finalize_declared_overlays(&declared_overlays, &overlay_pending_ranges);
+        self.reconcile_managed_tooltip_after_view();
         self.sync_native_popups();
         let vanished: Vec<(u64, NodeId)> = self
             .node_keys
@@ -5969,6 +6338,10 @@ impl<A: Application> AppRuntime<A> {
     pub fn set_window_focused(&mut self, focused: bool) {
         if self.ctx.window_focused != focused {
             self.ctx.window_focused = focused;
+            if !focused {
+                self.managed_tooltip.last_pointer_hover = None;
+                let _ = self.dismiss_managed_tooltip(false);
+            }
             self.force_rebuild = true;
             self.mark(DirtyFlags::PAINT);
         }

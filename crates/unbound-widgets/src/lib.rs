@@ -768,6 +768,7 @@ pub use tooltip::{
     emit_tooltip, wrap_text, TooltipDelay, TooltipDesc, TooltipLayout, TooltipPadding,
     TooltipState, TooltipWidget, TOOLTIP_BORDER_WIDTH, TOOLTIP_DELAY_MS, TOOLTIP_FONT_SIZE,
     TOOLTIP_LINE_HEIGHT, TOOLTIP_MAX_WIDTH, TOOLTIP_PADDING, TOOLTIP_RADIUS, TOOLTIP_SHADOW,
+    TOOLTIP_WARMUP_MS,
 };
 pub use tour::{emit_tour, TourDesc, TourState, TourStep};
 pub use transfer::{emit_transfer, TransferDesc, TransferItem, TransferState};
