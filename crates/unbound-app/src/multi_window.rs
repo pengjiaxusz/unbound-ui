@@ -722,12 +722,12 @@ impl<A: Application> MultiWindowCoordinator<A> {
         // 绝不将 Ghost 提升为主窗口；若当前主窗口是非 Standard，则尝试保持首个 Standard 为主窗口。
         if let Some(primary) = self.registry.primary() {
             if primary == id && role == WindowRole::Ghost {
-                if let Some(std_slot) = self
+                let std_id = self
                     .registry
                     .iter()
                     .find(|s| s.context.config.role == WindowRole::Standard)
-                {
-                    let std_id = std_slot.id;
+                    .map(|s| s.id);
+                if let Some(std_id) = std_id {
                     let _ = self.registry.set_primary(std_id);
                 }
             }
@@ -1625,6 +1625,11 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             return Flow::Continue;
         };
         let os_scale = ctx.sync_os_scale(window);
+        let focused_event = if let PlatformEvent::Focused(focused) = &event {
+            Some(*focused)
+        } else {
+            None
+        };
         match event {
             PlatformEvent::Resized(_) => {
                 let size = window.inner_size();
@@ -1805,7 +1810,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
         let dirty = ctx.runtime.dirty() != crate::DirtyFlags::NONE;
         let suspended = ctx.pacer.is_suspended();
-        if let PlatformEvent::Focused(focused) = event {
+        if let Some(focused) = focused_event {
             if !self.is_window_no_activate(id) {
                 if focused {
                     self.focused_window_id = Some(id);
