@@ -1,4 +1,4 @@
-# ADR-0038: `CalendarView` 单一真源、范围选择扩展与 WinUI 3 Parity 契约
+# ADR-0043: `CalendarView` 单一真源、范围选择扩展与 WinUI 3 Parity 契约
 
 Status: accepted
 
@@ -13,7 +13,7 @@ Status: accepted
    - `CalendarSelectionMode`：`None`、`Single`、`Multiple`（离散多选 `selected_dates`）及 Unbound 扩展 `Range`（起止区间连续选择 + 悬停实时预览 + 反向选择自动归一化）。
    - `Range` 边界契约：已有完整区间 `[start, end]` 后点击新日期重置为新 `start`；默认禁止区间跨越 `blackout_dates` 或 `min_date`/`max_date` 禁区（点击跨禁区终点重置为新 `start`），并提供 `allow_blackout_in_range: bool` 可选开关兼容放行并过滤场景。
    - `CalendarDisplayMode`：`Month`（6×7 日格）↔ `Year`（4×3 月格）↔ `Decade`（4×3 十年格）三级钻取；支持 `min_date` / `max_date`、`blackout_dates`、`first_day_of_week`（默认周日以对齐 WinUI 3）、`is_today_highlighted`（实心强调圆 vs 选中空心强调环）、`is_out_of_scope_enabled`（前后月淡化 + 点击跨月跳转）、鼠标滚轮翻月与完整键盘导航。
-   - 视觉与图标遵循 ADR-0033（头部左侧可点击月年标题 + 右上角 `Segoe Fluent Icons` / `ShellIcon::ChevronUp`/`ChevronDown` 上下翻页键）与 ADR-0037（`WidgetOutput::clips` 自洽裁剪且按容器高度自适应，零越界）。
+   - 视觉与图标遵循 ADR-0033（头部左侧可点击月年标题 + 右上角 `Segoe Fluent Icons` / `ShellIcon::ChevronUp`/`ChevronDown` 上下翻页键）与 ADR-0042（`WidgetOutput::clips` 自洽裁剪且按容器高度自适应，零越界）。
 3. **WinUI 3 Parity 多状态覆盖**：在 `tools/winui-reference/Catalog.cs` 与 `apps/showcase/src/parity.rs` 中接入真实 `CalendarView` 并扩充多状态参考采集与像素差分（`normal` / `disabled` / `focused` / `today_highlighted` / `multiple_selected` / `blackout` / `year_mode` / `decade_mode`），同时将 `CalendarView` 移出 `stable_shape.rs` 的 `INERT_BY_DESIGN`。
 
 ## Considered Options

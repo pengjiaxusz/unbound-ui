@@ -5,7 +5,7 @@
 //!
 //! 控件支持三级视图钻取（`Month` 6×7 日格 ↔ `Year` 4×3 月格 ↔ `Decade` 4×3 年格）、
 //! `MinDate`/`MaxDate` 边界、`BlackoutDates` 禁选与跨区约束、悬停范围预览、
-//! 滚轮与键盘导航、ADR-0033 平台符号图标回退及 ADR-0037 局部裁剪自洽。
+//! 滚轮与键盘导航、ADR-0033 平台符号图标回退及 ADR-0042 局部裁剪自洽。
 
 use accesskit::Role;
 use unbound_a11y::A11yNode;
@@ -1462,7 +1462,7 @@ impl UiWidget for DatePickerDesc {
     }
 }
 
-/// 发射正式 `CalendarView` 单一真源控件（含完整文本塑形、ADR-0033 符号回退与 ADR-0037 局部裁剪）。
+/// 发射正式 `CalendarView` 单一真源控件（含完整文本塑形、ADR-0033 符号回退与 ADR-0042 局部裁剪）。
 #[must_use]
 pub fn emit_calendar_view(
     node: u64,
@@ -1489,7 +1489,7 @@ pub fn emit_calendar_view(
         z + 1,
     ));
 
-    // ADR-0037：为所有内部内容注册自洽局部 AABB 裁剪节点，确保极端尺寸下零视觉溢出。
+    // ADR-0042：为所有内部内容注册自洽局部 AABB 裁剪节点，确保极端尺寸下零视觉溢出。
     let clip_idx = out.push_clip(GpuClipNode::from_aabb(rect.to_min_max_array()));
     let content_start = out.primitives.len();
 
@@ -2546,7 +2546,7 @@ mod tests {
         });
         assert!(
             !output.clips.is_empty(),
-            "CalendarView must emit local clip node per ADR-0037"
+            "CalendarView must emit local clip node per ADR-0042"
         );
         let a11y = output.a11y.expect("reachable");
         assert_eq!(a11y.role, Role::Grid);

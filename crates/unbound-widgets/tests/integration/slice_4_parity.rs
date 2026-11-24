@@ -211,12 +211,12 @@ fn calendar_view_normal_and_disabled_states() {
             state
         };
 
-        // 1. normal 态校验：真实 emit_calendar_view 渲染选中空心强调环与 ADR-0037 局部裁剪节点
+        // 1. normal 态校验：真实 emit_calendar_view 渲染选中空心强调环与 ADR-0042 局部裁剪节点
         let normal_state = make_base_state(false);
         let normal_out = emit_calendar_view(1, &desc, &normal_state, ControlState::default(), text_ctx);
         assert!(
             !normal_out.clips.is_empty(),
-            "CalendarView must register an ADR-0037 local clip node"
+            "CalendarView must register an ADR-0042 local clip node"
         );
         assert!(
             normal_out.primitives.iter().any(|p| p.clip_idx == 0),

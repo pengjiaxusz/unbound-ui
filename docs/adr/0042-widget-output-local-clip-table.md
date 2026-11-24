@@ -1,4 +1,4 @@
-# ADR-0037: `WidgetOutput` 局部裁剪表与复合滚动控件自洽裁剪契约
+# ADR-0042: `WidgetOutput` 局部裁剪表与复合滚动控件自洽裁剪契约
 
 Status: accepted
 

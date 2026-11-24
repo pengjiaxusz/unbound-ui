@@ -71,7 +71,7 @@
 | **TreeView** | Collections | `TreeView` | `tree_view.rs` | `已一致`（ADR-0024 新增 `TreeViewDensity::Compact` 28px 紧凑档位、`TreeRowIcon` 矢量/外部纹理双通道图标槽、懒加载三态与 `ExpandRequested`、以及 `occurrence_key` / `logical_id` 隔离；默认保持 WinUI 36px） | 已接入批量差分（实机采集待 GPU） |
 | **ListView** | Collections | `ListView` | `virtual_views.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **FlipView** | Collections | `FlipView` | `carousel.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
-| **CalendarView / CalendarDatePicker** | Date & Time | `CalendarView` / `CalendarDatePicker` | `date_picker.rs` / `calendar_date_picker.rs` | `已一致`：`CalendarView` 已移除 `slot_fixture` 静态假人并直连真实单一真源控件（ADR-0038），`CalendarDatePicker` 为收起触发器 + 弹层 | 已接入批量差分并扩展 `CalendarView` 多状态覆盖（`normal`/`disabled`/`focused`/`multiple_selected`/`blackout`/`year_mode`/`decade_mode`，另含无头 `today_highlighted`） |
+| **CalendarView / CalendarDatePicker** | Date & Time | `CalendarView` / `CalendarDatePicker` | `date_picker.rs` / `calendar_date_picker.rs` | `已一致`：`CalendarView` 已移除 `slot_fixture` 静态假人并直连真实单一真源控件（ADR-0043），`CalendarDatePicker` 为收起触发器 + 弹层 | 已接入批量差分并扩展 `CalendarView` 多状态覆盖（`normal`/`disabled`/`focused`/`multiple_selected`/`blackout`/`year_mode`/`decade_mode`，另含无头 `today_highlighted`） |
 | **TimePicker** | Date & Time | `TimePicker` | `time_picker.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |
 | **PersonPicture** | Media & Visual | `PersonPicture` / `AvatarGroup` | `avatar.rs` | `已一致`（`AvatarGroup` 为多头像叠放组） | 已接入批量差分（实机采集待 GPU） |
 | **Image** | Media & Visual | `Image` | `image.rs` | `已一致` | 已接入批量差分（实机采集待 GPU） |

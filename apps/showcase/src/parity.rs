@@ -3633,7 +3633,7 @@ fn emit_case(
             fixture.total_size
         }
         "CalendarView" => {
-            // 直连真实单一真源控件 emit_calendar_view（ADR-0038），自带 ADR-0037 局部裁剪，
+            // 直连真实单一真源控件 emit_calendar_view（ADR-0043），自带 ADR-0042 局部裁剪，
             // 不再使用 slot_fixture 静态假人或外挂手工裁剪节点。
             let w = if rect.width() > 0.0 {
                 rect.width()
@@ -4567,7 +4567,7 @@ mod tests {
             );
             assert!(
                 !scene.clips.is_empty(),
-                "CalendarView state '{state}' must emit ADR-0037 local clip node"
+                "CalendarView state '{state}' must emit ADR-0042 local clip node"
             );
         }
     }
