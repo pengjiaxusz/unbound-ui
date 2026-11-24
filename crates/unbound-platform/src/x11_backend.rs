@@ -500,6 +500,7 @@ struct X11ToplevelEntry {
     pending_events: Vec<PlatformEvent>,
     cursor_local: (f64, f64),
     last_pointer_root: (i16, i16),
+    a11y: crate::a11y_platform::PlatformA11y,
 }
 
 struct X11PopupEntry {
@@ -837,6 +838,11 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             Extent::new(u32::from(width), u32::from(height)),
             PresentWaitPolicy::from_extensions(&[]),
         );
+        let a11y_wake = wake_signal.clone();
+        let a11y = crate::a11y_platform::PlatformA11y::for_linux(
+            u64::from(xid),
+            Some(Arc::new(move || a11y_wake.signal())),
+        );
         Ok(X11ToplevelEntry {
             xid,
             native_window,
@@ -847,6 +853,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             pending_events: Vec::new(),
             cursor_local: (0.0, 0.0),
             last_pointer_root: (0, 0),
+            a11y,
         })
     };
 
@@ -899,6 +906,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 }
                 X11Event::FocusIn(ev) => {
                     if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.event) {
+                        entry.a11y.set_focus(true);
                         entry.pending_events.push(PlatformEvent::Focused(true));
                         let _ = conn.convert_selection(
                             entry.xid,
@@ -911,6 +919,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 }
                 X11Event::FocusOut(ev) => {
                     if let Some(entry) = windows.iter_mut().find(|w| w.xid == ev.event) {
+                        entry.a11y.set_focus(false);
                         entry.pending_events.push(PlatformEvent::Focused(false));
                     }
                 }
@@ -1568,6 +1577,25 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             let redraw = entry.shared.redraw_requested.swap(false, Ordering::AcqRel);
             let pacer_due = entry.state.pacer.should_render(frame_now);
             if redraw || pacer_due {
+                let rect = entry.native_window.client_rect_on_screen();
+                entry
+                    .a11y
+                    .set_window_bounds(crate::a11y_linux::A11yWindowBounds::new(
+                        f64::from(rect.x),
+                        f64::from(rect.y),
+                        f64::from(rect.width),
+                        f64::from(rect.height),
+                    ));
+                if crate::a11y_platform::pump_platform_a11y(
+                    &mut app,
+                    &mut entry.a11y,
+                    &mut entry.state,
+                    &entry.native_window,
+                ) == Flow::Exit
+                {
+                    exit_requested = true;
+                    break;
+                }
                 if app.frame(&mut entry.state, &entry.native_window) == Flow::Exit {
                     exit_requested = true;
                     break;

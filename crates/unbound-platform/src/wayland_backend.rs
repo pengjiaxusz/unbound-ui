@@ -565,6 +565,7 @@ struct ToplevelEntry {
     csd_edge_active: bool,
     pending_events: Vec<PlatformEvent>,
     cursor_logical: (f64, f64),
+    a11y: crate::a11y_platform::PlatformA11y,
 }
 
 /// 越界原生弹出窗（`xdg_popup`）运行时条目。
@@ -695,6 +696,11 @@ impl WaylandState {
         state.scale_factor = init_scale;
 
         self.surface_to_window.insert(surface_proto_id, id);
+        let a11y_wake = self.wake_signal.clone();
+        let a11y = crate::a11y_platform::PlatformA11y::for_linux(
+            id as u64,
+            Some(Arc::new(move || a11y_wake.signal())),
+        );
         self.windows.push(ToplevelEntry {
             id,
             sctk_window,
@@ -708,6 +714,7 @@ impl WaylandState {
             csd_edge_active: false,
             pending_events: Vec::new(),
             cursor_logical: (0.0, 0.0),
+            a11y,
         });
         Ok(self.windows.len() - 1)
     }
@@ -1518,6 +1525,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                 let proto_id = surface.id().protocol_id();
                 state.focused_surface_id = Some(proto_id);
                 if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                    entry.a11y.set_focus(true);
                     entry.pending_events.push(PlatformEvent::Focused(true));
                 }
             }
@@ -1533,6 +1541,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                     if let Some(ev) = ime_cancel {
                         entry.pending_events.push(PlatformEvent::Ime(ev));
                     }
+                    entry.a11y.set_focus(false);
                     entry.pending_events.push(PlatformEvent::Focused(false));
                 }
             }
@@ -2287,6 +2296,25 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     wl.windows[idx].throttle.on_frame_requested(frame_now);
                 }
                 let entry = &mut wl.windows[idx];
+                let sz = entry.native_window.inner_size();
+                entry
+                    .a11y
+                    .set_window_bounds(crate::a11y_linux::A11yWindowBounds::new(
+                        0.0,
+                        0.0,
+                        f64::from(sz.width),
+                        f64::from(sz.height),
+                    ));
+                if crate::a11y_platform::pump_platform_a11y(
+                    &mut app,
+                    &mut entry.a11y,
+                    &mut entry.state,
+                    &entry.native_window,
+                ) == Flow::Exit
+                {
+                    wl.exit_requested = true;
+                    break;
+                }
                 if app.frame(&mut entry.state, &entry.native_window) == Flow::Exit {
                     wl.exit_requested = true;
                     break;

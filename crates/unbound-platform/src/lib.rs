@@ -19,6 +19,8 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod a11y_bridge;
+pub mod a11y_linux;
+pub mod a11y_platform;
 pub mod a11y_win32;
 pub mod backend;
 pub mod clipboard;
@@ -52,6 +54,8 @@ pub mod windows_build;
 pub mod x11_backend;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
+pub use a11y_linux::{A11yWindowBounds, LinuxA11y};
+pub use a11y_platform::PlatformA11y;
 pub use a11y_win32::Win32A11y;
 pub use backend::{Flow, PlatformApp, PlatformWindow};
 pub use clipboard::{
