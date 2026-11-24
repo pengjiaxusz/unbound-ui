@@ -1130,7 +1130,7 @@ impl VideoAsyncStagingRing {
             let pre_compute = [
                 video_image_barrier(
                     imported.image,
-                    vk::ImageLayout::UNDEFINED,
+                    vk::ImageLayout::GENERAL,
                     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                     vk::PipelineStageFlags2::TOP_OF_PIPE,
                     vk::AccessFlags2::NONE,
@@ -1477,10 +1477,10 @@ impl VideoSurfaceManager {
             &mut surface.target_rgba,
         );
         if submit_result.is_ok() {
-            // 零拷贝导入图像已提交至计算管线，推入延迟销毁队列等待在飞帧退役。
+            // 零拷贝导入图像在当前帧渲染前提交至计算管线，须多保留一帧待本帧围栏退役。
             self.deferred_destroys.defer(
                 current_frame,
-                frames_in_flight,
+                frames_in_flight.saturating_add(1),
                 VideoDeferredResource::Imported(imported),
             );
             Ok(())
@@ -1668,8 +1668,27 @@ fn import_win32_external_video_image(
             .map_err(GpuError::from)?;
 
         let requirements = device.get_image_memory_requirements(image);
+        let mut allowed_type_bits = requirements.memory_type_bits;
+        let is_opaque = matches!(
+            handle_type,
+            vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32
+                | vk::ExternalMemoryHandleTypeFlags::OPAQUE_WIN32_KMT
+        );
+        if !is_opaque {
+            let ext_win32 = ash::khr::external_memory_win32::Device::new(&gpu.instance, device);
+            let mut handle_props = vk::MemoryWin32HandlePropertiesKHR::default();
+            if let Err(err) = ext_win32.get_memory_win32_handle_properties(
+                handle_type,
+                handle.raw_handle as vk::HANDLE,
+                &mut handle_props,
+            ) {
+                device.destroy_image(image, None);
+                return Err(GpuError::from(err));
+            }
+            allowed_type_bits &= handle_props.memory_type_bits;
+        }
         let Some(type_index) =
-            gpu.memory_type_index_for_bits(requirements.memory_type_bits, MemoryKind::DeviceLocal)
+            gpu.memory_type_index_for_bits(allowed_type_bits, MemoryKind::DeviceLocal)
         else {
             device.destroy_image(image, None);
             return Err(GpuError::Allocation(
@@ -1805,7 +1824,7 @@ fn pq_eotf_ch(e: f32) -> f32 {
 fn hlg_oetf_inv_ch(e: f32) -> f32 {
     const A: f32 = 0.178_832_77;
     const B: f32 = 0.284_668_92;
-    const C: f32 = 0.559_910_73;
+    const C: f32 = 0.559_910_7;
     if e <= 0.5 {
         (e * e) / 3.0
     } else {
