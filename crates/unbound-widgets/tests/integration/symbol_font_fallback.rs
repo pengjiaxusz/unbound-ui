@@ -16,7 +16,7 @@ use unbound_widgets::slot_fixture::{
     CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH,
 };
 use unbound_widgets::{
-    emit_rating, emit_rating_with_text, CalendarDatePickerDesc, CalendarDatePickerState,
+    emit_rating, render_rating_with_text, CalendarDatePickerDesc, CalendarDatePickerState,
     ControlState, NaiveDate, PointerPhase, RatingDesc, TextCtx, UiWidget, WidgetOutput,
     CALENDAR_DATE_PICKER_HEIGHT,
 };
@@ -289,7 +289,7 @@ fn rating_emits_star_vectors_and_keeps_24_state_invariant() {
         let mut with_text_counts = Vec::with_capacity(24);
         for control in all_control_states() {
             let direct = emit_rating(1, &desc, control);
-            let with_text = emit_rating_with_text(1, &desc, control, text_ctx);
+            let with_text = render_rating_with_text(1, &desc, control, text_ctx);
 
             assert_payload_indices_in_bounds(&direct);
             assert_payload_indices_in_bounds(&with_text);

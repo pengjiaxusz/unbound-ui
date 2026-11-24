@@ -686,7 +686,7 @@ pub use radio::{
     reduce_radio_group, RadioDesc, RadioGroupDesc, RadioGroupKey, RadioGroupOutcome, RadioTokens,
 };
 pub use rating::{
-    emit_rating, emit_rating_with_text, RatingDesc, RatingState, RATING_STAR_FILLED_GLYPH,
+    emit_rating, render_rating_with_text, RatingDesc, RatingState, RATING_STAR_FILLED_GLYPH,
     RATING_STAR_OUTLINE_GLYPH,
 };
 pub use rich_text::{

@@ -68,7 +68,7 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
 /// 输出结构稳定的 5 星评分控件，优先使用平台感知符号字体（`U+E735` / `U+E734`），
 /// 当无可用符号字体时自动回退 [`ShellIcon::StarFilled`] / [`ShellIcon::Star`] 矢量星形。
 #[must_use]
-pub fn emit_rating_with_text(
+pub fn render_rating_with_text(
     node: u64,
     desc: &RatingDesc,
     state: ControlState,
