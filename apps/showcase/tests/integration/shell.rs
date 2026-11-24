@@ -2213,24 +2213,17 @@ fn the_component_gallery_emits_every_catalog_widget() {
     use unbound_widgets::WidgetCatalogId;
 
     let mut app = app();
-    app.navigate(PageId::Components);
-    app.rebuild(VIEWPORT);
-
-    let content = app.layout.content;
-    let page_height = app.page_layout().expect("page layout").content_height;
-    let max_scroll = (page_height - content.size.y + 48.0).max(0.0);
-    let step = (content.size.y * 0.35).max(120.0);
-
     let mut seen = rustc_hash::FxHashSet::default();
-    let mut scroll = 0.0;
-    loop {
-        app.state.content_scroll = scroll;
+    for &id in WidgetCatalogId::ALL {
+        app.navigate_to_component(id);
         app.rebuild(VIEWPORT);
+        let page_layout = app.page_layout().expect("page layout");
+        assert_eq!(
+            page_layout.cards.len(),
+            1,
+            "single control detail page must render exactly 1 card for {id:?}"
+        );
         seen.extend(app.emitted_widgets().iter().copied());
-        if scroll >= max_scroll {
-            break;
-        }
-        scroll = (scroll + step).min(max_scroll);
     }
 
     let missing: Vec<&str> = WidgetCatalogId::ALL
@@ -3637,4 +3630,116 @@ fn nav_view_scrollbar_supports_hover_expand_track_page_thumb_drag_and_compact_au
             .any(|r| r.node == NAV_SCROLLBAR_THUMB_NODE || r.node == NAV_SCROLLBAR_TRACK_NODE),
         "leaving compact collapsed showcase pane must hide scrollbar again"
     );
+}
+
+
+#[test]
+fn home_landing_uses_frameless_template_and_exposes_all_10_categories() {
+    use showcase::pages::PageTemplate;
+    use unbound_widgets::ControlCategory;
+
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.rebuild(VIEWPORT);
+    let layout = app.page_layout().expect("home page layout");
+    assert_eq!(layout.template, PageTemplate::Landing);
+    assert!(layout.cards.is_empty(), "home landing must not use ExampleCard chrome");
+
+    app.navigate_to_category(Some(ControlCategory::BasicInput));
+    app.rebuild(VIEWPORT);
+    let cat_layout = app.page_layout().expect("category hub layout");
+    assert_eq!(cat_layout.template, PageTemplate::CategoryHub);
+    assert!(cat_layout.cards.is_empty());
+    assert_eq!(app.state.active_category, Some(ControlCategory::BasicInput));
+}
+
+#[test]
+fn category_hub_and_single_control_detail_track_recents_and_favorites() {
+    use unbound_widgets::{ControlClass, WidgetCatalogId};
+
+    let mut app = app();
+    app.navigate_to_category(None);
+    app.state.control_origin_filter = Some(ControlClass::Exclusive);
+    let filtered = showcase::pages::components::filtered_hub_controls(&app.state);
+    assert_eq!(filtered.len(), unbound_widgets::EXCLUSIVE_COUNT);
+
+    app.navigate_to_component(WidgetCatalogId::NodeGraph);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.active_component, Some(WidgetCatalogId::NodeGraph));
+    assert_eq!(app.state.recent_controls.front(), Some(&WidgetCatalogId::NodeGraph));
+    app.state.toggle_favorite(WidgetCatalogId::NodeGraph);
+    assert!(app.state.is_favorite(WidgetCatalogId::NodeGraph));
+}
+
+#[test]
+fn parity_inspector_uses_inspector_template_and_supports_view_modes() {
+    use showcase::pages::parity_report::{
+        ParityCase, ParityReport, ParityStatus, ParityStatusFilter, ParityViewMode,
+    };
+    use showcase::pages::PageTemplate;
+
+    let mut app = app();
+    app.state.demo.parity_report = Some(ParityReport {
+        cases: vec![
+            ParityCase {
+                name: "Button_normal_light".into(),
+                control: "Button".into(),
+                state: "normal".into(),
+                theme: "light".into(),
+                backdrop: "solid".into(),
+                mean_de: 0.3,
+                p95_de: 0.8,
+                p99_de: 1.0,
+                over_limit_ratio: 0.0,
+                intrinsic_matches: true,
+                cache_hit: true,
+                bbox_delta: [0; 4],
+                status: ParityStatus::Pass,
+                images: [None; 3],
+                image_keys: [0; 3],
+            },
+            ParityCase {
+                name: "Slider_hover_dark".into(),
+                control: "Slider".into(),
+                state: "hover".into(),
+                theme: "dark".into(),
+                backdrop: "mica".into(),
+                mean_de: 5.2,
+                p95_de: 9.4,
+                p99_de: 11.0,
+                over_limit_ratio: 0.12,
+                intrinsic_matches: true,
+                cache_hit: false,
+                bbox_delta: [0; 4],
+                status: ParityStatus::Fail,
+                images: [None; 3],
+                image_keys: [0; 3],
+            },
+        ],
+        passed: 1,
+        failed: 1,
+        invalid: 0,
+        exempt: 0,
+        cache_hits: 1,
+        error: None,
+        hint: String::new(),
+    });
+    app.navigate(PageId::Parity);
+    app.rebuild(VIEWPORT);
+
+    let layout = app.page_layout().expect("parity layout");
+    assert_eq!(layout.template, PageTemplate::Inspector);
+    assert_eq!(app.state.parity_inspector.status_filter, ParityStatusFilter::Issues);
+    assert_eq!(app.state.parity_inspector.view_mode, ParityViewMode::Curtain);
+
+    let stage = app
+        .state
+        .parity_inspector
+        .curtain_stage_rect
+        .get()
+        .expect("curtain stage rect");
+    let target_x = stage.origin.x + stage.size.x * 0.72;
+    let target_y = stage.origin.y + stage.size.y * 0.5;
+    app.pointer_move(unbound_math::Vec2::new(target_x, target_y));
+    assert!((app.state.parity_inspector.curtain_ratio - 0.72).abs() < 0.02);
 }

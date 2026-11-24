@@ -2113,6 +2113,55 @@ impl GalleryApp {
             }
             return;
         }
+        if self.state.active_page == PageId::Parity && !modifiers.control {
+            match key {
+                PlatformKey::Named(name) if name == "ArrowDown" => {
+                    if let Some(report) = self.state.demo.parity_report.as_ref() {
+                        if self.state.parity_inspector.step_selection(report, self.state.search.text(), 1) {
+                            self.state.bump();
+                        }
+                    }
+                    return;
+                }
+                PlatformKey::Named(name) if name == "ArrowUp" => {
+                    if let Some(report) = self.state.demo.parity_report.as_ref() {
+                        if self.state.parity_inspector.step_selection(report, self.state.search.text(), -1) {
+                            self.state.bump();
+                        }
+                    }
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "1" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::SideBySide;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "2" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::Curtain;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "3" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::Overlay;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == " " || ch.eq_ignore_ascii_case("l") => {
+                    if self.state.parity_inspector.view_mode
+                        == pages::parity_report::ParityViewMode::Curtain
+                    {
+                        self.state.parity_inspector.curtain_locked =
+                            !self.state.parity_inspector.curtain_locked;
+                        self.state.bump();
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
         if modifiers.control {
             if let PlatformKey::Character(text) = key {
                 if text.eq_ignore_ascii_case("k") {
