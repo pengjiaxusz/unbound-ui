@@ -3639,7 +3639,6 @@ fn nav_view_scrollbar_supports_hover_expand_track_page_thumb_drag_and_compact_au
     );
 }
 
-
 #[test]
 fn home_landing_uses_frameless_template_and_exposes_all_10_categories() {
     use showcase::pages::PageTemplate;
@@ -3650,7 +3649,10 @@ fn home_landing_uses_frameless_template_and_exposes_all_10_categories() {
     app.rebuild(VIEWPORT);
     let layout = app.page_layout().expect("home page layout");
     assert_eq!(layout.template, PageTemplate::Landing);
-    assert!(layout.cards.is_empty(), "home landing must not use ExampleCard chrome");
+    assert!(
+        layout.cards.is_empty(),
+        "home landing must not use ExampleCard chrome"
+    );
 
     app.navigate_to_category(Some(ControlCategory::BasicInput));
     app.rebuild(VIEWPORT);
@@ -3673,7 +3675,10 @@ fn category_hub_and_single_control_detail_track_recents_and_favorites() {
     app.navigate_to_component(WidgetCatalogId::NodeGraph);
     app.rebuild(VIEWPORT);
     assert_eq!(app.state.active_component, Some(WidgetCatalogId::NodeGraph));
-    assert_eq!(app.state.recent_controls.front(), Some(&WidgetCatalogId::NodeGraph));
+    assert_eq!(
+        app.state.recent_controls.front(),
+        Some(&WidgetCatalogId::NodeGraph)
+    );
     app.state.toggle_favorite(WidgetCatalogId::NodeGraph);
     assert!(app.state.is_favorite(WidgetCatalogId::NodeGraph));
 }
@@ -3736,8 +3741,14 @@ fn parity_inspector_uses_inspector_template_and_supports_view_modes() {
 
     let layout = app.page_layout().expect("parity layout");
     assert_eq!(layout.template, PageTemplate::Inspector);
-    assert_eq!(app.state.parity_inspector.status_filter, ParityStatusFilter::Issues);
-    assert_eq!(app.state.parity_inspector.view_mode, ParityViewMode::Curtain);
+    assert_eq!(
+        app.state.parity_inspector.status_filter,
+        ParityStatusFilter::Issues
+    );
+    assert_eq!(
+        app.state.parity_inspector.view_mode,
+        ParityViewMode::Curtain
+    );
 
     let stage = app
         .state

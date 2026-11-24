@@ -147,7 +147,9 @@ pub fn landing_height(width: f32, state: &GalleryState) -> f32 {
         1
     };
     let cap_rows = CAPABILITIES.len().div_ceil(cap_cols);
-    let cap_h = SECTION_HEAD_H + cap_rows as f32 * CAP_CARD_H + (cap_rows.saturating_sub(1)) as f32 * GRID_GAP;
+    let cap_h = SECTION_HEAD_H
+        + cap_rows as f32 * CAP_CARD_H
+        + (cap_rows.saturating_sub(1)) as f32 * GRID_GAP;
 
     let quick_count = quick_access_items(state).len().max(1);
     let q_cols = quick_columns(width);
@@ -156,11 +158,14 @@ pub fn landing_height(width: f32, state: &GalleryState) -> f32 {
     } else {
         quick_count.div_ceil(q_cols)
     };
-    let quick_h = SECTION_HEAD_H + q_rows as f32 * QUICK_CARD_H + (q_rows.saturating_sub(1)) as f32 * GRID_GAP;
+    let quick_h = SECTION_HEAD_H
+        + q_rows as f32 * QUICK_CARD_H
+        + (q_rows.saturating_sub(1)) as f32 * GRID_GAP;
 
     let c_cols = category_columns(width);
     let c_rows = ControlCategory::ALL.len().div_ceil(c_cols);
-    let cat_h = SECTION_HEAD_H + c_rows as f32 * CAT_CARD_H + (c_rows.saturating_sub(1)) as f32 * GRID_GAP;
+    let cat_h =
+        SECTION_HEAD_H + c_rows as f32 * CAT_CARD_H + (c_rows.saturating_sub(1)) as f32 * GRID_GAP;
 
     HERO_HEIGHT + SECTION_GAP + cap_h + SECTION_GAP + quick_h + SECTION_GAP + cat_h + 16.0
 }
@@ -192,7 +197,11 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
     draw_section_heading(
         canvas,
         Rect::new(body.origin.x, y, width, SECTION_HEAD_H),
-        if zh { "引擎核心能力" } else { "Engine Highlights" },
+        if zh {
+            "引擎核心能力"
+        } else {
+            "Engine Highlights"
+        },
         if zh {
             "直接进入 Unbound UI 的底层引擎实验室"
         } else {
@@ -218,21 +227,38 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             CAP_CARD_H,
         );
         let (title, subtitle) = localized_capability(index, state.locale);
-        let node = target::id(Target::Demo(PageId::Home.index() as u8, 1, index as u16 + 1));
+        let node = target::id(Target::Demo(
+            PageId::Home.index() as u8,
+            1,
+            index as u16 + 1,
+        ));
         widgets::feature_card(canvas, node, cell, *icon, title, subtitle, title, index);
     }
     let cap_rows = CAPABILITIES.len().div_ceil(cap_cols);
-    y += cap_rows as f32 * CAP_CARD_H + (cap_rows.saturating_sub(1)) as f32 * GRID_GAP + SECTION_GAP;
+    y +=
+        cap_rows as f32 * CAP_CARD_H + (cap_rows.saturating_sub(1)) as f32 * GRID_GAP + SECTION_GAP;
 
     // 3. Quick Access（Recent | Favorites 快捷访问区）
-    draw_quick_access_header(canvas, state, Rect::new(body.origin.x, y, width, SECTION_HEAD_H), zh);
+    draw_quick_access_header(
+        canvas,
+        state,
+        Rect::new(body.origin.x, y, width, SECTION_HEAD_H),
+        zh,
+    );
     y += SECTION_HEAD_H;
     let items = quick_access_items(state);
     let q_cols = quick_columns(width);
     if items.is_empty() {
         let palette = *canvas.palette;
         let empty_rect = Rect::new(body.origin.x, y, width, QUICK_CARD_H);
-        canvas.rect(empty_rect, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
+        canvas.rect(
+            empty_rect,
+            10.0,
+            palette.card_bg,
+            palette.card_border,
+            1.0,
+            0.0,
+        );
         canvas.text(
             if zh {
                 "暂无收藏控件 — 在任意分类索引或控件详情页点击星标即可收藏到这里。"
@@ -260,7 +286,9 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             super::components::draw_control_tile_demo(canvas, state, cell, comp_id, PageId::Home);
         }
         let q_rows = items.len().div_ceil(q_cols);
-        y += q_rows as f32 * QUICK_CARD_H + (q_rows.saturating_sub(1)) as f32 * GRID_GAP + SECTION_GAP;
+        y += q_rows as f32 * QUICK_CARD_H
+            + (q_rows.saturating_sub(1)) as f32 * GRID_GAP
+            + SECTION_GAP;
     }
 
     // 4. Explore by Category（10 大功能分类导览网格）
@@ -292,7 +320,11 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             c_w,
             CAT_CARD_H,
         );
-        let node = target::id(Target::Demo(PageId::Home.index() as u8, 3, cat.index() as u16));
+        let node = target::id(Target::Demo(
+            PageId::Home.index() as u8,
+            3,
+            cat.index() as u16,
+        ));
         let visual = canvas.visual(node, false);
         let bg = if visual.is_pressed() || visual.is_hovered() {
             palette.primary_soft
@@ -309,7 +341,13 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
         let (accent_fg, accent_bg) = category_accent(palette, idx);
         let icon_box = Rect::new(cell.origin.x + 12.0, cell.origin.y + 14.0, 36.0, 36.0);
         canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-        widgets::icon(canvas, category_widget_icon(cat), icon_box, accent_fg, accent_bg);
+        widgets::icon(
+            canvas,
+            category_widget_icon(cat),
+            icon_box,
+            accent_fg,
+            accent_bg,
+        );
 
         let title = category_localized_label(cat, state.locale);
         let count_text = format!("{}", cat.count());
@@ -347,7 +385,15 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             10.5,
             palette.text_muted,
         );
-        canvas.control(node, cell, Role::Link, title, CursorKind::Pointer, false, false);
+        canvas.control(
+            node,
+            cell,
+            Role::Link,
+            title,
+            CursorKind::Pointer,
+            false,
+            false,
+        );
     }
 }
 
@@ -382,9 +428,17 @@ fn draw_section_heading(canvas: &mut Canvas<'_>, rect: Rect, title: &str, subtit
 fn draw_quick_access_header(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, zh: bool) {
     let palette = *canvas.palette;
     let heading = if state.home_quick_tab == 1 {
-        if zh { "已收藏控件" } else { "Favorite Controls" }
+        if zh {
+            "已收藏控件"
+        } else {
+            "Favorite Controls"
+        }
     } else if state.recent_controls.is_empty() {
-        if zh { "精选控件入口" } else { "Featured Controls" }
+        if zh {
+            "精选控件入口"
+        } else {
+            "Featured Controls"
+        }
     } else if zh {
         "最近访问"
     } else {
@@ -410,7 +464,11 @@ fn draw_quick_access_header(canvas: &mut Canvas<'_>, state: &GalleryState, rect:
         x -= w;
         let pill = Rect::new(x, rect.origin.y, w, 24.0);
         let active = state.home_quick_tab == tab_idx;
-        let node = target::id(Target::Demo(PageId::Home.index() as u8, 2, u16::from(tab_idx)));
+        let node = target::id(Target::Demo(
+            PageId::Home.index() as u8,
+            2,
+            u16::from(tab_idx),
+        ));
         let visual = canvas.visual(node, active);
         let fill = if active {
             palette.primary
@@ -419,10 +477,29 @@ fn draw_quick_access_header(canvas: &mut Canvas<'_>, state: &GalleryState, rect:
         } else {
             palette.card_bg
         };
-        let fg = if active { palette.on_primary } else { palette.text };
-        canvas.rect(pill, 12.0, fill, palette.card_border, if active { 0.0 } else { 1.0 }, 0.0);
+        let fg = if active {
+            palette.on_primary
+        } else {
+            palette.text
+        };
+        canvas.rect(
+            pill,
+            12.0,
+            fill,
+            palette.card_border,
+            if active { 0.0 } else { 1.0 },
+            0.0,
+        );
         canvas.text(label, pill, 11.0, fg, AlignX::Center, AlignY::Center);
-        canvas.control(node, pill, Role::Tab, label, CursorKind::Pointer, active, false);
+        canvas.control(
+            node,
+            pill,
+            Role::Tab,
+            label,
+            CursorKind::Pointer,
+            active,
+            false,
+        );
         x -= 6.0;
     }
 }
@@ -462,9 +539,18 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
     for index in 0..4 {
         let f = index as f32;
         canvas.curve(
-            [rect.origin.x + rect.size.x * (0.56 + f * 0.03), rect.max().y + 8.0],
-            [rect.origin.x + rect.size.x * 0.84, rect.origin.y + rect.size.y * 0.52 + f * 14.0],
-            [rect.max().x + 14.0, rect.origin.y + rect.size.y * 0.85 - f * 12.0],
+            [
+                rect.origin.x + rect.size.x * (0.56 + f * 0.03),
+                rect.max().y + 8.0,
+            ],
+            [
+                rect.origin.x + rect.size.x * 0.84,
+                rect.origin.y + rect.size.y * 0.52 + f * 14.0,
+            ],
+            [
+                rect.max().x + 14.0,
+                rect.origin.y + rect.size.y * 0.85 - f * 12.0,
+            ],
             2.0,
             palette.on_hero,
         );
@@ -478,7 +564,12 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
     } else {
         rect.size.x * 0.60
     };
-    let left = Rect::new(rect.origin.x + pad_x, rect.origin.y + pad_y, left_w, rect.size.y - pad_y * 2.0);
+    let left = Rect::new(
+        rect.origin.x + pad_x,
+        rect.origin.y + pad_y,
+        left_w,
+        rect.size.y - pad_y * 2.0,
+    );
 
     let badge_text = "UNBOUND UI · VULKAN 1.3";
     let badge_w = canvas.labels.measure(badge_text, 10.0).x + 18.0;
@@ -506,7 +597,11 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
     );
 
     let cta_y = left.max().y - 34.0;
-    let primary_label = if zh { "浏览全部 133 控件" } else { "Browse 133 Controls" };
+    let primary_label = if zh {
+        "浏览全部 133 控件"
+    } else {
+        "Browse 133 Controls"
+    };
     let primary_w = (canvas.labels.measure(primary_label, 12.0).x + 28.0).max(150.0);
     let primary = Rect::new(left.origin.x, cta_y, primary_w, 34.0);
     widgets::button(
@@ -517,7 +612,11 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         ButtonVariant::OnHero,
         true,
     );
-    let secondary_label = if zh { "打开无限画布" } else { "Open Canvas Studio" };
+    let secondary_label = if zh {
+        "打开无限画布"
+    } else {
+        "Open Canvas Studio"
+    };
     let secondary_w = (canvas.labels.measure(secondary_label, 12.0).x + 28.0).max(142.0);
     let secondary = Rect::new(primary.max().x + 10.0, cta_y, secondary_w, 34.0);
     widgets::button(
@@ -540,8 +639,17 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         );
         canvas.rect(stat, 12.0, palette.hero_scrim, palette.on_hero, 1.0, 0.0);
         canvas.text(
-            if zh { "引擎与控件概览" } else { "Engine & Catalog Pulse" },
-            Rect::new(stat.origin.x + 14.0, stat.origin.y + 12.0, stat.size.x - 28.0, 18.0),
+            if zh {
+                "引擎与控件概览"
+            } else {
+                "Engine & Catalog Pulse"
+            },
+            Rect::new(
+                stat.origin.x + 14.0,
+                stat.origin.y + 12.0,
+                stat.size.x - 28.0,
+                18.0,
+            ),
             12.0,
             palette.on_hero,
             AlignX::Start,
@@ -568,7 +676,12 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         );
         canvas.text(
             &line1,
-            Rect::new(stat.origin.x + 14.0, stat.origin.y + 38.0, stat.size.x - 28.0, 18.0),
+            Rect::new(
+                stat.origin.x + 14.0,
+                stat.origin.y + 38.0,
+                stat.size.x - 28.0,
+                18.0,
+            ),
             12.0,
             palette.on_hero,
             AlignX::Start,
@@ -576,18 +689,32 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         );
         canvas.text(
             &line2,
-            Rect::new(stat.origin.x + 14.0, stat.origin.y + 60.0, stat.size.x - 28.0, 18.0),
+            Rect::new(
+                stat.origin.x + 14.0,
+                stat.origin.y + 60.0,
+                stat.size.x - 28.0,
+                18.0,
+            ),
             10.5,
             palette.on_hero,
             AlignX::Start,
             AlignY::Top,
         );
-        let parity_btn = Rect::new(stat.origin.x + 14.0, stat.max().y - 42.0, stat.size.x - 28.0, 30.0);
+        let parity_btn = Rect::new(
+            stat.origin.x + 14.0,
+            stat.max().y - 42.0,
+            stat.size.x - 28.0,
+            30.0,
+        );
         widgets::button(
             canvas,
             target::id(Target::Demo(PageId::Home.index() as u8, 0, 3)),
             parity_btn,
-            if zh { "打开像素对照检视台 →" } else { "Open Parity Inspector →" },
+            if zh {
+                "打开像素对照检视台 →"
+            } else {
+                "Open Parity Inspector →"
+            },
             ButtonVariant::OnHeroSecondary,
             true,
         );
@@ -613,7 +740,10 @@ pub const fn category_accent(palette: crate::gallery::Palette, index: usize) -> 
 
 /// 按来源层级返回徽章配色。
 #[must_use]
-pub const fn origin_badge_colors(palette: crate::gallery::Palette, class: ControlClass) -> (u16, u16) {
+pub const fn origin_badge_colors(
+    palette: crate::gallery::Palette,
+    class: ControlClass,
+) -> (u16, u16) {
     match class {
         ControlClass::Baseline => (palette.primary, palette.primary_soft),
         ControlClass::Toolkit => (palette.success, palette.success_soft),
@@ -694,8 +824,16 @@ pub fn control_index(ctx: &mut DemoCtx<'_, '_>) {
             continue;
         }
         let title = category_localized_label(cat, ctx.state.locale);
-        ctx.canvas.rect(cell, 8.0, palette.card_bg, palette.card_border, 1.0, 0.0);
-        ctx.canvas.text(title, cell, 12.0, palette.text, AlignX::Center, AlignY::Center);
+        ctx.canvas
+            .rect(cell, 8.0, palette.card_bg, palette.card_border, 1.0, 0.0);
+        ctx.canvas.text(
+            title,
+            cell,
+            12.0,
+            palette.text,
+            AlignX::Center,
+            AlignY::Center,
+        );
         ctx.control(idx as u16 + 1, cell, Role::Link, title, false);
     }
 }

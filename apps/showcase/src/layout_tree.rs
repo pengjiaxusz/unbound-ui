@@ -520,7 +520,8 @@ impl ShellTree {
         // 第一遍假设选项面板位于舞台旁。它实际是否并排由引擎决定，而非我们：
         // 若弹性行空间不足，第二遍会将面板折叠到下方。
         //
-        let avail_body_h = (viewport.size.y - TOP_BAR_HEIGHT - PAGE_PAD_TOP - PAGE_PAD_BOTTOM).max(560.0);
+        let avail_body_h =
+            (viewport.size.y - TOP_BAR_HEIGHT - PAGE_PAD_TOP - PAGE_PAD_BOTTOM).max(560.0);
         self.update_page(state, page_width, avail_body_h, false);
         self.last_stats = self.engine.solve(&mut self.world, self.root, viewport.size);
         if self.options_folded() {
@@ -820,7 +821,13 @@ impl ShellTree {
     }
 
     /// 按当前状态刷新页面几何信息。
-    fn update_page(&mut self, state: &GalleryState, page_width: f32, avail_body_h: f32, folded: bool) {
+    fn update_page(
+        &mut self,
+        state: &GalleryState,
+        page_width: f32,
+        avail_body_h: f32,
+        folded: bool,
+    ) {
         let page = state.active_page;
         let template = state.page_template();
 
@@ -831,16 +838,15 @@ impl ShellTree {
             PageTemplate::Workshop => 118.0,
         };
         self.world.node_mut(self.header).desc.height = Dim::px(header_h);
-        self.world.node_mut(self.cards_list).desc.margin.top = if header_h > 0.0 {
-            PAGE_HEAD_GAP
-        } else {
-            0.0
-        };
+        self.world.node_mut(self.cards_list).desc.margin.top =
+            if header_h > 0.0 { PAGE_HEAD_GAP } else { 0.0 };
 
         if let Some(body_node) = self.template_body {
             let body_h = match template {
                 PageTemplate::Landing => crate::pages::home::landing_height(page_width, state),
-                PageTemplate::CategoryHub => crate::pages::components::hub_height(page_width, state),
+                PageTemplate::CategoryHub => {
+                    crate::pages::components::hub_height(page_width, state)
+                }
                 PageTemplate::Inspector => avail_body_h.max(PARITY_STAGE_MIN),
                 PageTemplate::Workshop => 0.0,
             };

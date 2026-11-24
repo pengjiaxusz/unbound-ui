@@ -143,7 +143,6 @@ impl ControlClass {
     }
 }
 
-
 /// 目录控件的 10 个功能分类（展台导航树、分类索引与首页导览的唯一事实源）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ControlCategory {
@@ -253,15 +252,27 @@ impl ControlCategory {
     pub const fn summary(self) -> &'static str {
         match self {
             Self::BasicInput => "Buttons, toggles, sliders, pickers and direct actions.",
-            Self::TextAndForm => "Single/multi-line text, rich editors, schema forms and structured inputs.",
+            Self::TextAndForm => {
+                "Single/multi-line text, rich editors, schema forms and structured inputs."
+            }
             Self::DateAndTime => "Calendar views, date/range pickers and time wheels.",
             Self::CollectionsAndData => "Virtualized lists, grids, trees, data tables and charts.",
-            Self::LayoutAndContainers => "Cards, expanders, split panes, docking and adaptive panels.",
+            Self::LayoutAndContainers => {
+                "Cards, expanders, split panes, docking and adaptive panels."
+            }
             Self::Navigation => "NavigationView, tabs, breadcrumbs, pivots and address bars.",
-            Self::MenusAndToolbars => "Menu bars, context flyouts, command bars and command palette.",
-            Self::DialogsAndOverlays => "Modal dialogs, flyouts, tooltips, teaching tips and toasts.",
-            Self::StatusMediaAndScrolling => "Progress indicators, info bars, avatars, images and scroll views.",
-            Self::CanvasGraphAndDevTools => "Node graphs, curve/gradient editors, timelines, code and terminal.",
+            Self::MenusAndToolbars => {
+                "Menu bars, context flyouts, command bars and command palette."
+            }
+            Self::DialogsAndOverlays => {
+                "Modal dialogs, flyouts, tooltips, teaching tips and toasts."
+            }
+            Self::StatusMediaAndScrolling => {
+                "Progress indicators, info bars, avatars, images and scroll views."
+            }
+            Self::CanvasGraphAndDevTools => {
+                "Node graphs, curve/gradient editors, timelines, code and terminal."
+            }
         }
     }
 

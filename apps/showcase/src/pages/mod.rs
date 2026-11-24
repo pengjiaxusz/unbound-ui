@@ -135,7 +135,6 @@ impl CategoryId {
     }
 }
 
-
 /// 展台页面顶层布局模板（ADR 0035）。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PageTemplate {
@@ -182,16 +181,32 @@ pub const fn category_localized_summary(
         return cat.summary();
     }
     match cat {
-        unbound_widgets::ControlCategory::BasicInput => "按钮、复选、开关、滑块与取色等直接交互控件。",
-        unbound_widgets::ControlCategory::TextAndForm => "单行/多行文本、富文本、自动补全与结构化表单。",
+        unbound_widgets::ControlCategory::BasicInput => {
+            "按钮、复选、开关、滑块与取色等直接交互控件。"
+        }
+        unbound_widgets::ControlCategory::TextAndForm => {
+            "单行/多行文本、富文本、自动补全与结构化表单。"
+        }
         unbound_widgets::ControlCategory::DateAndTime => "月历视图、日期/区间选择与时间滚轮。",
-        unbound_widgets::ControlCategory::CollectionsAndData => "虚拟化列表、网格、树视图、数据表格与图表。",
-        unbound_widgets::ControlCategory::LayoutAndContainers => "卡片容器、折叠面板、分栏与可停靠工作区。",
+        unbound_widgets::ControlCategory::CollectionsAndData => {
+            "虚拟化列表、网格、树视图、数据表格与图表。"
+        }
+        unbound_widgets::ControlCategory::LayoutAndContainers => {
+            "卡片容器、折叠面板、分栏与可停靠工作区。"
+        }
         unbound_widgets::ControlCategory::Navigation => "NavigationView、标签页、面包屑与地址栏。",
-        unbound_widgets::ControlCategory::MenusAndToolbars => "菜单栏、右键菜单、命令栏与全局命令面板。",
-        unbound_widgets::ControlCategory::DialogsAndOverlays => "模态对话框、气泡浮层、工具提示与教学引导。",
-        unbound_widgets::ControlCategory::StatusMediaAndScrolling => "进度条、信息条、头像图片与按需滚动容器。",
-        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => "节点图、曲线/渐变编辑器、时间轴、代码与终端。",
+        unbound_widgets::ControlCategory::MenusAndToolbars => {
+            "菜单栏、右键菜单、命令栏与全局命令面板。"
+        }
+        unbound_widgets::ControlCategory::DialogsAndOverlays => {
+            "模态对话框、气泡浮层、工具提示与教学引导。"
+        }
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => {
+            "进度条、信息条、头像图片与按需滚动容器。"
+        }
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => {
+            "节点图、曲线/渐变编辑器、时间轴、代码与终端。"
+        }
     }
 }
 
@@ -217,10 +232,16 @@ pub const fn category_shell_icon(
         unbound_widgets::ControlCategory::CollectionsAndData => unbound_widgets::ShellIcon::Chart,
         unbound_widgets::ControlCategory::LayoutAndContainers => unbound_widgets::ShellIcon::Grid,
         unbound_widgets::ControlCategory::Navigation => unbound_widgets::ShellIcon::Layers,
-        unbound_widgets::ControlCategory::MenusAndToolbars => unbound_widgets::ShellIcon::ChevronDown,
+        unbound_widgets::ControlCategory::MenusAndToolbars => {
+            unbound_widgets::ShellIcon::ChevronDown
+        }
         unbound_widgets::ControlCategory::DialogsAndOverlays => unbound_widgets::ShellIcon::Dot,
-        unbound_widgets::ControlCategory::StatusMediaAndScrolling => unbound_widgets::ShellIcon::Chart,
-        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => unbound_widgets::ShellIcon::Snap,
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => {
+            unbound_widgets::ShellIcon::Chart
+        }
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => {
+            unbound_widgets::ShellIcon::Snap
+        }
     }
 }
 

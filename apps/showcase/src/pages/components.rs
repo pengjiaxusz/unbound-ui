@@ -1225,7 +1225,6 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     ctx.canvas.widget_output(id, node, &output);
 }
 
-
 // ============================================================================
 // 分类索引页（Category Hub）与直观控件卡片（ADR 0035）
 // ============================================================================
@@ -1315,7 +1314,13 @@ pub fn draw_control_tile(
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
     let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
     canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-    crate::widgets::icon(canvas, super::home::category_widget_icon(cat), icon_box, accent_fg, accent_bg);
+    crate::widgets::icon(
+        canvas,
+        super::home::category_widget_icon(cat),
+        icon_box,
+        accent_fg,
+        accent_bg,
+    );
 
     // 右上来源徽章（WinUI 3 / Toolkit / Unbound）与收藏星标
     let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
@@ -1339,7 +1344,12 @@ pub fn draw_control_tile(
     let badge_text = super::control_class_badge(id.class());
     let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
     let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
-    let badge_rect = Rect::new(star_rect.origin.x - badge_w - 4.0, rect.origin.y + 10.0, badge_w, 16.0);
+    let badge_rect = Rect::new(
+        star_rect.origin.x - badge_w - 4.0,
+        rect.origin.y + 10.0,
+        badge_w,
+        16.0,
+    );
     crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
 
     // 控件规范名 + 一句话用途
@@ -1369,7 +1379,12 @@ pub fn draw_control_tile(
     );
 
     // 主卡片命中区排除右上角收藏星标，避免重叠误触
-    let card_hit = Rect::new(rect.origin.x, rect.origin.y, rect.size.x - 30.0, rect.size.y);
+    let card_hit = Rect::new(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.x - 30.0,
+        rect.size.y,
+    );
     canvas.control(
         nav_node,
         card_hit,
@@ -1383,7 +1398,11 @@ pub fn draw_control_tile(
         star_node,
         star_rect,
         accesskit::Role::Button,
-        if starred { "Remove favorite" } else { "Add favorite" },
+        if starred {
+            "Remove favorite"
+        } else {
+            "Add favorite"
+        },
         unbound_input::CursorKind::Pointer,
         starred,
         false,
@@ -1421,10 +1440,30 @@ pub fn draw_category_hub(
         .count();
 
     let filters = [
-        (0u8, None, if zh { format!("全部 ({n_all})") } else { format!("All ({n_all})") }),
-        (1u8, Some(unbound_widgets::ControlClass::Baseline), format!("WinUI 3 ({n_base})")),
-        (2u8, Some(unbound_widgets::ControlClass::Toolkit), format!("Toolkit ({n_tk})")),
-        (3u8, Some(unbound_widgets::ControlClass::Exclusive), format!("Unbound ({n_ex})")),
+        (
+            0u8,
+            None,
+            if zh {
+                format!("全部 ({n_all})")
+            } else {
+                format!("All ({n_all})")
+            },
+        ),
+        (
+            1u8,
+            Some(unbound_widgets::ControlClass::Baseline),
+            format!("WinUI 3 ({n_base})"),
+        ),
+        (
+            2u8,
+            Some(unbound_widgets::ControlClass::Toolkit),
+            format!("Toolkit ({n_tk})"),
+        ),
+        (
+            3u8,
+            Some(unbound_widgets::ControlClass::Exclusive),
+            format!("Unbound ({n_ex})"),
+        ),
     ];
     let mut fx = body.origin.x;
     for (idx, class_opt, label) in filters {
@@ -1440,8 +1479,19 @@ pub fn draw_category_hub(
         } else {
             palette.card_bg
         };
-        let fg = if active { palette.on_primary } else { palette.text };
-        canvas.rect(pill, 14.0, fill, palette.card_border, if active { 0.0 } else { 1.0 }, 0.0);
+        let fg = if active {
+            palette.on_primary
+        } else {
+            palette.text
+        };
+        canvas.rect(
+            pill,
+            14.0,
+            fill,
+            palette.card_border,
+            if active { 0.0 } else { 1.0 },
+            0.0,
+        );
         canvas.text(&label, pill, 11.0, fg, AlignX::Center, AlignY::Center);
         canvas.control(
             node,
@@ -1474,7 +1524,14 @@ pub fn draw_category_hub(
                 palette.surface
             };
             canvas.rect(pill, 12.0, fill, palette.card_border, 1.0, 0.0);
-            canvas.text(label, pill, 10.0, palette.text, AlignX::Center, AlignY::Center);
+            canvas.text(
+                label,
+                pill,
+                10.0,
+                palette.text,
+                AlignX::Center,
+                AlignY::Center,
+            );
             canvas.control(
                 node,
                 pill,
@@ -1530,7 +1587,6 @@ pub fn draw_category_hub(
     }
 }
 
-
 /// 使用 `Target::Demo` 命名空间绘制控件卡片（用于首页快捷区，避免与 `NavigationView` 导航项 ID 冲突）。
 pub fn draw_control_tile_demo(
     canvas: &mut crate::canvas::Canvas<'_>,
@@ -1540,8 +1596,16 @@ pub fn draw_control_tile_demo(
     page: super::PageId,
 ) {
     let palette = *canvas.palette;
-    let nav_node = crate::target::id(crate::target::Target::Demo(page.index() as u8, 4, id as u16));
-    let star_node = crate::target::id(crate::target::Target::Demo(page.index() as u8, 5, id as u16));
+    let nav_node = crate::target::id(crate::target::Target::Demo(
+        page.index() as u8,
+        4,
+        id as u16,
+    ));
+    let star_node = crate::target::id(crate::target::Target::Demo(
+        page.index() as u8,
+        5,
+        id as u16,
+    ));
     let visual = canvas.visual(nav_node, false);
     let bg = if visual.is_pressed() || visual.is_hovered() {
         palette.primary_soft
@@ -1559,7 +1623,13 @@ pub fn draw_control_tile_demo(
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
     let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
     canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-    crate::widgets::icon(canvas, super::home::category_widget_icon(cat), icon_box, accent_fg, accent_bg);
+    crate::widgets::icon(
+        canvas,
+        super::home::category_widget_icon(cat),
+        icon_box,
+        accent_fg,
+        accent_bg,
+    );
 
     let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
     let starred = state.is_favorite(id);
@@ -1581,7 +1651,12 @@ pub fn draw_control_tile_demo(
     let badge_text = super::control_class_badge(id.class());
     let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
     let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
-    let badge_rect = Rect::new(star_rect.origin.x - badge_w - 4.0, rect.origin.y + 10.0, badge_w, 16.0);
+    let badge_rect = Rect::new(
+        star_rect.origin.x - badge_w - 4.0,
+        rect.origin.y + 10.0,
+        badge_w,
+        16.0,
+    );
     crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
 
     let label = component_nav_label_localized(id, state.locale);
@@ -1609,7 +1684,12 @@ pub fn draw_control_tile_demo(
         AlignY::Top,
     );
 
-    let card_hit = Rect::new(rect.origin.x, rect.origin.y, rect.size.x - 30.0, rect.size.y);
+    let card_hit = Rect::new(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.x - 30.0,
+        rect.size.y,
+    );
     canvas.control(
         nav_node,
         card_hit,
@@ -1623,7 +1703,11 @@ pub fn draw_control_tile_demo(
         star_node,
         star_rect,
         accesskit::Role::Button,
-        if starred { "Remove favorite" } else { "Add favorite" },
+        if starred {
+            "Remove favorite"
+        } else {
+            "Add favorite"
+        },
         unbound_input::CursorKind::Pointer,
         starred,
         false,

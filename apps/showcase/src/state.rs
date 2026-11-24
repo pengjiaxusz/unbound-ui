@@ -914,7 +914,10 @@ impl GalleryState {
 
     /// 导航到指定页面；重置内容滚动位置以使页头可见。
     pub fn navigate(&mut self, page: PageId) {
-        if self.active_page != page || self.active_component.is_some() || self.active_category.is_some() {
+        if self.active_page != page
+            || self.active_component.is_some()
+            || self.active_category.is_some()
+        {
             self.active_page = page;
             self.active_component = None;
             self.active_category = None;

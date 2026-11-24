@@ -1809,19 +1809,14 @@ impl GalleryApp {
         if self.state.active_page == PageId::Parity {
             if let Some(pane) = self.state.parity_inspector.list_pane_rect.get() {
                 if pane.contains_point(point) {
-                    let count = self
-                        .state
-                        .demo
-                        .parity_report
-                        .as_ref()
-                        .map_or(0, |r| {
-                            pages::parity_report::filtered_case_indices(
-                                r,
-                                &self.state.parity_inspector,
-                                self.state.search.text(),
-                            )
-                            .len()
-                        });
+                    let count = self.state.demo.parity_report.as_ref().map_or(0, |r| {
+                        pages::parity_report::filtered_case_indices(
+                            r,
+                            &self.state.parity_inspector,
+                            self.state.search.text(),
+                        )
+                        .len()
+                    });
                     let total_h = count as f32 * 58.0;
                     let max_scroll = (total_h - pane.size.y + 16.0).max(0.0);
                     self.state.parity_inspector.list_scroll =
@@ -2121,7 +2116,11 @@ impl GalleryApp {
             match key {
                 PlatformKey::Named(name) if name == "ArrowDown" => {
                     if let Some(report) = self.state.demo.parity_report.as_ref() {
-                        if self.state.parity_inspector.step_selection(report, self.state.search.text(), 1) {
+                        if self.state.parity_inspector.step_selection(
+                            report,
+                            self.state.search.text(),
+                            1,
+                        ) {
                             self.state.bump();
                         }
                     }
@@ -2129,7 +2128,11 @@ impl GalleryApp {
                 }
                 PlatformKey::Named(name) if name == "ArrowUp" => {
                     if let Some(report) = self.state.demo.parity_report.as_ref() {
-                        if self.state.parity_inspector.step_selection(report, self.state.search.text(), -1) {
+                        if self.state.parity_inspector.step_selection(
+                            report,
+                            self.state.search.text(),
+                            -1,
+                        ) {
                             self.state.bump();
                         }
                     }
@@ -2674,8 +2677,8 @@ impl GalleryApp {
         match page {
             PageId::Parity => {
                 use pages::parity_report::{
-                    BACKDROP_FILTER_PART, CASE_ROW_BASE, CURTAIN_LOCK_PART, CURTAIN_STAGE_PART,
-                    OVERLAY_SOURCE_BASE, OVERLAY_SPLIT_BASE, ParityStatusFilter, ParityViewMode,
+                    ParityStatusFilter, ParityViewMode, BACKDROP_FILTER_PART, CASE_ROW_BASE,
+                    CURTAIN_LOCK_PART, CURTAIN_STAGE_PART, OVERLAY_SOURCE_BASE, OVERLAY_SPLIT_BASE,
                     REFRESH_PART, RESET_FILTER_PART, SORT_MODE_PART, STATUS_FILTER_BASE,
                     THEME_FILTER_PART, VIEW_MODE_BASE, ZOOM_BASE,
                 };
@@ -4546,7 +4549,12 @@ fn draw_window_controls(
 const fn is_nav_item_node(node: u64) -> bool {
     matches!(
         target::decode(node),
-        Some(Target::NavPage(_) | Target::NavCategory(_) | Target::NavComponent(_) | Target::Footer(_))
+        Some(
+            Target::NavPage(_)
+                | Target::NavCategory(_)
+                | Target::NavComponent(_)
+                | Target::Footer(_)
+        )
     )
 }
 
@@ -4846,11 +4854,21 @@ fn draw_page(
             canvas.semantic(
                 Role::Heading,
                 &title_owned,
-                Rect::new(page.header.origin.x, page.header.origin.y, page.header.size.x, 34.0),
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y,
+                    page.header.size.x,
+                    34.0,
+                ),
             );
             canvas.text(
                 &title_owned,
-                Rect::new(page.header.origin.x, page.header.origin.y, page.header.size.x, 38.0),
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y,
+                    page.header.size.x,
+                    38.0,
+                ),
                 28.0,
                 palette.text,
                 AlignX::Start,
@@ -4878,8 +4896,16 @@ fn draw_page(
                     let all_label = PageId::Components.localized_info(state.locale).short;
                     // 面包屑导航条：All Controls / <Category> / <Control>
                     let all_w = canvas.labels.measure(all_label, 11.0).x + 8.0;
-                    let all_rect = Rect::new(page.header.origin.x, page.header.origin.y, all_w, 18.0);
-                    canvas.text(all_label, all_rect, 11.0, palette.primary, AlignX::Start, AlignY::Center);
+                    let all_rect =
+                        Rect::new(page.header.origin.x, page.header.origin.y, all_w, 18.0);
+                    canvas.text(
+                        all_label,
+                        all_rect,
+                        11.0,
+                        palette.primary,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
                     canvas.control(
                         target::id(Target::NavPage(PageId::Components.index() as u8)),
                         all_rect,
@@ -4890,10 +4916,24 @@ fn draw_page(
                         false,
                     );
                     let sep_x = all_rect.max().x + 4.0;
-                    canvas.text("/", Rect::new(sep_x, page.header.origin.y, 10.0, 18.0), 11.0, palette.text_muted, AlignX::Center, AlignY::Center);
+                    canvas.text(
+                        "/",
+                        Rect::new(sep_x, page.header.origin.y, 10.0, 18.0),
+                        11.0,
+                        palette.text_muted,
+                        AlignX::Center,
+                        AlignY::Center,
+                    );
                     let cat_w = canvas.labels.measure(cat_label, 11.0).x + 8.0;
                     let cat_rect = Rect::new(sep_x + 12.0, page.header.origin.y, cat_w, 18.0);
-                    canvas.text(cat_label, cat_rect, 11.0, palette.primary, AlignX::Start, AlignY::Center);
+                    canvas.text(
+                        cat_label,
+                        cat_rect,
+                        11.0,
+                        palette.primary,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
                     canvas.control(
                         target::id(Target::NavCategory(cat.index() as u8)),
                         cat_rect,
@@ -4907,11 +4947,21 @@ fn draw_page(
                     canvas.semantic(
                         Role::Heading,
                         label,
-                        Rect::new(page.header.origin.x, page.header.origin.y + 22.0, page.header.size.x, 36.0),
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 22.0,
+                            page.header.size.x,
+                            36.0,
+                        ),
                     );
                     canvas.text(
                         label,
-                        Rect::new(page.header.origin.x, page.header.origin.y + 22.0, page.header.size.x - 140.0, 38.0),
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 22.0,
+                            page.header.size.x - 140.0,
+                            38.0,
+                        ),
                         28.0,
                         palette.text,
                         AlignX::Start,
@@ -4920,7 +4970,12 @@ fn draw_page(
                     let desc = pages::category_localized_summary(cat, state.locale);
                     canvas.text(
                         desc,
-                        Rect::new(page.header.origin.x, page.header.origin.y + 62.0, page.header.size.x - 140.0, 20.0),
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 62.0,
+                            page.header.size.x - 140.0,
+                            20.0,
+                        ),
                         12.0,
                         palette.text_muted,
                         AlignX::Start,
@@ -4941,20 +4996,38 @@ fn draw_page(
                     let mod_w = canvas.labels.measure(comp_id.module_name(), 10.5).x + 16.0;
                     widgets::badge(
                         canvas,
-                        Rect::new(page.header.origin.x + bw + 6.0, page.header.origin.y + 90.0, mod_w, 20.0),
+                        Rect::new(
+                            page.header.origin.x + bw + 6.0,
+                            page.header.origin.y + 90.0,
+                            mod_w,
+                            20.0,
+                        ),
                         comp_id.module_name(),
                         palette.text_muted,
                         palette.surface,
                     );
                     let starred = state.is_favorite(comp_id);
-                    let fav_label = if starred { "★ Favorited" } else { "☆ Favorite" };
+                    let fav_label = if starred {
+                        "★ Favorited"
+                    } else {
+                        "☆ Favorite"
+                    };
                     let fav_w = canvas.labels.measure(fav_label, 11.0).x + 22.0;
                     widgets::button(
                         canvas,
                         target::id(Target::FavoriteToggle(comp_id as u8)),
-                        Rect::new(page.header.max().x - fav_w, page.header.origin.y + 24.0, fav_w, 30.0),
+                        Rect::new(
+                            page.header.max().x - fav_w,
+                            page.header.origin.y + 24.0,
+                            fav_w,
+                            30.0,
+                        ),
                         fav_label,
-                        if starred { widgets::ButtonVariant::Primary } else { widgets::ButtonVariant::Secondary },
+                        if starred {
+                            widgets::ButtonVariant::Primary
+                        } else {
+                            widgets::ButtonVariant::Secondary
+                        },
                         true,
                     );
                 }
@@ -4963,11 +5036,21 @@ fn draw_page(
                 canvas.semantic(
                     Role::Heading,
                     info.title,
-                    Rect::new(page.header.origin.x, page.header.origin.y, page.header.size.x, 34.0),
+                    Rect::new(
+                        page.header.origin.x,
+                        page.header.origin.y,
+                        page.header.size.x,
+                        34.0,
+                    ),
                 );
                 canvas.text(
                     info.title,
-                    Rect::new(page.header.origin.x, page.header.origin.y, page.header.size.x, 38.0),
+                    Rect::new(
+                        page.header.origin.x,
+                        page.header.origin.y,
+                        page.header.size.x,
+                        38.0,
+                    ),
                     30.0,
                     palette.text,
                     AlignX::Start,

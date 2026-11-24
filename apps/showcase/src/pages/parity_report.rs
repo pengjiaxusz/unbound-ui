@@ -391,9 +391,14 @@ impl ParityInspectorState {
         let current_pos = self
             .selected_case
             .as_deref()
-            .and_then(|name| filtered.iter().position(|&idx| report.cases[idx].name == name))
+            .and_then(|name| {
+                filtered
+                    .iter()
+                    .position(|&idx| report.cases[idx].name == name)
+            })
             .unwrap_or(0);
-        let next_pos = (current_pos as isize + delta).clamp(0, filtered.len() as isize - 1) as usize;
+        let next_pos =
+            (current_pos as isize + delta).clamp(0, filtered.len() as isize - 1) as usize;
         let next_name = report.cases[filtered[next_pos]].name.clone();
         if self.selected_case.as_deref() != Some(next_name.as_str()) {
             self.selected_case = Some(next_name);
@@ -509,10 +514,22 @@ impl ParityReport {
                 case.images[which] = Some(hub.request_png(bytes));
             }
         }
-        let passed = cases.iter().filter(|c| c.status == ParityStatus::Pass).count();
-        let failed = cases.iter().filter(|c| c.status == ParityStatus::Fail).count();
-        let invalid = cases.iter().filter(|c| c.status == ParityStatus::Invalid).count();
-        let exempt = cases.iter().filter(|c| c.status == ParityStatus::Exempt).count();
+        let passed = cases
+            .iter()
+            .filter(|c| c.status == ParityStatus::Pass)
+            .count();
+        let failed = cases
+            .iter()
+            .filter(|c| c.status == ParityStatus::Fail)
+            .count();
+        let invalid = cases
+            .iter()
+            .filter(|c| c.status == ParityStatus::Invalid)
+            .count();
+        let exempt = cases
+            .iter()
+            .filter(|c| c.status == ParityStatus::Exempt)
+            .count();
         let cache_hits = cases.iter().filter(|c| c.cache_hit).count();
         if cases.is_empty() {
             return Self {
@@ -562,8 +579,11 @@ pub fn filtered_case_indices(
                 return false;
             }
             if !needle.is_empty() {
-                let hay = format!("{} {} {} {} {}", case.name, case.control, case.state, case.theme, case.backdrop)
-                    .to_ascii_lowercase();
+                let hay = format!(
+                    "{} {} {} {} {}",
+                    case.name, case.control, case.state, case.theme, case.backdrop
+                )
+                .to_ascii_lowercase();
                 if !hay.contains(&needle) {
                     return false;
                 }
@@ -684,7 +704,11 @@ pub fn draw_inspector(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect)
         draw_empty_card(
             canvas,
             rect,
-            if zh { "正在载入差分报告…" } else { "Loading the parity report…" },
+            if zh {
+                "正在载入差分报告…"
+            } else {
+                "Loading the parity report…"
+            },
             "",
             zh,
             false,
@@ -693,14 +717,24 @@ pub fn draw_inspector(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect)
     };
     if let Some(error) = &report.error {
         let body = if zh {
-            format!("未找到可用的差分产物：{error}\n先运行 `{}`，再回到本页。", report.hint)
+            format!(
+                "未找到可用的差分产物：{error}\n先运行 `{}`，再回到本页。",
+                report.hint
+            )
         } else {
-            format!("No parity artifacts were found: {error}\nRun `{}` first, then reopen this page.", report.hint)
+            format!(
+                "No parity artifacts were found: {error}\nRun `{}` first, then reopen this page.",
+                report.hint
+            )
         };
         draw_empty_card(
             canvas,
             rect,
-            if zh { "差分报告不可用" } else { "Parity report unavailable" },
+            if zh {
+                "差分报告不可用"
+            } else {
+                "Parity report unavailable"
+            },
             &body,
             zh,
             true,
@@ -718,7 +752,9 @@ pub fn draw_inspector(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect)
     // 2. 主从分栏主体（左侧紧凑用例列表 + 右侧大尺寸检视舞台）
     let body_top = toolbar.max().y + TOOLBAR_GAP;
     let body_h = (rect.max().y - body_top).max(380.0);
-    let left_w = (rect.size.x * 0.30).clamp(228.0, 330.0).min((rect.size.x - 280.0).max(180.0));
+    let left_w = (rect.size.x * 0.30)
+        .clamp(228.0, 330.0)
+        .min((rect.size.x - 280.0).max(180.0));
     let left_rect = Rect::new(rect.origin.x, body_top, left_w, body_h);
     let right_rect = Rect::new(
         left_rect.max().x + SPLIT_GAP,
@@ -765,7 +801,12 @@ fn draw_toolbar(
     };
     canvas.text(
         &summary_text,
-        Rect::new(rect.origin.x + 14.0, rect.origin.y + 10.0, (rect.size.x - 260.0).max(180.0), 22.0),
+        Rect::new(
+            rect.origin.x + 14.0,
+            rect.origin.y + 10.0,
+            (rect.size.x - 260.0).max(180.0),
+            22.0,
+        ),
         13.5,
         palette.text,
         AlignX::Start,
@@ -800,12 +841,60 @@ fn draw_toolbar(
     let row_y = rect.origin.y + 52.0;
     let mut x = rect.origin.x + 14.0;
     let status_pills = [
-        (0u16, ParityStatusFilter::All, if zh { format!("全部 ({})", report.cases.len()) } else { format!("All ({})", report.cases.len()) }),
-        (1u16, ParityStatusFilter::Issues, if zh { format!("问题 ({})", report.failed + report.invalid) } else { format!("Issues ({})", report.failed + report.invalid) }),
-        (2u16, ParityStatusFilter::Fail, if zh { format!("失败 ({})", report.failed) } else { format!("Fail ({})", report.failed) }),
-        (3u16, ParityStatusFilter::Invalid, if zh { format!("无效 ({})", report.invalid) } else { format!("Invalid ({})", report.invalid) }),
-        (4u16, ParityStatusFilter::Exempt, if zh { format!("豁免 ({})", report.exempt) } else { format!("Exempt ({})", report.exempt) }),
-        (5u16, ParityStatusFilter::Pass, if zh { format!("通过 ({})", report.passed) } else { format!("Pass ({})", report.passed) }),
+        (
+            0u16,
+            ParityStatusFilter::All,
+            if zh {
+                format!("全部 ({})", report.cases.len())
+            } else {
+                format!("All ({})", report.cases.len())
+            },
+        ),
+        (
+            1u16,
+            ParityStatusFilter::Issues,
+            if zh {
+                format!("问题 ({})", report.failed + report.invalid)
+            } else {
+                format!("Issues ({})", report.failed + report.invalid)
+            },
+        ),
+        (
+            2u16,
+            ParityStatusFilter::Fail,
+            if zh {
+                format!("失败 ({})", report.failed)
+            } else {
+                format!("Fail ({})", report.failed)
+            },
+        ),
+        (
+            3u16,
+            ParityStatusFilter::Invalid,
+            if zh {
+                format!("无效 ({})", report.invalid)
+            } else {
+                format!("Invalid ({})", report.invalid)
+            },
+        ),
+        (
+            4u16,
+            ParityStatusFilter::Exempt,
+            if zh {
+                format!("豁免 ({})", report.exempt)
+            } else {
+                format!("Exempt ({})", report.exempt)
+            },
+        ),
+        (
+            5u16,
+            ParityStatusFilter::Pass,
+            if zh {
+                format!("通过 ({})", report.passed)
+            } else {
+                format!("Pass ({})", report.passed)
+            },
+        ),
     ];
     for (idx, filter, label) in status_pills {
         let w = canvas.labels.measure(&label, 10.5).x + 18.0;
@@ -814,25 +903,85 @@ fn draw_toolbar(
         }
         let pill = Rect::new(x, row_y, w, 26.0);
         let active = inspector.status_filter == filter;
-        draw_filter_pill(canvas, pill, parity_node(STATUS_FILTER_BASE + idx), &label, active);
+        draw_filter_pill(
+            canvas,
+            pill,
+            parity_node(STATUS_FILTER_BASE + idx),
+            &label,
+            active,
+        );
         x += w + 6.0;
     }
 
     // 右侧多维筛选与排序胶囊
     let theme_label = match inspector.theme_filter {
-        ParityThemeFilter::All => if zh { "主题: 全部" } else { "Theme: All" },
-        ParityThemeFilter::Light => if zh { "主题: 浅色" } else { "Theme: Light" },
-        ParityThemeFilter::Dark => if zh { "主题: 深色" } else { "Theme: Dark" },
+        ParityThemeFilter::All => {
+            if zh {
+                "主题: 全部"
+            } else {
+                "Theme: All"
+            }
+        }
+        ParityThemeFilter::Light => {
+            if zh {
+                "主题: 浅色"
+            } else {
+                "Theme: Light"
+            }
+        }
+        ParityThemeFilter::Dark => {
+            if zh {
+                "主题: 深色"
+            } else {
+                "Theme: Dark"
+            }
+        }
     };
     let backdrop_label = match inspector.backdrop_filter {
-        ParityBackdropFilter::All => if zh { "后景: 全部" } else { "Backdrop: All" },
-        ParityBackdropFilter::Solid => if zh { "后景: Solid" } else { "Backdrop: Solid" },
-        ParityBackdropFilter::Mica => if zh { "后景: Mica" } else { "Backdrop: Mica" },
-        ParityBackdropFilter::Acrylic => if zh { "后景: Acrylic" } else { "Backdrop: Acrylic" },
+        ParityBackdropFilter::All => {
+            if zh {
+                "后景: 全部"
+            } else {
+                "Backdrop: All"
+            }
+        }
+        ParityBackdropFilter::Solid => {
+            if zh {
+                "后景: Solid"
+            } else {
+                "Backdrop: Solid"
+            }
+        }
+        ParityBackdropFilter::Mica => {
+            if zh {
+                "后景: Mica"
+            } else {
+                "Backdrop: Mica"
+            }
+        }
+        ParityBackdropFilter::Acrylic => {
+            if zh {
+                "后景: Acrylic"
+            } else {
+                "Backdrop: Acrylic"
+            }
+        }
     };
     let sort_label = match inspector.sort_mode {
-        ParitySortMode::SeverityThenDeDesc => if zh { "排序: ΔE ↓" } else { "Sort: ΔE ↓" },
-        ParitySortMode::NameAsc => if zh { "排序: A-Z" } else { "Sort: A-Z" },
+        ParitySortMode::SeverityThenDeDesc => {
+            if zh {
+                "排序: ΔE ↓"
+            } else {
+                "Sort: ΔE ↓"
+            }
+        }
+        ParitySortMode::NameAsc => {
+            if zh {
+                "排序: A-Z"
+            } else {
+                "Sort: A-Z"
+            }
+        }
     };
 
     let mut rx = rect.max().x - 14.0;
@@ -840,20 +989,44 @@ fn draw_toolbar(
         let reset_label = if zh { "重置" } else { "Reset" };
         let w = canvas.labels.measure(reset_label, 10.5).x + 16.0;
         rx -= w;
-        draw_filter_pill(canvas, Rect::new(rx, row_y, w, 26.0), parity_node(RESET_FILTER_PART), reset_label, false);
+        draw_filter_pill(
+            canvas,
+            Rect::new(rx, row_y, w, 26.0),
+            parity_node(RESET_FILTER_PART),
+            reset_label,
+            false,
+        );
         rx -= 6.0;
     }
     for (part, label, active) in [
-        (SORT_MODE_PART, sort_label, inspector.sort_mode == ParitySortMode::NameAsc),
-        (BACKDROP_FILTER_PART, backdrop_label, inspector.backdrop_filter != ParityBackdropFilter::All),
-        (THEME_FILTER_PART, theme_label, inspector.theme_filter != ParityThemeFilter::All),
+        (
+            SORT_MODE_PART,
+            sort_label,
+            inspector.sort_mode == ParitySortMode::NameAsc,
+        ),
+        (
+            BACKDROP_FILTER_PART,
+            backdrop_label,
+            inspector.backdrop_filter != ParityBackdropFilter::All,
+        ),
+        (
+            THEME_FILTER_PART,
+            theme_label,
+            inspector.theme_filter != ParityThemeFilter::All,
+        ),
     ] {
         let w = canvas.labels.measure(label, 10.5).x + 16.0;
         if rx - w < x + 8.0 {
             break;
         }
         rx -= w;
-        draw_filter_pill(canvas, Rect::new(rx, row_y, w, 26.0), parity_node(part), label, active);
+        draw_filter_pill(
+            canvas,
+            Rect::new(rx, row_y, w, 26.0),
+            parity_node(part),
+            label,
+            active,
+        );
         rx -= 6.0;
     }
 }
@@ -868,10 +1041,29 @@ fn draw_filter_pill(canvas: &mut Canvas<'_>, rect: Rect, node: u64, label: &str,
     } else {
         palette.surface
     };
-    let fg = if active { palette.on_primary } else { palette.text };
-    canvas.rect(rect, 13.0, fill, palette.card_border, if active { 0.0 } else { 1.0 }, 0.0);
+    let fg = if active {
+        palette.on_primary
+    } else {
+        palette.text
+    };
+    canvas.rect(
+        rect,
+        13.0,
+        fill,
+        palette.card_border,
+        if active { 0.0 } else { 1.0 },
+        0.0,
+    );
     canvas.text(label, rect, 10.5, fg, AlignX::Center, AlignY::Center);
-    canvas.control(node, rect, Role::Button, label, CursorKind::Pointer, active, false);
+    canvas.control(
+        node,
+        rect,
+        Role::Button,
+        label,
+        CursorKind::Pointer,
+        active,
+        false,
+    );
 }
 
 fn draw_master_list(
@@ -893,7 +1085,12 @@ fn draw_master_list(
             } else {
                 "No parity cases match the current filters."
             },
-            Rect::new(rect.origin.x + 16.0, rect.origin.y + 24.0, rect.size.x - 32.0, 44.0),
+            Rect::new(
+                rect.origin.x + 16.0,
+                rect.origin.y + 24.0,
+                rect.size.x - 32.0,
+                44.0,
+            ),
             11.5,
             palette.text_muted,
         );
@@ -911,10 +1108,20 @@ fn draw_master_list(
     let selected_idx = inspector
         .selected_case
         .as_deref()
-        .and_then(|name| filtered.iter().copied().find(|&idx| report.cases[idx].name == name))
+        .and_then(|name| {
+            filtered
+                .iter()
+                .copied()
+                .find(|&idx| report.cases[idx].name == name)
+        })
         .unwrap_or(filtered[0]);
 
-    let inner = Rect::new(rect.origin.x + 8.0, rect.origin.y + 8.0, rect.size.x - 16.0, rect.size.y - 16.0);
+    let inner = Rect::new(
+        rect.origin.x + 8.0,
+        rect.origin.y + 8.0,
+        rect.size.x - 16.0,
+        rect.size.y - 16.0,
+    );
     canvas.begin_clip(inner);
     let mut y = inner.origin.y - inspector.list_scroll;
     for (pos, &case_idx) in filtered.iter().enumerate() {
@@ -943,9 +1150,21 @@ fn draw_master_list(
 
         let (status_text, status_fg, status_bg) = status_style(palette, case.status, zh);
         let badge_w = canvas.labels.measure(status_text, 9.0).x + 12.0;
-        let badge = Rect::new(row.max().x - badge_w - 8.0, row.origin.y + 8.0, badge_w, 16.0);
+        let badge = Rect::new(
+            row.max().x - badge_w - 8.0,
+            row.origin.y + 8.0,
+            badge_w,
+            16.0,
+        );
         canvas.rect(badge, 8.0, status_bg, 0, 0.0, 0.0);
-        canvas.text(status_text, badge, 9.0, status_fg, AlignX::Center, AlignY::Center);
+        canvas.text(
+            status_text,
+            badge,
+            9.0,
+            status_fg,
+            AlignX::Center,
+            AlignY::Center,
+        );
 
         let title = if case.control.is_empty() {
             case.name.clone()
@@ -954,22 +1173,43 @@ fn draw_master_list(
         };
         canvas.text(
             &title,
-            Rect::new(row.origin.x + 10.0, row.origin.y + 7.0, (row.size.x - badge_w - 24.0).max(40.0), 18.0),
+            Rect::new(
+                row.origin.x + 10.0,
+                row.origin.y + 7.0,
+                (row.size.x - badge_w - 24.0).max(40.0),
+                18.0,
+            ),
             11.0,
             palette.text,
             AlignX::Start,
             AlignY::Center,
         );
-        let meta = format!("{} · {} · ΔE {:.2}", case.theme, case.backdrop, case.mean_de);
+        let meta = format!(
+            "{} · {} · ΔE {:.2}",
+            case.theme, case.backdrop, case.mean_de
+        );
         canvas.text(
             &meta,
-            Rect::new(row.origin.x + 10.0, row.origin.y + 28.0, row.size.x - 20.0, 16.0),
+            Rect::new(
+                row.origin.x + 10.0,
+                row.origin.y + 28.0,
+                row.size.x - 20.0,
+                16.0,
+            ),
             9.5,
             palette.text_muted,
             AlignX::Start,
             AlignY::Center,
         );
-        canvas.control(node, row, Role::ListItem, &title, CursorKind::Pointer, is_selected, false);
+        canvas.control(
+            node,
+            row,
+            Role::ListItem,
+            &title,
+            CursorKind::Pointer,
+            is_selected,
+            false,
+        );
     }
     canvas.end_clip();
 
@@ -990,7 +1230,11 @@ fn draw_detail_stage(
 
     let Some(case_idx) = selected_idx else {
         canvas.text(
-            if zh { "请选择左侧任意用例进行像素对比" } else { "Select a case on the left to inspect" },
+            if zh {
+                "请选择左侧任意用例进行像素对比"
+            } else {
+                "Select a case on the left to inspect"
+            },
             rect,
             13.0,
             palette.text_muted,
@@ -1005,17 +1249,37 @@ fn draw_detail_stage(
     let title = if case.control.is_empty() {
         case.name.clone()
     } else {
-        format!("{} · {} · {} · {}", case.control, case.state, case.theme, case.backdrop)
+        format!(
+            "{} · {} · {} · {}",
+            case.control, case.state, case.theme, case.backdrop
+        )
     };
     let (status_text, status_fg, status_bg) = status_style(palette, case.status, zh);
     let badge_w = canvas.labels.measure(status_text, 10.0).x + 18.0;
-    let badge = Rect::new(rect.max().x - badge_w - 14.0, rect.origin.y + 12.0, badge_w, 20.0);
+    let badge = Rect::new(
+        rect.max().x - badge_w - 14.0,
+        rect.origin.y + 12.0,
+        badge_w,
+        20.0,
+    );
     canvas.rect(badge, 10.0, status_bg, 0, 0.0, 0.0);
-    canvas.text(status_text, badge, 10.0, status_fg, AlignX::Center, AlignY::Center);
+    canvas.text(
+        status_text,
+        badge,
+        10.0,
+        status_fg,
+        AlignX::Center,
+        AlignY::Center,
+    );
 
     canvas.text(
         &title,
-        Rect::new(rect.origin.x + 16.0, rect.origin.y + 10.0, (rect.size.x - badge_w - 40.0).max(120.0), 22.0),
+        Rect::new(
+            rect.origin.x + 16.0,
+            rect.origin.y + 10.0,
+            (rect.size.x - badge_w - 40.0).max(120.0),
+            22.0,
+        ),
         14.0,
         palette.text,
         AlignX::Start,
@@ -1031,11 +1295,20 @@ fn draw_detail_stage(
         case.bbox_delta[1],
         case.bbox_delta[2],
         case.bbox_delta[3],
-        if case.intrinsic_matches { "ok" } else { "drift" }
+        if case.intrinsic_matches {
+            "ok"
+        } else {
+            "drift"
+        }
     );
     canvas.text(
         &gates,
-        Rect::new(rect.origin.x + 16.0, rect.origin.y + 36.0, rect.size.x - 32.0, 18.0),
+        Rect::new(
+            rect.origin.x + 16.0,
+            rect.origin.y + 36.0,
+            rect.size.x - 32.0,
+            18.0,
+        ),
         10.5,
         palette.text_muted,
         AlignX::Start,
@@ -1046,13 +1319,31 @@ fn draw_detail_stage(
     let ctrl_y = rect.origin.y + 62.0;
     let mut cx = rect.origin.x + 16.0;
     let modes = [
-        (0u16, ParityViewMode::SideBySide, if zh { "并排 (1)" } else { "Side-by-Side (1)" }),
-        (1u16, ParityViewMode::Curtain, if zh { "卷帘 (2)" } else { "Curtain (2)" }),
-        (2u16, ParityViewMode::Overlay, if zh { "叠加 (3)" } else { "Overlay (3)" }),
+        (
+            0u16,
+            ParityViewMode::SideBySide,
+            if zh { "并排 (1)" } else { "Side-by-Side (1)" },
+        ),
+        (
+            1u16,
+            ParityViewMode::Curtain,
+            if zh { "卷帘 (2)" } else { "Curtain (2)" },
+        ),
+        (
+            2u16,
+            ParityViewMode::Overlay,
+            if zh { "叠加 (3)" } else { "Overlay (3)" },
+        ),
     ];
     for (idx, mode, label) in modes {
         let w = canvas.labels.measure(label, 10.5).x + 18.0;
-        draw_filter_pill(canvas, Rect::new(cx, ctrl_y, w, 26.0), parity_node(VIEW_MODE_BASE + idx), label, inspector.view_mode == mode);
+        draw_filter_pill(
+            canvas,
+            Rect::new(cx, ctrl_y, w, 26.0),
+            parity_node(VIEW_MODE_BASE + idx),
+            label,
+            inspector.view_mode == mode,
+        );
         cx += w + 6.0;
     }
 
@@ -1061,7 +1352,13 @@ fn draw_detail_stage(
     for &(idx, z, label) in [(2u16, 4u8, "4x"), (1u16, 2u8, "2x"), (0u16, 1u8, "1x")].iter() {
         let w = 34.0;
         rx -= w;
-        draw_filter_pill(canvas, Rect::new(rx, ctrl_y, w, 26.0), parity_node(ZOOM_BASE + idx), label, inspector.zoom == z);
+        draw_filter_pill(
+            canvas,
+            Rect::new(rx, ctrl_y, w, 26.0),
+            parity_node(ZOOM_BASE + idx),
+            label,
+            inspector.zoom == z,
+        );
         rx -= 4.0;
     }
 
@@ -1069,7 +1366,11 @@ fn draw_detail_stage(
     match inspector.view_mode {
         ParityViewMode::Curtain => {
             let lock_label = if inspector.curtain_locked {
-                if zh { format!("已锁定 {:.0}%", inspector.curtain_ratio * 100.0) } else { format!("Locked {:.0}%", inspector.curtain_ratio * 100.0) }
+                if zh {
+                    format!("已锁定 {:.0}%", inspector.curtain_ratio * 100.0)
+                } else {
+                    format!("Locked {:.0}%", inspector.curtain_ratio * 100.0)
+                }
             } else if zh {
                 format!("鼠标跟随 {:.0}%", inspector.curtain_ratio * 100.0)
             } else {
@@ -1077,7 +1378,13 @@ fn draw_detail_stage(
             };
             let w = canvas.labels.measure(&lock_label, 10.0).x + 18.0;
             if cx + w + 8.0 <= rx {
-                draw_filter_pill(canvas, Rect::new(cx + 8.0, ctrl_y, w, 26.0), parity_node(CURTAIN_LOCK_PART), &lock_label, inspector.curtain_locked);
+                draw_filter_pill(
+                    canvas,
+                    Rect::new(cx + 8.0, ctrl_y, w, 26.0),
+                    parity_node(CURTAIN_LOCK_PART),
+                    &lock_label,
+                    inspector.curtain_locked,
+                );
             }
         }
         ParityViewMode::Overlay => {
@@ -1090,11 +1397,22 @@ fn draw_detail_stage(
             ] {
                 let w = canvas.labels.measure(label, 10.0).x + 14.0;
                 if ox + w <= rx {
-                    draw_filter_pill(canvas, Rect::new(ox, ctrl_y, w, 26.0), parity_node(OVERLAY_SOURCE_BASE + idx), label, active);
+                    draw_filter_pill(
+                        canvas,
+                        Rect::new(ox, ctrl_y, w, 26.0),
+                        parity_node(OVERLAY_SOURCE_BASE + idx),
+                        label,
+                        active,
+                    );
                     ox += w + 4.0;
                 }
             }
-            for (idx, pct, label) in [(0u16, 0.25f32, "25%"), (1u16, 0.50f32, "50%"), (2u16, 0.75f32, "75%"), (3u16, 1.0f32, "100%")] {
+            for (idx, pct, label) in [
+                (0u16, 0.25f32, "25%"),
+                (1u16, 0.50f32, "50%"),
+                (2u16, 0.75f32, "75%"),
+                (3u16, 1.0f32, "100%"),
+            ] {
                 let w = 36.0;
                 if ox + w <= rx {
                     draw_filter_pill(
@@ -1125,19 +1443,38 @@ fn draw_detail_stage(
     }
 }
 
-fn draw_side_by_side(canvas: &mut Canvas<'_>, state: &GalleryState, case: &ParityCase, stage: Rect, zh: bool) {
+fn draw_side_by_side(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    case: &ParityCase,
+    stage: Rect,
+    zh: bool,
+) {
     let palette = *canvas.palette;
     let gap = 10.0;
     let col_w = (stage.size.x - gap * 2.0) / 3.0;
     let img_h = (stage.size.y - 24.0).max(120.0);
     let zoom = f32::from(state.parity_inspector.zoom.max(1));
     let captions = [
-        if zh { "WinUI 3 参考" } else { "WinUI 3 reference" },
+        if zh {
+            "WinUI 3 参考"
+        } else {
+            "WinUI 3 reference"
+        },
         "unbound-ui",
-        if zh { "ROI ΔE2000 热力图" } else { "ROI ΔE2000 heatmap" },
+        if zh {
+            "ROI ΔE2000 热力图"
+        } else {
+            "ROI ΔE2000 heatmap"
+        },
     ];
     for (which, image) in case.images.iter().enumerate() {
-        let cell = Rect::new(stage.origin.x + which as f32 * (col_w + gap), stage.origin.y, col_w, img_h);
+        let cell = Rect::new(
+            stage.origin.x + which as f32 * (col_w + gap),
+            stage.origin.y,
+            col_w,
+            img_h,
+        );
         canvas.rect(cell, 8.0, palette.stage_bg, palette.stage_grid, 1.0, 0.0);
         draw_zoomed_asset(canvas, state, cell, *image, zoom, 200 + which as u16);
         canvas.text(
@@ -1151,10 +1488,21 @@ fn draw_side_by_side(canvas: &mut Canvas<'_>, state: &GalleryState, case: &Parit
     }
 }
 
-fn draw_curtain_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &ParityCase, stage: Rect, zh: bool) {
+fn draw_curtain_view(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    case: &ParityCase,
+    stage: Rect,
+    zh: bool,
+) {
     let palette = *canvas.palette;
     let inspector = &state.parity_inspector;
-    let frame = Rect::new(stage.origin.x, stage.origin.y, stage.size.x, (stage.size.y - 24.0).max(160.0));
+    let frame = Rect::new(
+        stage.origin.x,
+        stage.origin.y,
+        stage.size.x,
+        (stage.size.y - 24.0).max(160.0),
+    );
     inspector.curtain_stage_rect.set(Some(frame));
 
     canvas.rect(frame, 10.0, palette.stage_bg, palette.stage_grid, 1.0, 0.0);
@@ -1162,22 +1510,51 @@ fn draw_curtain_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &Parit
     let split_x = frame.origin.x + frame.size.x * inspector.curtain_ratio.clamp(0.02, 0.98);
 
     // 左侧裁剪区：WinUI 3 参考图
-    let left_clip = Rect::new(frame.origin.x, frame.origin.y, (split_x - frame.origin.x).max(0.0), frame.size.y);
+    let left_clip = Rect::new(
+        frame.origin.x,
+        frame.origin.y,
+        (split_x - frame.origin.x).max(0.0),
+        frame.size.y,
+    );
     canvas.begin_clip(left_clip);
     draw_zoomed_asset(canvas, state, frame, case.images[0], zoom, 300);
     canvas.end_clip();
 
     // 右侧裁剪区：unbound-ui 本框架渲染
-    let right_clip = Rect::new(split_x, frame.origin.y, (frame.max().x - split_x).max(0.0), frame.size.y);
+    let right_clip = Rect::new(
+        split_x,
+        frame.origin.y,
+        (frame.max().x - split_x).max(0.0),
+        frame.size.y,
+    );
     canvas.begin_clip(right_clip);
     draw_zoomed_asset(canvas, state, frame, case.images[1], zoom, 301);
     canvas.end_clip();
 
     // 分界线与中央抓手胶囊
-    canvas.rect(Rect::new(split_x - 1.0, frame.origin.y, 2.0, frame.size.y), 1.0, palette.primary, 0, 0.0, 0.0);
-    let handle = Rect::new(split_x - 14.0, frame.origin.y + frame.size.y * 0.5 - 14.0, 28.0, 28.0);
+    canvas.rect(
+        Rect::new(split_x - 1.0, frame.origin.y, 2.0, frame.size.y),
+        1.0,
+        palette.primary,
+        0,
+        0.0,
+        0.0,
+    );
+    let handle = Rect::new(
+        split_x - 14.0,
+        frame.origin.y + frame.size.y * 0.5 - 14.0,
+        28.0,
+        28.0,
+    );
     canvas.rect(handle, 14.0, palette.primary, palette.on_primary, 1.5, 4.0);
-    canvas.text("↔", handle, 12.0, palette.on_primary, AlignX::Center, AlignY::Center);
+    canvas.text(
+        "↔",
+        handle,
+        12.0,
+        palette.on_primary,
+        AlignX::Center,
+        AlignY::Center,
+    );
 
     // 左右角标
     widgets::badge(
@@ -1212,17 +1589,32 @@ fn draw_curtain_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &Parit
         parity_node(CURTAIN_STAGE_PART),
         frame,
         Role::Button,
-        if zh { "卷帘对比画布（点击锁定分界线）" } else { "Curtain comparison stage (click to lock split)" },
+        if zh {
+            "卷帘对比画布（点击锁定分界线）"
+        } else {
+            "Curtain comparison stage (click to lock split)"
+        },
         CursorKind::Pointer,
         inspector.curtain_locked,
         false,
     );
 }
 
-fn draw_overlay_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &ParityCase, stage: Rect, zh: bool) {
+fn draw_overlay_view(
+    canvas: &mut Canvas<'_>,
+    state: &GalleryState,
+    case: &ParityCase,
+    stage: Rect,
+    zh: bool,
+) {
     let palette = *canvas.palette;
     let inspector = &state.parity_inspector;
-    let frame = Rect::new(stage.origin.x, stage.origin.y, stage.size.x, (stage.size.y - 24.0).max(160.0));
+    let frame = Rect::new(
+        stage.origin.x,
+        stage.origin.y,
+        stage.size.x,
+        (stage.size.y - 24.0).max(160.0),
+    );
     canvas.rect(frame, 10.0, palette.stage_bg, palette.stage_grid, 1.0, 0.0);
 
     let zoom = f32::from(inspector.zoom.max(1));
@@ -1237,7 +1629,12 @@ fn draw_overlay_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &Parit
     };
     let ratio = inspector.overlay_split.clamp(0.0, 1.0);
     if ratio > 0.01 {
-        let clip = Rect::new(frame.origin.x, frame.origin.y, frame.size.x * ratio, frame.size.y);
+        let clip = Rect::new(
+            frame.origin.x,
+            frame.origin.y,
+            frame.size.x * ratio,
+            frame.size.y,
+        );
         canvas.begin_clip(clip);
         draw_zoomed_asset(canvas, state, frame, overlay_asset, zoom, 401);
         canvas.end_clip();
@@ -1254,7 +1651,11 @@ fn draw_overlay_view(canvas: &mut Canvas<'_>, state: &GalleryState, case: &Parit
     }
 
     let overlay_label = if inspector.overlay_show_heatmap {
-        if zh { "ROI ΔE2000 热力图叠层" } else { "ROI ΔE2000 heatmap layer" }
+        if zh {
+            "ROI ΔE2000 热力图叠层"
+        } else {
+            "ROI ΔE2000 heatmap layer"
+        }
     } else {
         "unbound-ui"
     };
@@ -1315,12 +1716,32 @@ fn draw_zoomed_asset(
     canvas.end_clip();
 }
 
-fn status_style(palette: crate::gallery::Palette, status: ParityStatus, zh: bool) -> (&'static str, u16, u16) {
+fn status_style(
+    palette: crate::gallery::Palette,
+    status: ParityStatus,
+    zh: bool,
+) -> (&'static str, u16, u16) {
     match status {
-        ParityStatus::Pass => (if zh { "通过" } else { "pass" }, palette.success, palette.success_soft),
-        ParityStatus::Fail => (if zh { "失败" } else { "fail" }, palette.danger, palette.danger_soft),
-        ParityStatus::Invalid => (if zh { "无效" } else { "invalid" }, palette.warning, palette.warning_soft),
-        ParityStatus::Exempt => (if zh { "豁免" } else { "exempt" }, palette.primary, palette.primary_soft),
+        ParityStatus::Pass => (
+            if zh { "通过" } else { "pass" },
+            palette.success,
+            palette.success_soft,
+        ),
+        ParityStatus::Fail => (
+            if zh { "失败" } else { "fail" },
+            palette.danger,
+            palette.danger_soft,
+        ),
+        ParityStatus::Invalid => (
+            if zh { "无效" } else { "invalid" },
+            palette.warning,
+            palette.warning_soft,
+        ),
+        ParityStatus::Exempt => (
+            if zh { "豁免" } else { "exempt" },
+            palette.primary,
+            palette.primary_soft,
+        ),
     }
 }
 
@@ -1338,7 +1759,12 @@ fn draw_empty_card(
     canvas.rect(card, 12.0, palette.card_bg, palette.card_border, 1.0, 0.0);
     canvas.text(
         title,
-        Rect::new(card.origin.x + 20.0, card.origin.y + 20.0, card.size.x - 40.0, 26.0),
+        Rect::new(
+            card.origin.x + 20.0,
+            card.origin.y + 20.0,
+            card.size.x - 40.0,
+            26.0,
+        ),
         15.0,
         palette.text,
         AlignX::Start,
@@ -1347,7 +1773,12 @@ fn draw_empty_card(
     if !body.is_empty() {
         canvas.text_wrapped(
             body,
-            Rect::new(card.origin.x + 20.0, card.origin.y + 54.0, card.size.x - 40.0, 92.0),
+            Rect::new(
+                card.origin.x + 20.0,
+                card.origin.y + 54.0,
+                card.size.x - 40.0,
+                92.0,
+            ),
             10.5,
             palette.text_muted,
         );
@@ -1434,10 +1865,22 @@ mod tests {
     fn sample_report() -> ParityReport {
         let cases = parse_cases(MULTI_STATE_REPORT);
         ParityReport {
-            passed: cases.iter().filter(|c| c.status == ParityStatus::Pass).count(),
-            failed: cases.iter().filter(|c| c.status == ParityStatus::Fail).count(),
-            invalid: cases.iter().filter(|c| c.status == ParityStatus::Invalid).count(),
-            exempt: cases.iter().filter(|c| c.status == ParityStatus::Exempt).count(),
+            passed: cases
+                .iter()
+                .filter(|c| c.status == ParityStatus::Pass)
+                .count(),
+            failed: cases
+                .iter()
+                .filter(|c| c.status == ParityStatus::Fail)
+                .count(),
+            invalid: cases
+                .iter()
+                .filter(|c| c.status == ParityStatus::Invalid)
+                .count(),
+            exempt: cases
+                .iter()
+                .filter(|c| c.status == ParityStatus::Exempt)
+                .count(),
             cache_hits: cases.iter().filter(|c| c.cache_hit).count(),
             cases,
             error: None,
@@ -1476,7 +1919,9 @@ mod tests {
             view_mode: ParityViewMode::Curtain,
             ..Default::default()
         };
-        inspector.curtain_stage_rect.set(Some(Rect::new(100.0, 100.0, 400.0, 200.0)));
+        inspector
+            .curtain_stage_rect
+            .set(Some(Rect::new(100.0, 100.0, 400.0, 200.0)));
         assert!(inspector.scrub_curtain(Vec2::new(400.0, 150.0)));
         assert!((inspector.curtain_ratio - 0.75).abs() < 1e-3);
         inspector.curtain_locked = true;
