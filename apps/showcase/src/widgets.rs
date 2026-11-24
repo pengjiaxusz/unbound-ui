@@ -721,9 +721,16 @@ fn badge_variant_for(foreground: u16, background: u16) -> BadgeVariant {
     }
 }
 
+/// 测量胶囊徽章在指定字号下的渲染宽度（全站徽章测宽单一事实源）。
+#[must_use]
+pub fn measure_badge(canvas: &mut Canvas<'_>, label: &str, size: f32) -> f32 {
+    let measured = canvas.labels.measure(label, size);
+    (measured.x + 16.0).max(28.0)
+}
+
 /// 指定字号的胶囊徽章（基于 [`BadgeDesc`] 与 [`emit_badge`]）。
 ///
-/// 宽度始终依据文本绘制时所使用的同一字号计算，
+/// 宽度始终由 [`measure_badge`] 依据同一字号计算，
 /// 以便调用方按返回的矩形推进游标，避免胶囊之间发生重叠。
 ///
 pub fn badge_sized(
@@ -734,8 +741,7 @@ pub fn badge_sized(
     background: u16,
     size: f32,
 ) -> Rect {
-    let measured = canvas.labels.measure(label, size);
-    let width = (measured.x + 16.0).max(28.0);
+    let width = measure_badge(canvas, label, size);
     let rect = Rect::new(rect.origin.x, rect.origin.y, width, rect.size.y);
     let desc = BadgeDesc::new(rect, label).variant(badge_variant_for(foreground, background));
     let (quads, _) = canvas.layout_text(label, rect, size, AlignX::Center, AlignY::Center);
@@ -744,6 +750,23 @@ pub fn badge_sized(
     output.a11y = None;
     canvas.widget_output(WidgetCatalogId::InfoBadge, 0, &output);
     rect
+}
+
+/// 以右边缘 `right_x` 为锚点绘制右对齐胶囊徽章，返回实际渲染矩形。
+#[allow(clippy::too_many_arguments)]
+pub fn badge_right_aligned(
+    canvas: &mut Canvas<'_>,
+    right_x: f32,
+    y: f32,
+    h: f32,
+    label: &str,
+    fg: u16,
+    bg: u16,
+    size: f32,
+) -> Rect {
+    let width = measure_badge(canvas, label, size);
+    let rect = Rect::new(right_x - width, y, width, h);
+    badge_sized(canvas, rect, label, fg, bg, size)
 }
 
 pub use unbound_widgets::shell::{

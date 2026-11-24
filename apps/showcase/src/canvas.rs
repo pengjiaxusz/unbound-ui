@@ -711,13 +711,22 @@ impl<'a> Canvas<'a> {
         }
 
         let clip_shape = self.clip_shape();
+        // 计算控件输出内部最小 z 基准，保留主热区与子热区（如关闭按钮、滚动条、Flyout 与菜单行）的相对 Z 序层次。
+        let base_min_z = output
+            .hit
+            .iter()
+            .chain(output.sub_hits.iter())
+            .map(|region| region.z)
+            .min()
+            .unwrap_or(0);
+        let base_z = u32::from(self.z);
         if let Some(mut region) = output.hit.clone() {
             // 将组件的主命中区域归一化为外壳分配的 `node`，确保多子项组件（如 Accordion/Tabs/Menubar）
             // 主区域点击也能被 `target::decode(node)` 正确路由，同时避免裸小整数 ID 发生热区冲突。
             if node != 0 {
                 region.node = node;
             }
-            region.z = u32::from(self.z);
+            region.z = base_z.saturating_add(region.z.saturating_sub(base_min_z));
             if let Some(clip) = clip_shape {
                 let effective = match region.clip {
                     Some(existing) => ClipRect {
@@ -759,7 +768,7 @@ impl<'a> Canvas<'a> {
                     ));
                 }
             }
-            sub_region.z = u32::from(self.z);
+            sub_region.z = base_z.saturating_add(sub_region.z.saturating_sub(base_min_z));
             if let Some(clip) = clip_shape {
                 let effective = match sub_region.clip {
                     Some(existing) => ClipRect {

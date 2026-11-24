@@ -1564,12 +1564,15 @@ fn draw_curtain_view(
         palette.primary,
         palette.card_bg,
     );
-    widgets::badge(
+    widgets::badge_right_aligned(
         canvas,
-        Rect::new(frame.max().x - 94.0, frame.origin.y + 10.0, 84.0, 20.0),
+        frame.max().x - 10.0,
+        frame.origin.y + 10.0,
+        20.0,
         "unbound-ui",
         palette.success,
         palette.card_bg,
+        11.0,
     );
 
     canvas.text(

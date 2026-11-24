@@ -1236,6 +1236,9 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
         toggled: checked,
         click_count: clicks,
     };
+    // 记录真实舞台矩形，供点击归约与连续值映射共享同一份几何真源。
+    ctx.state.sandbox.set_stage_rect(id, stage);
+
     if id == WidgetCatalogId::CalendarView || id == WidgetCatalogId::DateRangePicker {
         let cal_w = stage.size.x.clamp(260.0, 340.0);
         let cal_h = stage.size.y.clamp(260.0, 350.0);
@@ -1257,6 +1260,493 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
             unbound_widgets::emit_calendar_view(node, &desc, cal_state, state, &mut text_ctx);
         ctx.canvas.widget_output(id, node, &output);
         return;
+    }
+
+    // 针对多子项与连续值控件直连真实发射器并按子热区传递精确 hover / pressed 状态，
+    // 彻底消除演示舞台 hover 与点击脱节。
+    match id {
+        WidgetCatalogId::Pivot => {
+            let labels = ["Overview", "Activity", "Settings"];
+            let selected = selected_idx % labels.len();
+            let desc = unbound_widgets::pivot::PivotDesc::new(
+                Rect::new(
+                    stage.origin.x,
+                    stage.origin.y,
+                    stage.size.x.min(360.0),
+                    unbound_widgets::pivot::PIVOT_HEIGHT,
+                ),
+                &labels,
+            )
+            .with_item_widths(&[104.0, 96.0, 88.0])
+            .with_selected(selected);
+            let mut out = unbound_widgets::WidgetOutput::default();
+            for (idx, label) in labels.iter().enumerate() {
+                let item_node = ctx.part(10 + idx as u16);
+                let item_state =
+                    ctx.canvas
+                        .control_state(item_node, state.disabled, idx == selected);
+                let item_rect = desc.item_rect(idx);
+                let (quads, _) =
+                    ctx.canvas
+                        .layout_text(label, item_rect, 14.0, AlignX::Center, AlignY::Center);
+                let item = unbound_widgets::pivot::emit_pivot_item(
+                    item_node, &desc, idx, item_state, &quads,
+                );
+                if let Some(mut hit) = item.hit.clone() {
+                    hit.node = item_node;
+                    out.sub_hits.push(hit);
+                }
+                if let Some(a11y) = item.a11y.clone() {
+                    out.sub_a11y.push((item_node, a11y));
+                }
+                out.append_child_primitives(item);
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::SelectorBar => {
+            let labels = ["One", "Two", "Three"];
+            let selected = selected_idx % labels.len();
+            let ctrl_rect = Rect::new(
+                stage.origin.x,
+                stage.origin.y,
+                stage.size.x.min(320.0),
+                stage.size.y.min(36.0),
+            );
+            let mut desc = unbound_widgets::segmented::SegmentedDesc::new(ctrl_rect, &labels);
+            desc.selected = selected;
+            let tokens = unbound_widgets::segmented::SegmentedTokens::standard();
+            let mut out = unbound_widgets::segmented::emit_segmented_frame(&desc, tokens);
+            for (idx, label) in labels.iter().enumerate() {
+                let seg_node = ctx.part(10 + idx as u16);
+                let seg_state = ctx
+                    .canvas
+                    .control_state(seg_node, state.disabled, idx == selected);
+                let seg_r = desc.segment_rect(idx);
+                let (quads, _) =
+                    ctx.canvas
+                        .layout_text(label, seg_r, 12.5, AlignX::Center, AlignY::Center);
+                let seg = unbound_widgets::segmented::emit_segmented_segment(
+                    seg_node, &desc, idx, seg_state, &quads, tokens,
+                );
+                if let Some(mut hit) = seg.hit.clone() {
+                    hit.node = seg_node;
+                    out.sub_hits.push(hit);
+                }
+                if let Some(a11y) = seg.a11y.clone() {
+                    out.sub_a11y.push((seg_node, a11y));
+                }
+                out.append_child_primitives(seg);
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::TabView => {
+            let titles: Vec<&str> = ctx
+                .state
+                .sandbox
+                .tab_view_tabs
+                .iter()
+                .map(String::as_str)
+                .collect();
+            let count = titles.len().max(1);
+            let active = selected_idx.min(count - 1);
+            let desc = unbound_widgets::tabs::TabsDesc::new(
+                Rect::new(
+                    stage.origin.x,
+                    stage.origin.y,
+                    stage.size.x,
+                    stage.size.y.min(36.0),
+                ),
+                &titles,
+            )
+            .with_addable(true);
+            let tabs_state = unbound_widgets::tabs::TabsState::new(active);
+            // 预先解析每个标签、关闭按钮与新建按钮的真实交互态，避免与可变借用 `text_ctx` 冲突。
+            let tab_states: Vec<_> = (0..desc.count())
+                .map(|idx| {
+                    ctx.canvas.control_state(
+                        ctx.part(10 + idx as u16),
+                        state.disabled,
+                        idx == active,
+                    )
+                })
+                .collect();
+            let close_states: Vec<_> = (0..desc.count())
+                .map(|idx| {
+                    ctx.canvas
+                        .control_state(ctx.part(100 + idx as u16), state.disabled, false)
+                })
+                .collect();
+            let add_state = ctx
+                .canvas
+                .control_state(ctx.part(200), state.disabled, false);
+            let mut text_ctx = ctx.canvas.text_ctx(1);
+            let mut out = unbound_widgets::tabs::emit_tabs_with_control_states(
+                node,
+                &desc,
+                &tabs_state,
+                &mut text_ctx,
+                |idx| tab_states[idx],
+                |idx| close_states[idx],
+                add_state,
+            );
+            // 将内部子节点键映射为稳定的 `Target::Demo` 部件号，供 hover 与点击路由。
+            let add_raw = unbound_widgets::tabs::tab_add_node(node);
+            let add_part = ctx.part(200);
+            for hit in &mut out.sub_hits {
+                if hit.node == add_raw {
+                    hit.node = add_part;
+                    continue;
+                }
+                for idx in 0..desc.count() {
+                    if hit.node == unbound_widgets::tabs::tab_item_node(node, idx) {
+                        hit.node = ctx.part(10 + idx as u16);
+                        break;
+                    }
+                    if hit.node == unbound_widgets::tabs::tab_close_node(node, idx) {
+                        hit.node = ctx.part(100 + idx as u16);
+                        break;
+                    }
+                }
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::NavigationView => {
+            let demo_ids = [1u64, 2, 3, 9];
+            let selected_item_id = demo_ids[selected_idx % demo_ids.len()];
+            let toggle_part = ctx.part(200);
+            let hovered_item = if ctx.canvas.hovered(toggle_part) {
+                Some(unbound_widgets::navigation_view::NAVIGATION_VIEW_PANE_TOGGLE_ID)
+            } else {
+                demo_ids
+                    .iter()
+                    .enumerate()
+                    .find(|(idx, _)| ctx.canvas.hovered(ctx.part(10 + *idx as u16)))
+                    .map(|(_, &item_id)| item_id)
+            };
+            let desc = unbound_widgets::navigation_view::NavigationViewDesc::new(
+                stage,
+                vec![
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::header("Workspace"),
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                        unbound_widgets::navigation_view::NavigationViewItem::new(1, "Home")
+                            .with_icon(unbound_widgets::ShellIcon::Grid),
+                    ),
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                        unbound_widgets::navigation_view::NavigationViewItem::new(2, "Sessions")
+                            .with_icon(unbound_widgets::ShellIcon::Bolt)
+                            .with_info_badge("3"),
+                    ),
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::separator(),
+                    unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                        unbound_widgets::navigation_view::NavigationViewItem::new(3, "Analytics")
+                            .with_icon(unbound_widgets::ShellIcon::Chart),
+                    ),
+                ],
+            )
+            .pane_display_mode(
+                unbound_widgets::navigation_view::NavigationViewPaneDisplayMode::Left,
+            )
+            .open_pane_length(stage.size.x.clamp(
+                180.0,
+                unbound_widgets::navigation_view::NAVIGATION_VIEW_OPEN_PANE_LENGTH,
+            ))
+            .selected_item(Some(selected_item_id))
+            .hovered_item(hovered_item)
+            .footer_menu_items(vec![
+                unbound_widgets::navigation_view::NavigationViewMenuItem::item(
+                    unbound_widgets::navigation_view::NavigationViewItem::new(9, "Account")
+                        .with_icon(unbound_widgets::ShellIcon::Sliders),
+                ),
+            ])
+            .label("Component gallery NavigationView");
+            let mut nav_state =
+                unbound_widgets::navigation_view::NavigationViewState::from_desc(&desc);
+            nav_state.is_pane_open = ctx.state.sandbox.nav_demo_pane_open;
+            nav_state.set_animations_enabled(false, &desc);
+            let mut text_ctx = ctx.canvas.text_ctx(1);
+            let mut nav_out = unbound_widgets::navigation_view::emit_navigation_view(
+                node,
+                &desc,
+                state,
+                &nav_state,
+                &mut text_ctx,
+            );
+            let toggle_raw = unbound_widgets::navigation_view::navigation_view_row_node(
+                node,
+                unbound_widgets::navigation_view::NAVIGATION_VIEW_PANE_TOGGLE_ID,
+            );
+            for hit in &mut nav_out.output.sub_hits {
+                if hit.node == toggle_raw {
+                    hit.node = toggle_part;
+                    continue;
+                }
+                for (idx, &item_id) in demo_ids.iter().enumerate() {
+                    if hit.node
+                        == unbound_widgets::navigation_view::navigation_view_row_node(node, item_id)
+                    {
+                        hit.node = ctx.part(10 + idx as u16);
+                        break;
+                    }
+                }
+            }
+            ctx.canvas.widget_output(id, node, &nav_out.output);
+            return;
+        }
+        WidgetCatalogId::BreadcrumbBar => {
+            let crumbs = vec![
+                unbound_widgets::breadcrumb::Crumb::new(1, "Root"),
+                unbound_widgets::breadcrumb::Crumb::new(2, "src"),
+                unbound_widgets::breadcrumb::Crumb::new(3, "main.rs"),
+            ];
+            let selected = selected_idx % crumbs.len();
+            let desc = unbound_widgets::breadcrumb::BreadcrumbDesc::new(
+                Rect::new(stage.origin.x, stage.origin.y, stage.size.x, 28.0),
+                crumbs,
+            );
+            let slots = desc.layout(&[44.0, 36.0, 68.0]);
+            let tokens = unbound_widgets::breadcrumb::BreadcrumbTokens::standard();
+            let mut out = unbound_widgets::WidgetOutput::default();
+            for slot in &slots {
+                if let Some(idx) = slot.crumb {
+                    let crumb_node = ctx.part(10 + idx as u16);
+                    let control =
+                        ctx.canvas
+                            .control_state(crumb_node, state.disabled, idx == selected);
+                    let label_text = desc.crumbs.get(idx).map_or("", |c| c.label.as_str());
+                    let (quads, _) = ctx.canvas.layout_text(
+                        label_text,
+                        slot.rect,
+                        13.0,
+                        AlignX::Center,
+                        AlignY::Center,
+                    );
+                    let crumb = unbound_widgets::breadcrumb::emit_crumb(
+                        &desc, slot, control, &quads, tokens,
+                    );
+                    if let Some(mut hit) = crumb.hit.clone() {
+                        hit.node = crumb_node;
+                        out.sub_hits.push(hit);
+                    }
+                    out.append_child_primitives(crumb);
+                }
+                let sep = unbound_widgets::breadcrumb::emit_crumb_separator(&desc, slot, tokens);
+                out.append_child_primitives(sep);
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::RadioButton => {
+            let labels = ["Comfortable", "Compact", "Dense"];
+            let selected = selected_idx % labels.len();
+            let item_w = (stage.size.x / 3.0).clamp(96.0, 140.0);
+            let item_h = stage.size.y.min(36.0);
+            let tokens = unbound_widgets::radio::RadioTokens::standard();
+            let mut out = unbound_widgets::WidgetOutput::default();
+            for (idx, &lbl) in labels.iter().enumerate() {
+                let r_node = ctx.part(10 + idx as u16);
+                let item_r = Rect::new(
+                    stage.origin.x + idx as f32 * item_w,
+                    stage.origin.y,
+                    item_w - 8.0,
+                    item_h,
+                );
+                let mut r_desc = unbound_widgets::radio::RadioDesc::new(item_r, lbl);
+                r_desc.selected = idx == selected;
+                let r_state = ctx
+                    .canvas
+                    .control_state(r_node, state.disabled, idx == selected);
+                let glyphs = ctx.canvas.shape(
+                    lbl,
+                    unbound_math::Vec2::new(
+                        item_r.origin.x + 24.0,
+                        item_r.origin.y + (item_r.size.y - 12.5) * 0.5,
+                    ),
+                    12.5,
+                );
+                let r_out =
+                    unbound_widgets::radio::emit_radio(r_node, &r_desc, r_state, &glyphs, tokens);
+                if let Some(mut hit) = r_out.hit.clone() {
+                    hit.node = r_node;
+                    out.sub_hits.push(hit);
+                }
+                if let Some(a11y) = r_out.a11y.clone() {
+                    out.sub_a11y.push((r_node, a11y));
+                }
+                out.append_child_primitives(r_out);
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::MenuBar => {
+            let labels = ["File", "Edit", "View"];
+            let selected = selected_idx % labels.len();
+            let desc = unbound_widgets::menubar::MenuBarDesc::new(
+                Rect::new(
+                    stage.origin.x,
+                    stage.origin.y,
+                    stage.size.x,
+                    unbound_widgets::menubar::MENUBAR_HEIGHT,
+                ),
+                vec![
+                    unbound_widgets::menubar::MenuBarItem::new(1, "File"),
+                    unbound_widgets::menubar::MenuBarItem::new(2, "Edit"),
+                    unbound_widgets::menubar::MenuBarItem::new(3, "View"),
+                ],
+            );
+            let mut mb_state = unbound_widgets::menubar::MenuBarState::new();
+            mb_state.open(selected);
+            let rects = desc.layout(&[44.0, 44.0, 48.0]);
+            let tokens = unbound_widgets::menubar::MenuBarTokens::standard();
+            let mut out = unbound_widgets::WidgetOutput::default();
+            for (idx, (item_r, _)) in rects.iter().enumerate() {
+                let item_node = ctx.part(10 + idx as u16);
+                let item_state =
+                    ctx.canvas
+                        .control_state(item_node, state.disabled, idx == selected);
+                let (quads, _) = ctx.canvas.layout_text(
+                    labels[idx],
+                    *item_r,
+                    13.0,
+                    AlignX::Center,
+                    AlignY::Center,
+                );
+                let item_out = unbound_widgets::menubar::emit_menubar_item(
+                    &desc, &mb_state, idx, *item_r, item_state, &quads, tokens,
+                );
+                if let Some(mut hit) = item_out.hit.clone() {
+                    hit.node = item_node;
+                    out.sub_hits.push(hit);
+                }
+                out.append_child_primitives(item_out);
+            }
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::RatingControl => {
+            let rating_r = Rect::new(
+                stage.origin.x,
+                stage.origin.y,
+                stage.size.x.min(200.0),
+                stage.size.y.min(36.0),
+            );
+            let desc =
+                unbound_widgets::rating::RatingDesc::new(rating_r, ctx.state.sandbox.rating_value);
+            let out = unbound_widgets::rating::emit_rating(node, &desc, state);
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::PipsPager => {
+            let pg_r = Rect::new(
+                stage.origin.x,
+                stage.origin.y,
+                stage.size.x.min(380.0),
+                stage.size.y.min(36.0),
+            );
+            let desc = unbound_widgets::pagination::PaginationDesc::new(
+                pg_r,
+                12,
+                ctx.state.sandbox.pips_page,
+            );
+            let slots = desc.visible_slots();
+            let total_slots = 9usize;
+            let gap = 4.0_f32;
+            let pad = 4.0_f32;
+            let slot_w = ((pg_r.width() - pad * 2.0 - gap * (total_slots - 1) as f32)
+                / total_slots as f32)
+                .max(18.0);
+            let slot_h = (pg_r.height() - pad * 2.0).max(18.0);
+            let mut glyphs = Vec::new();
+            for idx in 0..total_slots {
+                let r = Rect::new(
+                    pg_r.origin.x + pad + idx as f32 * (slot_w + gap),
+                    pg_r.origin.y + pad,
+                    slot_w,
+                    slot_h,
+                );
+                let txt = if idx == 0 {
+                    "<".to_owned()
+                } else if idx == total_slots - 1 {
+                    ">".to_owned()
+                } else if let Some(p) = slots[idx - 1] {
+                    p.to_string()
+                } else {
+                    "...".to_owned()
+                };
+                let (q, _) = ctx
+                    .canvas
+                    .layout_text(&txt, r, 12.0, AlignX::Center, AlignY::Center);
+                glyphs.extend(q);
+            }
+            let out = unbound_widgets::pagination::emit_pagination(node, &desc, state, &glyphs);
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::AddressBar => {
+            let ab_r = Rect::new(
+                stage.origin.x,
+                stage.origin.y,
+                stage.size.x.min(560.0),
+                unbound_widgets::address_bar::ADDRESS_BAR_HEIGHT,
+            );
+            let all_segments = ["Workspace", "Assets", "Shaders"];
+            let depth = ctx
+                .state
+                .sandbox
+                .address_bar_depth
+                .clamp(1, all_segments.len());
+            let segments: Vec<String> = all_segments[..depth]
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect();
+            let desc = unbound_widgets::address_bar::AddressBarDesc::new(ab_r, segments);
+            let mut ab_state = unbound_widgets::address_bar::AddressBarState::new();
+            ab_state.editing = checked;
+            // 严格复用组件真实 `compute_layout`，避免硬编码坐标压住刷新键与溢出符号。
+            let layout = unbound_widgets::address_bar::compute_layout(&desc);
+            let mut glyphs = Vec::new();
+            if ab_state.editing {
+                let edit_r = layout.edit_text_rect(false);
+                if edit_r.width() > 4.0 {
+                    let full = desc.full_path();
+                    let (q, _) =
+                        ctx.canvas
+                            .layout_text(&full, edit_r, 12.0, AlignX::Start, AlignY::Center);
+                    glyphs.extend(q);
+                }
+            } else {
+                for seg_layout in &layout.segments {
+                    if let Some(seg) = desc.segments.get(seg_layout.index) {
+                        let (q, _) = ctx.canvas.layout_text(
+                            &seg.label,
+                            seg_layout.label_rect,
+                            12.0,
+                            AlignX::Center,
+                            AlignY::Center,
+                        );
+                        glyphs.extend(q);
+                    }
+                }
+            }
+            let out = unbound_widgets::address_bar::emit_address_bar(
+                node, &desc, &ab_state, state, &glyphs,
+            );
+            ctx.canvas.widget_output(id, node, &out);
+            return;
+        }
+        WidgetCatalogId::Slider => {
+            // 注册连续滑块拖拽区域，支持按住拖拽直达指针对应的滑块值。
+            let ctrl_rect = Rect::new(
+                stage.origin.x,
+                stage.origin.y,
+                stage.size.x.min(320.0),
+                stage.size.y.min(36.0),
+            );
+            ctx.canvas.range(node, ctrl_rect, 0.0, 100.0, 1.0);
+        }
+        _ => {}
     }
 
     let output = emit_widget_with_shaper(id, node, state, stage, params, |text, origin, size| {
@@ -1327,7 +1817,7 @@ pub fn hub_height(width: f32, state: &crate::state::GalleryState) -> f32 {
         + 16.0
 }
 
-/// 绘制单张直观控件卡片（用于首页快捷区与分类索引页）。
+/// 绘制单张直观控件卡片（首页快捷区与分类索引页统一复用）。
 pub fn draw_control_tile(
     canvas: &mut crate::canvas::Canvas<'_>,
     state: &crate::state::GalleryState,
@@ -1335,7 +1825,8 @@ pub fn draw_control_tile(
     id: WidgetCatalogId,
 ) {
     let palette = *canvas.palette;
-    let nav_node = crate::target::id(crate::target::Target::NavComponent(id as u8));
+    // 使用内容区专属导航目标 `ContentNavComponent`，彻底隔离侧边栏 `NavComponent` 的 NodeId。
+    let nav_node = crate::target::id(crate::target::Target::ContentNavComponent(id as u8));
     let visual = canvas.visual(nav_node, false);
     let bg = if visual.is_pressed() || visual.is_hovered() {
         palette.primary_soft
@@ -1351,10 +1842,15 @@ pub fn draw_control_tile(
     // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
     canvas.begin_clip(rect);
 
-    // 左侧语义图标盒（取代原先单字母圆标）
+    // 左侧圆角语义图标盒
     let cat = id.category();
     let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
-    let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
+    let icon_box = Rect::new(
+        rect.origin.x + 12.0,
+        rect.origin.y + (rect.size.y - 36.0) * 0.5,
+        36.0,
+        36.0,
+    );
     canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
     crate::widgets::icon(
         canvas,
@@ -1364,64 +1860,84 @@ pub fn draw_control_tile(
         accent_bg,
     );
 
-    // 右上来源徽章（WinUI 3 / Toolkit / Unbound）与收藏星标
-    let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
+    // 右上角收藏按钮：固定 24x24 点击热区，经 `emit_shell_icon_primitives` 渲染矢量星标
+    let star_rect = Rect::new(rect.max().x - 32.0, rect.origin.y + 8.0, 24.0, 24.0);
     let starred = state.is_favorite(id);
     let star_node = crate::target::id(crate::target::Target::FavoriteToggle(id as u8));
-    let star_visual = canvas.visual(star_node, starred);
+    let star_visual = canvas.visual(star_node, false);
+    let star_bg = if star_visual.is_hovered() || star_visual.is_pressed() {
+        palette.surface
+    } else {
+        0
+    };
+    // 始终发射背景图元（静止态传透明 0），保持悬停前后图元数恒定以走增量 patch 路径。
+    canvas.rect(star_rect, 6.0, star_bg, 0, 0.0, 0.0);
     let star_fg = if starred || star_visual.is_hovered() {
         palette.warning
     } else {
         palette.text_muted
     };
-    canvas.text(
-        if starred { "★" } else { "☆" },
-        star_rect,
-        12.5,
-        star_fg,
-        AlignX::Center,
-        AlignY::Center,
-    );
-
-    let badge_text = super::control_class_badge(id.class());
-    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
-    let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
-    let badge_rect = Rect::new(
-        star_rect.origin.x - badge_w - 4.0,
-        rect.origin.y + 10.0,
-        badge_w,
+    let star_icon_rect = Rect::new(
+        star_rect.origin.x + 4.0,
+        star_rect.origin.y + 4.0,
+        16.0,
         16.0,
     );
-    crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
+    crate::widgets::icon(
+        canvas,
+        if starred {
+            crate::widgets::Icon::StarFilled
+        } else {
+            crate::widgets::Icon::Star
+        },
+        star_icon_rect,
+        star_fg,
+        star_bg,
+    );
 
-    // 控件规范名 + 一句话用途
+    // 来源徽章（WinUI 3 / Toolkit / Unbound）：由 `badge_right_aligned` 精确贴合在星标左侧并保留 8px 间距
+    let badge_text = super::control_class_badge(id.class());
+    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
+    let badge_rect = crate::widgets::badge_right_aligned(
+        canvas,
+        star_rect.origin.x - 8.0,
+        rect.origin.y + 11.0,
+        18.0,
+        badge_text,
+        b_fg,
+        b_bg,
+        9.5,
+    );
+
+    // 控件规范名：严格钳制在徽章左缘留白 8px 之内并执行省略号截断，杜绝任何重叠
     let label = component_nav_label_localized(id, state.locale);
     let title_x = icon_box.max().x + 10.0;
-    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
+    let title_w = (badge_rect.origin.x - title_x - 8.0).max(24.0);
     canvas.text_elided(
         label,
-        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
+        Rect::new(title_x, rect.origin.y + 11.0, title_w, 18.0),
         12.0,
         palette.text,
         AlignX::Start,
         AlignY::Center,
     );
+    // 简介最多 2 行，严格限制在卡片内边距范围内
     let desc = super::category_localized_summary(cat, state.locale);
-    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
+    let desc_w = (rect.max().x - title_x - 12.0).max(40.0);
     canvas.text_wrapped_clamped(
         desc,
-        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
+        Rect::new(title_x, rect.origin.y + 34.0, desc_w, 34.0),
         10.0,
         palette.text_muted,
         2,
     );
     canvas.end_clip();
 
-    // 主卡片命中区排除右上角收藏星标，避免重叠误触
+    // 主卡片命中区排除右上角 24x24 收藏星标，避免重叠误触
     let card_hit = Rect::new(
         rect.origin.x,
         rect.origin.y,
-        rect.size.x - 30.0,
+        (rect.size.x - 36.0).max(0.0),
         rect.size.y,
     );
     canvas.control(
@@ -1555,7 +2071,8 @@ pub fn draw_category_hub(
                 break;
             }
             let pill = Rect::new(cx, y, w, 24.0);
-            let node = crate::target::id(crate::target::Target::NavCategory(cat.index() as u8));
+            let node =
+                crate::target::id(crate::target::Target::ContentNavCategory(cat.index() as u8));
             let visual = canvas.visual(node, false);
             let fill = if visual.is_hovered() {
                 palette.primary_soft
@@ -1624,130 +2141,4 @@ pub fn draw_category_hub(
         }
         draw_control_tile(canvas, state, cell, comp_id);
     }
-}
-
-/// 使用 `Target::Demo` 命名空间绘制控件卡片（用于首页快捷区，避免与 `NavigationView` 导航项 ID 冲突）。
-pub fn draw_control_tile_demo(
-    canvas: &mut crate::canvas::Canvas<'_>,
-    state: &crate::state::GalleryState,
-    rect: Rect,
-    id: WidgetCatalogId,
-    page: super::PageId,
-) {
-    let palette = *canvas.palette;
-    let nav_node = crate::target::id(crate::target::Target::Demo(
-        page.index() as u8,
-        4,
-        id as u16,
-    ));
-    let star_node = crate::target::id(crate::target::Target::Demo(
-        page.index() as u8,
-        5,
-        id as u16,
-    ));
-    let visual = canvas.visual(nav_node, false);
-    let bg = if visual.is_pressed() || visual.is_hovered() {
-        palette.primary_soft
-    } else {
-        palette.card_bg
-    };
-    let border = if visual.is_hovered() {
-        palette.primary
-    } else {
-        palette.card_border
-    };
-    canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
-    // 对卡片内部内容施加矩形裁剪，杜绝任何长文本越出卡片边界。
-    canvas.begin_clip(rect);
-
-    let cat = id.category();
-    let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
-    let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
-    canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
-    crate::widgets::icon(
-        canvas,
-        super::home::category_widget_icon(cat),
-        icon_box,
-        accent_fg,
-        accent_bg,
-    );
-
-    let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
-    let starred = state.is_favorite(id);
-    let star_visual = canvas.visual(star_node, starred);
-    let star_fg = if starred || star_visual.is_hovered() {
-        palette.warning
-    } else {
-        palette.text_muted
-    };
-    canvas.text(
-        if starred { "★" } else { "☆" },
-        star_rect,
-        12.5,
-        star_fg,
-        AlignX::Center,
-        AlignY::Center,
-    );
-
-    let badge_text = super::control_class_badge(id.class());
-    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
-    let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
-    let badge_rect = Rect::new(
-        star_rect.origin.x - badge_w - 4.0,
-        rect.origin.y + 10.0,
-        badge_w,
-        16.0,
-    );
-    crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
-
-    let label = component_nav_label_localized(id, state.locale);
-    let title_x = icon_box.max().x + 10.0;
-    let title_w = (badge_rect.origin.x - title_x - 6.0).max(40.0);
-    canvas.text_elided(
-        label,
-        Rect::new(title_x, rect.origin.y + 10.0, title_w, 18.0),
-        12.0,
-        palette.text,
-        AlignX::Start,
-        AlignY::Center,
-    );
-    let desc = super::category_localized_summary(cat, state.locale);
-    let desc_w = (rect.max().x - title_x - 10.0).max(40.0);
-    canvas.text_wrapped_clamped(
-        desc,
-        Rect::new(title_x, rect.origin.y + 32.0, desc_w, 32.0),
-        10.0,
-        palette.text_muted,
-        2,
-    );
-    canvas.end_clip();
-
-    let card_hit = Rect::new(
-        rect.origin.x,
-        rect.origin.y,
-        rect.size.x - 30.0,
-        rect.size.y,
-    );
-    canvas.control(
-        nav_node,
-        card_hit,
-        accesskit::Role::Link,
-        label,
-        unbound_input::CursorKind::Pointer,
-        false,
-        false,
-    );
-    canvas.control(
-        star_node,
-        star_rect,
-        accesskit::Role::Button,
-        if starred {
-            "Remove favorite"
-        } else {
-            "Add favorite"
-        },
-        unbound_input::CursorKind::Pointer,
-        starred,
-        false,
-    );
 }

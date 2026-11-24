@@ -309,6 +309,7 @@ pub fn emit_shell_icon_primitives(
     primitives: &mut Vec<GpuPrimitiveInstance>,
     payloads: &mut Vec<GpuPayload>,
 ) {
+    let _ = background;
     let start = primitives.len();
     let c = rect.center();
     match kind {
@@ -386,18 +387,37 @@ pub fn emit_shell_icon_primitives(
             }
         }
         ShellIcon::Moon => {
-            primitives.push(surface(
-                Rect::new(c.x - 6.5, c.y - 6.5, 13.0, 13.0),
-                6.5,
+            // 独立贝塞尔月牙轮廓：外凸双弧 + 内凹弧，不依赖可能为透明的背景遮罩圆。
+            quad_curve_stroke(
+                [c.x + 1.8, c.y - 5.8],
+                [c.x - 5.2, c.y - 5.6],
+                [c.x - 5.6, c.y],
+                1.6,
                 color,
                 z,
-            ));
-            primitives.push(surface(
-                Rect::new(c.x - 1.5, c.y - 7.5, 9.5, 11.5),
-                5.75,
-                background,
-                z + 1,
-            ));
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x - 5.6, c.y],
+                [c.x - 5.2, c.y + 6.2],
+                [c.x + 3.4, c.y + 4.6],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x + 1.8, c.y - 5.8],
+                [c.x - 2.6, c.y + 0.6],
+                [c.x + 3.4, c.y + 4.6],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
         }
         ShellIcon::Snap => {
             for row in 0..3 {
@@ -640,9 +660,10 @@ pub fn emit_shell_icon_primitives(
             );
         }
         ShellIcon::Undo => {
+            // 撤销回弯箭头：上方左向箭杆 + 箭头 + 右侧 U 形回弯弧线（垂直居中于 c.y ± 5.0）。
             curve_stroke(
-                [c.x - 4.5, c.y - 1.0],
-                [c.x + 3.5, c.y - 1.0],
+                [c.x - 4.6, c.y - 2.0],
+                [c.x + 1.4, c.y - 2.0],
                 1.6,
                 color,
                 z,
@@ -650,8 +671,8 @@ pub fn emit_shell_icon_primitives(
                 payloads,
             );
             curve_stroke(
-                [c.x - 4.5, c.y - 1.0],
-                [c.x - 1.2, c.y - 4.2],
+                [c.x - 4.6, c.y - 2.0],
+                [c.x - 1.6, c.y - 5.0],
                 1.6,
                 color,
                 z,
@@ -659,8 +680,37 @@ pub fn emit_shell_icon_primitives(
                 payloads,
             );
             curve_stroke(
-                [c.x - 4.5, c.y - 1.0],
-                [c.x - 1.2, c.y + 2.2],
+                [c.x - 4.6, c.y - 2.0],
+                [c.x - 1.6, c.y + 1.0],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x + 1.4, c.y - 2.0],
+                [c.x + 5.2, c.y - 2.0],
+                [c.x + 5.2, c.y + 1.5],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x + 5.2, c.y + 1.5],
+                [c.x + 5.2, c.y + 5.0],
+                [c.x + 1.4, c.y + 5.0],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x + 1.4, c.y + 5.0],
+                [c.x - 1.4, c.y + 5.0],
                 1.6,
                 color,
                 z,
@@ -669,9 +719,10 @@ pub fn emit_shell_icon_primitives(
             );
         }
         ShellIcon::Redo => {
+            // 重做回弯箭头：Undo 水平镜像（垂直居中于 c.y ± 5.0）。
             curve_stroke(
-                [c.x - 3.5, c.y - 1.0],
-                [c.x + 4.5, c.y - 1.0],
+                [c.x - 1.4, c.y - 2.0],
+                [c.x + 4.6, c.y - 2.0],
                 1.6,
                 color,
                 z,
@@ -679,8 +730,8 @@ pub fn emit_shell_icon_primitives(
                 payloads,
             );
             curve_stroke(
-                [c.x + 4.5, c.y - 1.0],
-                [c.x + 1.2, c.y - 4.2],
+                [c.x + 4.6, c.y - 2.0],
+                [c.x + 1.6, c.y - 5.0],
                 1.6,
                 color,
                 z,
@@ -688,8 +739,37 @@ pub fn emit_shell_icon_primitives(
                 payloads,
             );
             curve_stroke(
-                [c.x + 4.5, c.y - 1.0],
-                [c.x + 1.2, c.y + 2.2],
+                [c.x + 4.6, c.y - 2.0],
+                [c.x + 1.6, c.y + 1.0],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x - 1.4, c.y - 2.0],
+                [c.x - 5.2, c.y - 2.0],
+                [c.x - 5.2, c.y + 1.5],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            quad_curve_stroke(
+                [c.x - 5.2, c.y + 1.5],
+                [c.x - 5.2, c.y + 5.0],
+                [c.x - 1.4, c.y + 5.0],
+                1.6,
+                color,
+                z,
+                primitives,
+                payloads,
+            );
+            curve_stroke(
+                [c.x - 1.4, c.y + 5.0],
+                [c.x + 1.4, c.y + 5.0],
                 1.6,
                 color,
                 z,
@@ -1047,22 +1127,40 @@ pub fn emit_shell_icon_primitives(
             ));
         }
         ShellIcon::EnvVars => {
-            // `$` 字形：竖干 + 上下两条短横。
+            // 完整 `$` 字形：中轴竖干 + 上中下三横笔与 S 形折段。
             primitives.push(surface(
-                Rect::new(c.x - 0.9, c.y - 6.6, 1.8, 13.2),
-                0.9,
+                Rect::new(c.x - 0.8, c.y - 6.8, 1.6, 13.6),
+                0.8,
                 color,
                 z,
             ));
             primitives.push(surface(
-                Rect::new(c.x - 4.8, c.y - 4.6, 5.4, 1.8),
-                0.9,
+                Rect::new(c.x - 3.6, c.y - 4.8, 7.2, 1.5),
+                0.75,
                 color,
                 z + 1,
             ));
             primitives.push(surface(
-                Rect::new(c.x - 0.6, c.y - 0.4, 5.4, 1.8),
-                0.9,
+                Rect::new(c.x - 3.6, c.y - 4.8, 1.5, 4.8),
+                0.75,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 3.6, c.y - 0.75, 7.2, 1.5),
+                0.75,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 2.1, c.y - 0.75, 1.5, 4.8),
+                0.75,
+                color,
+                z + 1,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 3.6, c.y + 3.3, 7.2, 1.5),
+                0.75,
                 color,
                 z + 1,
             ));
@@ -1231,10 +1329,22 @@ pub fn emit_shell_icon_primitives(
             ));
         }
         ShellIcon::Beaker => {
-            // 瓶颈 + 锥形杯体 + 液面。
+            // 对称瓶口横沿 + 瓶颈左右侧壁 + 杯体 + 液面。
             primitives.push(surface(
-                Rect::new(c.x - 2.6, c.y - 6.6, 1.8, 4.2),
-                0.9,
+                Rect::new(c.x - 3.6, c.y - 6.8, 7.2, 1.4),
+                0.7,
+                color,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x - 2.6, c.y - 6.2, 1.4, 3.8),
+                0.7,
+                color,
+                z,
+            ));
+            primitives.push(surface(
+                Rect::new(c.x + 1.2, c.y - 6.2, 1.4, 3.8),
+                0.7,
                 color,
                 z,
             ));
@@ -1255,7 +1365,7 @@ pub fn emit_shell_icon_primitives(
             ));
         }
         ShellIcon::Window => {
-            // 窗口外框 + 标题栏横带 + 两个窗口按钮。
+            // 空心窗口外框 + 标题栏分隔线 + 空心标题栏内清晰可见的窗口控制点。
             primitives.push(outlined(
                 Rect::new(c.x - 7.0, c.y - 5.6, 14.0, 11.2),
                 2.0,
@@ -1266,15 +1376,15 @@ pub fn emit_shell_icon_primitives(
                 z,
             ));
             primitives.push(surface(
-                Rect::new(c.x - 7.0, c.y - 5.6, 14.0, 2.6),
-                1.3,
+                Rect::new(c.x - 6.4, c.y - 1.8, 12.8, 1.2),
+                0.0,
                 color,
                 z,
             ));
-            for (dx, dy) in [(-4.4, -4.6), (2.4, -4.6)] {
+            for dx in [0.4_f32, 2.4, 4.4] {
                 primitives.push(surface(
-                    Rect::new(c.x + dx, c.y + dy, 2.0, 0.9),
-                    0.45,
+                    Rect::new(c.x + dx, c.y - 3.9, 1.2, 1.2),
+                    0.6,
                     color,
                     z + 1,
                 ));

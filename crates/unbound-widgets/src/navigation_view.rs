@@ -16,7 +16,7 @@ use accesskit::Role;
 use unbound_a11y::{A11yAction, A11yActions, A11yNode};
 use unbound_anim::{Spring, SpringPreset};
 use unbound_gpu::data::{GpuClipNode, GpuPrimitiveInstance, PrimType, SubElement};
-use unbound_input::{CursorKind, HitRegion, KeyChord, KeyName};
+use unbound_input::{ClipRect, CursorKind, HitRegion, KeyChord, KeyName};
 use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
@@ -1135,8 +1135,13 @@ impl NavigationViewState {
             }
         }
 
-        // 5. 命中主菜单与页脚条目。
+        // 5. 命中主菜单与页脚条目：主菜单行仅在主菜单视口内参与命中，防止滚出视口的行抢占页脚点击。
+        let in_menu_viewport = layout.is_top || layout.menu_viewport_rect.contains_point(pos);
         for row in &layout.rows {
+            let is_main_menu_row = matches!(row.kind, NavigationViewRowKind::Item { .. });
+            if is_main_menu_row && !in_menu_viewport {
+                continue;
+            }
             if row.rect.contains_point(pos) {
                 if let Some(id) = row.item_id() {
                     self.focused_item_id = Some(id);
@@ -2585,12 +2590,15 @@ pub fn emit_navigation_view(
             }
         };
         let row_prim_start = out.primitives.len();
+        let row_hit_clip =
+            (!layout.is_top && is_main_menu_row).then_some(layout.menu_viewport_rect);
         emit_navigation_row(
             node,
             row,
             layout.is_top,
             pane_t,
             row_clip_right,
+            row_hit_clip,
             effective_selected,
             hovered_id,
             state.focused_item_id,
@@ -2610,7 +2618,11 @@ pub fn emit_navigation_view(
 
     // 7.4 Left 窗格菜单溢出且存在页脚时，按 WinUI 3 FooterMenuItemsTopSeparator 发射 1px 页脚顶部分隔线。
     let has_footer = desc.is_settings_visible || !desc.footer_menu_items.is_empty();
-    if !layout.is_top && pane_visible && has_footer && layout.menu_content_height > layout.menu_viewport_rect.height() + 0.5 {
+    if !layout.is_top
+        && pane_visible
+        && has_footer
+        && layout.menu_content_height > layout.menu_viewport_rect.height() + 0.5
+    {
         let sep_w = (pane_right_edge - active_pane_rect.origin.x).max(0.0);
         out.primitives.push(surface(
             Rect::new(
@@ -2728,6 +2740,7 @@ pub fn emit_navigation_view(
                 false,
                 1.0,
                 None,
+                None,
                 effective_selected,
                 hovered_id,
                 state.focused_item_id,
@@ -2760,6 +2773,7 @@ pub fn emit_navigation_view(
                 row,
                 false,
                 1.0,
+                None,
                 None,
                 effective_selected,
                 hovered_id,
@@ -2843,6 +2857,7 @@ fn emit_navigation_row(
     is_top: bool,
     text_opacity: f32,
     clip_right: Option<f32>,
+    hit_clip: Option<Rect>,
     effective_selected: Option<u64>,
     hovered_id: Option<u64>,
     focused_id: Option<u64>,
@@ -2924,6 +2939,7 @@ fn emit_navigation_row(
                 is_top,
                 text_opacity,
                 clip_right,
+                hit_clip,
                 effective_selected == Some(item.id),
                 hovered_id == Some(item.id),
                 focused_id == Some(item.id),
@@ -2947,6 +2963,7 @@ fn emit_navigation_row(
                 is_top,
                 text_opacity,
                 clip_right,
+                None,
                 effective_selected == Some(item.id),
                 hovered_id == Some(item.id),
                 focused_id == Some(item.id),
@@ -2972,6 +2989,7 @@ fn emit_navigation_row(
                 is_top,
                 text_opacity,
                 clip_right,
+                None,
                 effective_selected == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 hovered_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
                 focused_id == Some(NAVIGATION_VIEW_SETTINGS_ID),
@@ -3021,6 +3039,7 @@ fn emit_interactive_nav_item(
     is_top: bool,
     text_opacity: f32,
     clip_right: Option<f32>,
+    hit_clip: Option<Rect>,
     selected: bool,
     hovered: bool,
     focused: bool,
@@ -3281,16 +3300,31 @@ fn emit_interactive_nav_item(
     }
     a11y.disabled = disabled;
     a11y.focusable = !disabled;
-    out.with_sub_control(
-        row_key,
-        HitRegion::ui(row_key, u32::from(z) + 3, rect).with_cursor(if disabled {
-            CursorKind::Default
-        } else {
-            CursorKind::Pointer
-        }),
-        a11y,
-        !disabled,
-    );
+    let cursor = if disabled {
+        CursorKind::Default
+    } else {
+        CursorKind::Pointer
+    };
+    if let Some(clip_rect) = hit_clip {
+        let hit_rect = rect.intersect(&clip_rect);
+        if !hit_rect.is_empty() {
+            out.with_sub_control(
+                row_key,
+                HitRegion::ui(row_key, u32::from(z) + 3, hit_rect)
+                    .with_clip(ClipRect::new(clip_rect))
+                    .with_cursor(cursor),
+                a11y,
+                !disabled,
+            );
+        }
+    } else {
+        out.with_sub_control(
+            row_key,
+            HitRegion::ui(row_key, u32::from(z) + 3, rect).with_cursor(cursor),
+            a11y,
+            !disabled,
+        );
+    }
 }
 
 impl UiWidget for NavigationViewDesc {
@@ -3369,8 +3403,8 @@ impl UiWidget for NavigationViewDesc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unbound_gpu::data::CLIP_NONE;
     use crate::scroll::{scrollbar_track_node, ScrollbarAxis, SCROLLBAR_EDGE_INSET};
+    use unbound_gpu::data::CLIP_NONE;
     use unbound_text::{GlyphCache, SymbolFontPolicy, TextEngine};
 
     #[test]
@@ -3378,9 +3412,7 @@ mod tests {
         let rect = Rect::new(16.0, 16.0, 360.0, 280.0);
         let items = vec![
             NavigationViewMenuItem::header("Workspace"),
-            NavigationViewMenuItem::item(
-                NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
-            ),
+            NavigationViewMenuItem::item(NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}")),
         ];
 
         // back_visible == false：汉堡按钮应落在 y=22，位于首行菜单之上且无重叠。
@@ -3764,7 +3796,8 @@ mod tests {
                     "collapsed idle pane must auto-hide scrollbar at t={t}"
                 );
             } else {
-                let track = track_hit.expect("overflowing expanding pane must emit scrollbar track");
+                let track =
+                    track_hit.expect("overflowing expanding pane must emit scrollbar track");
                 assert!(
                     (track.bounds.max().x - (pane_right - SCROLLBAR_EDGE_INSET)).abs() < 1e-3,
                     "scrollbar track right {} must hug pane right {} - inset at t={t}",
@@ -3781,7 +3814,8 @@ mod tests {
     }
 
     #[test]
-    fn overflowing_left_navigation_view_clips_main_menu_rows_without_clipping_footer_or_scrollbar() {
+    fn overflowing_left_navigation_view_clips_main_menu_rows_without_clipping_footer_or_scrollbar()
+    {
         let rect = Rect::new(16.0, 16.0, 640.0, 260.0);
         let owner_node = 204_u64;
         let mut items = vec![

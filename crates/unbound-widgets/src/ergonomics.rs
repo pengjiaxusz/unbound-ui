@@ -346,6 +346,11 @@ pub enum WidgetInputEvent {
         /// 连击次数（`1`、`2`、`3`）。
         click_count: u8,
     },
+    /// 指针移动至屏幕坐标 `pos`（悬停追踪，未按下按键）。
+    PointerMove {
+        /// 屏幕空间指针位置。
+        pos: Vec2,
+    },
     /// 指针拖拽至屏幕坐标 `pos`。
     PointerDrag {
         /// 屏幕空间指针位置。
@@ -4162,11 +4167,20 @@ impl UiWidget for crate::chart::ChartDesc {
         Vec2::new(self.rect.width().max(320.0), self.rect.height().max(180.0))
     }
 
-    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
         match event {
-            WidgetInputEvent::PointerDown { pos, .. } | WidgetInputEvent::PointerDrag { pos } => {
-                state.hover(*pos);
-                true
+            WidgetInputEvent::PointerMove { pos }
+            | WidgetInputEvent::PointerDown { pos, .. }
+            | WidgetInputEvent::PointerDrag { pos } => {
+                if rect.contains_point(*pos) {
+                    state.hover(*pos);
+                    true
+                } else if state.pointer.is_some() {
+                    state.clear();
+                    true
+                } else {
+                    false
+                }
             }
             _ => false,
         }

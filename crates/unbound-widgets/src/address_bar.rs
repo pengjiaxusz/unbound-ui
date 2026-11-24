@@ -756,21 +756,36 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
         (right_limit - left_x).max(0.0),
         r.size.y,
     );
-    let root_icon_rect = Rect::new(
-        address_rect.origin.x + 8.0,
-        address_rect.origin.y + (address_rect.size.y - ROOT_ICON_SIZE) * 0.5,
-        ROOT_ICON_SIZE,
-        ROOT_ICON_SIZE,
-    );
+    let root_icon_rect = if address_rect.width() < 24.0 {
+        Rect::new(
+            address_rect.origin.x,
+            address_rect.origin.y + (address_rect.size.y - ROOT_ICON_SIZE) * 0.5,
+            0.0,
+            0.0,
+        )
+    } else {
+        let icon_w = ROOT_ICON_SIZE.min((address_rect.width() - 8.0).max(0.0));
+        Rect::new(
+            address_rect.origin.x + 8.0,
+            address_rect.origin.y + (address_rect.size.y - ROOT_ICON_SIZE) * 0.5,
+            icon_w,
+            ROOT_ICON_SIZE,
+        )
+    };
 
     let inner_y = address_rect.origin.y + 3.0;
     let inner_h = (address_rect.size.y - 6.0).max(16.0);
     let history_dropdown_rect = if !desc.history_paths.is_empty()
         && address_rect.width() >= ROOT_ICON_SIZE + HISTORY_DROPDOWN_BUTTON_WIDTH + 16.0
     {
-        let hd_x = (address_rect.max().x - HISTORY_DROPDOWN_BUTTON_WIDTH - 4.0)
-            .max(address_rect.origin.x);
-        Some(Rect::new(hd_x, inner_y, HISTORY_DROPDOWN_BUTTON_WIDTH, inner_h))
+        let hd_x =
+            (address_rect.max().x - HISTORY_DROPDOWN_BUTTON_WIDTH - 4.0).max(address_rect.origin.x);
+        Some(Rect::new(
+            hd_x,
+            inner_y,
+            HISTORY_DROPDOWN_BUTTON_WIDTH,
+            inner_h,
+        ))
     } else {
         None
     };
@@ -801,8 +816,7 @@ pub fn compute_layout(desc: &AddressBarDesc) -> AddressBarLayout {
     };
     let content_start_x =
         root_chevron_rect.map_or(root_icon_rect.max().x + 4.0, |rc| rc.max().x + 2.0);
-    let available_total =
-        (right_content_edge - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
+    let available_total = (right_content_edge - content_start_x - MIN_EDIT_TRIGGER_WIDTH).max(0.0);
 
     // 预估每段所需宽度（标签 + 可选 `›` 箭头），对 CJK 宽字符按双倍宽度系数估算
     let seg_widths: Vec<(f32, f32)> = desc
@@ -1429,10 +1443,8 @@ impl AddressBarState {
                                 self.dropdown_highlighted = None;
                                 self.edit_buffer = path.clone();
                                 self.edit_core.set_text(&path);
-                                self.pending_events.push(AddressBarEvent::HistorySelected {
-                                    index: idx,
-                                    path,
-                                });
+                                self.pending_events
+                                    .push(AddressBarEvent::HistorySelected { index: idx, path });
                                 return true;
                             }
                         }
@@ -1579,82 +1591,6 @@ fn chord_to_text_event(chord: KeyChord) -> Option<TextInputEvent> {
         KeyName::Char(ch) if !ch.is_control() => Some(TextInputEvent::Insert(ch.to_string())),
         _ => None,
     }
-}
-
-/// 绘制左箭头矢量几何（恒定 3 条线段）。
-fn emit_arrow_left_icon(
-    rect: Rect,
-    color: Token,
-    z: u16,
-    primitives: &mut Vec<GpuPrimitiveInstance>,
-    payloads: &mut Vec<GpuPayload>,
-) {
-    let c = rect.center();
-    curve_stroke(
-        [c.x + 5.0, c.y],
-        [c.x - 5.0, c.y],
-        1.6,
-        color,
-        z,
-        primitives,
-        payloads,
-    );
-    curve_stroke(
-        [c.x - 1.0, c.y - 4.0],
-        [c.x - 5.0, c.y],
-        1.6,
-        color,
-        z,
-        primitives,
-        payloads,
-    );
-    curve_stroke(
-        [c.x - 1.0, c.y + 4.0],
-        [c.x - 5.0, c.y],
-        1.6,
-        color,
-        z,
-        primitives,
-        payloads,
-    );
-}
-
-/// 绘制刷新环箭头矢量几何（恒定 1 个圆环 + 2 条箭头线段）。
-fn emit_refresh_icon(
-    rect: Rect,
-    color: Token,
-    z: u16,
-    primitives: &mut Vec<GpuPrimitiveInstance>,
-    payloads: &mut Vec<GpuPayload>,
-) {
-    let c = rect.center();
-    primitives.push(outlined(
-        Rect::new(c.x - 5.5, c.y - 5.5, 11.0, 11.0),
-        5.5,
-        Token::NONE,
-        color,
-        1.5,
-        0.0,
-        z,
-    ));
-    curve_stroke(
-        [c.x + 2.0, c.y - 5.5],
-        [c.x + 5.8, c.y - 5.5],
-        1.5,
-        color,
-        z + 1,
-        primitives,
-        payloads,
-    );
-    curve_stroke(
-        [c.x + 5.8, c.y - 5.5],
-        [c.x + 5.8, c.y - 1.7],
-        1.5,
-        color,
-        z + 1,
-        primitives,
-        payloads,
-    );
 }
 
 /// 绘制双左折线溢出图标 `«`（恒定 4 条线段）。
@@ -2102,7 +2038,15 @@ fn emit_address_bar_inner(
         primitives.push(surface(btn_r, INNER_RADIUS, fill, z + 1));
         match kind {
             AddressBarHitKind::NavBack => {
-                emit_arrow_left_icon(btn_r, icon_color, z + 2, &mut primitives, &mut payloads);
+                emit_shell_icon_primitives(
+                    ShellIcon::ArrowLeft,
+                    btn_r,
+                    icon_color,
+                    fill,
+                    z + 2,
+                    &mut primitives,
+                    &mut payloads,
+                );
             }
             AddressBarHitKind::NavForward => {
                 emit_shell_icon_primitives(
@@ -2127,7 +2071,15 @@ fn emit_address_bar_inner(
                 );
             }
             AddressBarHitKind::Refresh => {
-                emit_refresh_icon(btn_r, icon_color, z + 2, &mut primitives, &mut payloads);
+                emit_shell_icon_primitives(
+                    ShellIcon::Refresh,
+                    btn_r,
+                    icon_color,
+                    fill,
+                    z + 2,
+                    &mut primitives,
+                    &mut payloads,
+                );
             }
             _ => {}
         }
@@ -2214,16 +2166,18 @@ fn emit_address_bar_inner(
     } else {
         Token::TEXT_SECONDARY
     };
-    emit_widget_icon_primitives(
-        root_icon,
-        layout.root_icon_rect,
-        root_icon_color,
-        bg,
-        control.disabled,
-        z + 1,
-        &mut primitives,
-        &mut payloads,
-    );
+    if layout.root_icon_rect.width() > 0.0 && layout.root_icon_rect.height() > 0.0 {
+        emit_widget_icon_primitives(
+            root_icon,
+            layout.root_icon_rect,
+            root_icon_color,
+            bg,
+            control.disabled,
+            z + 1,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
 
     // 根图标后置 `›` 分隔箭头（支持独立悬停/按压反馈；编辑态置透明以保持图元数恒定）
     if let Some(rc_r) = layout.root_chevron_rect {

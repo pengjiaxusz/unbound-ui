@@ -68,6 +68,12 @@ pub enum Target {
     FavoriteToggle(u8),
     /// 切换首页快捷访问标签（`0` = Recent、`1` = Favorites）。
     HomeQuickTab(u8),
+    /// 页面内容区（面包屑/卡片）导航到指定页面，与侧边栏 `NavPage` 隔离 `NodeId`。
+    ContentNavPage(u8),
+    /// 页面内容区（面包屑/快捷胶囊）导航到控件分类索引页，与侧边栏 `NavCategory` 隔离 `NodeId`。
+    ContentNavCategory(u8),
+    /// 页面内容区（首页快捷区/分类卡片）导航到指定目录控件，与侧边栏 `NavComponent` 隔离 `NodeId`。
+    ContentNavComponent(u8),
 }
 
 const TAG_NAV_TOGGLE: u64 = 1;
@@ -99,6 +105,9 @@ const TAG_NAV_CATEGORY: u64 = 27;
 const TAG_CONTROL_FILTER: u64 = 28;
 const TAG_FAVORITE_TOGGLE: u64 = 29;
 const TAG_HOME_QUICK_TAB: u64 = 30;
+const TAG_CONTENT_NAV_PAGE: u64 = 31;
+const TAG_CONTENT_NAV_CATEGORY: u64 = 32;
+const TAG_CONTENT_NAV_COMPONENT: u64 = 33;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -160,6 +169,9 @@ pub const fn id(target: Target) -> u64 {
         Target::ControlFilter(filter) => tag(TAG_CONTROL_FILTER) | filter as u64,
         Target::FavoriteToggle(comp) => tag(TAG_FAVORITE_TOGGLE) | comp as u64,
         Target::HomeQuickTab(tab) => tag(TAG_HOME_QUICK_TAB) | tab as u64,
+        Target::ContentNavPage(page) => tag(TAG_CONTENT_NAV_PAGE) | page as u64,
+        Target::ContentNavCategory(cat) => tag(TAG_CONTENT_NAV_CATEGORY) | cat as u64,
+        Target::ContentNavComponent(comp) => tag(TAG_CONTENT_NAV_COMPONENT) | comp as u64,
     }
 }
 
@@ -211,6 +223,9 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_CONTROL_FILTER => Target::ControlFilter((low & 0xff) as u8),
         TAG_FAVORITE_TOGGLE => Target::FavoriteToggle((low & 0xff) as u8),
         TAG_HOME_QUICK_TAB => Target::HomeQuickTab((low & 0xff) as u8),
+        TAG_CONTENT_NAV_PAGE => Target::ContentNavPage((low & 0xff) as u8),
+        TAG_CONTENT_NAV_CATEGORY => Target::ContentNavCategory((low & 0xff) as u8),
+        TAG_CONTENT_NAV_COMPONENT => Target::ContentNavComponent((low & 0xff) as u8),
         _ => return None,
     })
 }
@@ -251,6 +266,9 @@ mod tests {
             Target::ControlFilter(1),
             Target::FavoriteToggle(7),
             Target::HomeQuickTab(1),
+            Target::ContentNavPage(12),
+            Target::ContentNavCategory(3),
+            Target::ContentNavComponent(42),
         ];
         for target in targets {
             assert_eq!(decode(id(target)), Some(target), "{target:?}");
@@ -263,6 +281,15 @@ mod tests {
         assert_ne!(id(Target::Code(1, 2)), id(Target::Code(2, 1)));
         assert_ne!(id(Target::NavPage(2)), id(Target::NavPage(3)));
         assert_ne!(id(Target::NavPage(2)), id(Target::NavComponent(2)));
+        assert_ne!(id(Target::NavPage(2)), id(Target::ContentNavPage(2)));
+        assert_ne!(
+            id(Target::NavCategory(3)),
+            id(Target::ContentNavCategory(3))
+        );
+        assert_ne!(
+            id(Target::NavComponent(42)),
+            id(Target::ContentNavComponent(42))
+        );
         assert_ne!(
             id(Target::Knob(1, 2, 3)),
             id(Target::KnobOption(1, 2, 3, 0))

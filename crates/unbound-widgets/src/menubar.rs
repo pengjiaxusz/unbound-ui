@@ -87,14 +87,34 @@ impl MenuBarDesc {
         )
     }
 
-    /// 布局所有菜单项，返回 `(rectangle, item index)`。
+    /// 布局所有菜单项，返回 `(rectangle, item index)`；超出 `rect.max().x` 时截断并停止排布。
     #[must_use]
     pub fn layout(&self, widths: &[f32]) -> Vec<(Rect, usize)> {
         let mut out = Vec::with_capacity(self.items.len());
+        let max_x = self.rect.max().x;
         let mut x = 0.0;
         for index in 0..self.items.len() {
             let width = self.item_width(index, widths.get(index).copied());
-            out.push((self.item_rect(index, width, x), index));
+            let item_rect = self.item_rect(index, width, x);
+            if item_rect.origin.x >= max_x {
+                break;
+            }
+            if item_rect.max().x > max_x {
+                let remaining = (max_x - item_rect.origin.x).max(0.0);
+                if remaining >= self.item_padding {
+                    out.push((
+                        Rect::new(
+                            item_rect.origin.x,
+                            item_rect.origin.y,
+                            remaining,
+                            item_rect.size.y,
+                        ),
+                        index,
+                    ));
+                }
+                break;
+            }
+            out.push((item_rect, index));
             x += width;
         }
         out
@@ -292,6 +312,11 @@ pub fn emit_menubar_item(
     let Some(item) = desc.items.get(index) else {
         return WidgetOutput::default();
     };
+    // 超出菜单栏右边界的菜单项停止绘制，部分越界项裁剪至 `desc.rect` 内。
+    let clipped_rect = rect.intersect(&desc.rect);
+    if clipped_rect.is_empty() {
+        return WidgetOutput::default();
+    }
     let disabled = control.disabled;
     let open = state.open == Some(index);
     let mut primitives = Vec::with_capacity(3 + label.len());
@@ -305,7 +330,7 @@ pub fn emit_menubar_item(
         tokens.item
     };
     // WinUI `MenuBarItemMargin = 4,4,4,4`：悬停/打开态胶囊比条目矩形内缩 4px。
-    let pill = rect.inflate(-4.0);
+    let pill = clipped_rect.inflate(-4.0);
     primitives.push(outlined(
         pill,
         // WinUI `ControlCornerRadius = 4`。
@@ -316,8 +341,15 @@ pub fn emit_menubar_item(
         0.0,
         desc.z,
     ));
+    let visible_label: Vec<GlyphQuad> = label
+        .iter()
+        .copied()
+        .filter(|q| {
+            q.rect.origin.x >= clipped_rect.origin.x && q.rect.max().x <= clipped_rect.max().x
+        })
+        .collect();
     glyphs(
-        label,
+        &visible_label,
         if open { tokens.text_open } else { tokens.text },
         desc.z,
         &mut primitives,
@@ -333,11 +365,11 @@ pub fn emit_menubar_item(
     ));
 
     let hit = (!disabled).then(|| {
-        HitRegion::new(item.id, CONTROL_LAYER, u32::from(desc.z), rect)
+        HitRegion::new(item.id, CONTROL_LAYER, u32::from(desc.z), clipped_rect)
             .with_shape(Shape::Rounded { radii: [4.0; 4] })
             .with_cursor(CursorKind::Pointer)
     });
-    let mut a11y = A11yNode::new(Role::Menu, item.title.clone(), rect)
+    let mut a11y = A11yNode::new(Role::Menu, item.title.clone(), clipped_rect)
         .clickable()
         .disabled(disabled);
     a11y.expanded = Some(open);

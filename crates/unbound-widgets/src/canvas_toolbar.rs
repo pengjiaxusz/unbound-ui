@@ -124,13 +124,14 @@ impl CanvasToolbarDesc {
         8.0 * 2.0 + tools * TOOL_BUTTON + (tools - 1.0) * TOOL_GAP + separator + ZOOM_WIDTH
     }
 
-    /// 工具栏矩形区域。
+    /// 工具栏矩形区域（视口窄于工具栏总宽时自动钳制宽度，防止左右越界）。
     #[must_use]
     pub fn rect(&self) -> Rect {
+        let clamped_w = self.width().min(self.viewport.width().max(0.0));
         Rect::new(
-            self.viewport.center().x - self.width() * 0.5,
+            self.viewport.center().x - clamped_w * 0.5,
             self.viewport.max().y - self.bottom_margin - TOOLBAR_HEIGHT,
-            self.width(),
+            clamped_w,
             TOOLBAR_HEIGHT,
         )
     }
@@ -272,12 +273,23 @@ pub fn emit_canvas_toolbar(
         ),
     ];
 
+    let zoom_r = desc.zoom_rect();
+    let zoom_fits = zoom_r.origin.x >= rect.origin.x + 8.0 && zoom_r.max().x <= rect.max().x - 8.0;
+    let tool_right_limit = if zoom_fits {
+        zoom_r.origin.x - TOOL_GAP * 2.0 - 1.0
+    } else {
+        rect.max().x - 8.0
+    };
+
     let mut tools = Vec::with_capacity(CanvasTool::ALL.len());
     let hovered = control.phase == crate::PointerPhase::Hovered;
     for tool in CanvasTool::ALL {
         let button = desc.tool_rect(tool);
+        if button.origin.x < rect.origin.x || button.max().x > tool_right_limit {
+            break;
+        }
         let active = tool == state.active;
-        // 每个工具在池中始终占有一个槽位：激活工具绘制主填充色，
+        // 每个可见工具在池中始终占有一个槽位：激活工具绘制主填充色，
         // 其余工具保留悬停底色，悬停仅改变其不透明度，因此图元序列永不重排。
         let slot = if active {
             surface(button, BUTTON_RADIUS, Token::PRIMARY, desc.z + 1)
@@ -299,23 +311,33 @@ pub fn emit_canvas_toolbar(
         ));
     }
 
-    primitives.push(surface(
-        desc.separator_rect(),
-        0.0,
-        Token::OUTLINE,
-        desc.z + 1,
-    ));
-    // 缩放读数是一枚控件表面：`ControlFillColorDefault` + `ControlCornerRadius = 4`。
-    primitives.push(surface(
-        desc.zoom_rect(),
-        BUTTON_RADIUS,
-        Token::CONTROL_FILL,
-        desc.z + 1,
-    ));
+    if zoom_fits {
+        let sep_r = Rect::new(
+            zoom_r.origin.x - TOOL_GAP - 1.0,
+            rect.origin.y + SEPARATOR_MARGIN,
+            1.0,
+            (TOOLBAR_HEIGHT - SEPARATOR_MARGIN * 2.0).max(0.0),
+        );
+        if !tools.is_empty() && sep_r.origin.x >= rect.origin.x + 8.0 {
+            primitives.push(surface(sep_r, 0.0, Token::OUTLINE, desc.z + 1));
+        }
+        // 缩放读数是一枚控件表面：`ControlFillColorDefault` + `ControlCornerRadius = 4`。
+        primitives.push(surface(
+            zoom_r,
+            BUTTON_RADIUS,
+            Token::CONTROL_FILL,
+            desc.z + 1,
+        ));
+    }
 
     let mut payloads = Vec::new();
+    let visible_glyphs: Vec<GlyphQuad> = glyphs
+        .iter()
+        .copied()
+        .filter(|q| q.rect.origin.x >= rect.origin.x && q.rect.max().x <= rect.max().x)
+        .collect();
     crate::primitive::glyphs(
-        glyphs,
+        &visible_glyphs,
         Token::HUD_TEXT,
         desc.z + 2,
         &mut primitives,

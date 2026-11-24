@@ -5133,6 +5133,8 @@ pub struct AppRuntime<A: Application> {
     asset_hub: AssetHub,
     pending: Vec<PendingWidget>,
     mounted_widgets: FxHashMap<u64, (Rect, Arc<dyn ErasedUiWidget>)>,
+    /// 上一次收到 `PointerMove` 悬停通知的已挂载 `UiWidget` 宿主键，用于指针移出时清理子项悬停态。
+    last_hovered_widget: Option<u64>,
     widget_state: Rc<RefCell<WidgetStateStore>>,
     timers: TimerQueue,
     async_rx: Receiver<AppEvent>,
@@ -5252,6 +5254,7 @@ impl<A: Application> AppRuntime<A> {
             asset_hub: AssetHub::new(),
             pending: Vec::new(),
             mounted_widgets: FxHashMap::default(),
+            last_hovered_widget: None,
             widget_state,
             timers,
             async_rx,
@@ -9739,11 +9742,83 @@ impl<A: Application> AppRuntime<A> {
         false
     }
 
+    /// 将命中的主热区键或 `sub_hits` 合成键解析为已挂载的 `UiWidget` 宿主键。
+    fn resolve_mounted_widget_key(&self, key: u64) -> Option<u64> {
+        if self.mounted_widgets.contains_key(&key) {
+            Some(key)
+        } else {
+            self.hit_owners
+                .get(&key)
+                .copied()
+                .filter(|owner| self.mounted_widgets.contains_key(owner))
+        }
+    }
+
     fn dispatch_outcome(&mut self, event: AppEvent) -> EventOutcome {
         let mut widget_dirty = DirtyFlags::NONE;
         let mut widget_consumed = false;
         let mut ime_absorbed = false;
         match &event {
+            AppEvent::PointerMove { pos, hovered } => {
+                // `TabsDesc` 在发射阶段已通过 `ctx.hovered` 与子热区键独立驱动悬停反馈，
+                // 此处跳过以避免重复触发或干扰既有标签页悬停语义。
+                let current_widget = (*hovered)
+                    .and_then(|key| self.resolve_mounted_widget_key(key))
+                    .filter(|key| {
+                        self.mounted_widgets.get(key).is_some_and(|(_, widget)| {
+                            !widget.as_any().is::<unbound_widgets::TabsDesc>()
+                        })
+                    });
+
+                // 指针离开上一次悬停的已挂载控件时，向旧控件补发一次位于其矩形外的
+                // `PointerMove`，确保内部子项悬停态被及时清理（即使新目标在几何上遮挡旧矩形）。
+                if let Some(prev_key) = self.last_hovered_widget {
+                    if Some(prev_key) != current_widget {
+                        if let Some((prev_rect, prev_widget)) =
+                            self.mounted_widgets.get(&prev_key).cloned()
+                        {
+                            if !prev_widget.as_any().is::<unbound_widgets::TabsDesc>() {
+                                let leave_pos = if prev_rect.contains_point(*pos) {
+                                    Vec2::new(prev_rect.origin.x - 1.0, prev_rect.origin.y - 1.0)
+                                } else {
+                                    *pos
+                                };
+                                let w_evt = unbound_widgets::WidgetInputEvent::PointerMove {
+                                    pos: leave_pos,
+                                };
+                                let mut store = self.widget_state.borrow_mut();
+                                let changed = prev_widget
+                                    .reduce_erased(prev_key, prev_rect, &w_evt, &mut store);
+                                drop(store);
+                                if changed {
+                                    if self.sync_form_binding(prev_key) {
+                                        widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                                    } else {
+                                        widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.last_hovered_widget = current_widget;
+
+                if let Some(target_key) = current_widget {
+                    if let Some((rect, widget)) = self.mounted_widgets.get(&target_key).cloned() {
+                        let w_evt = unbound_widgets::WidgetInputEvent::PointerMove { pos: *pos };
+                        let mut store = self.widget_state.borrow_mut();
+                        let changed = widget.reduce_erased(target_key, rect, &w_evt, &mut store);
+                        drop(store);
+                        if changed {
+                            if self.sync_form_binding(target_key) {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
+                            } else {
+                                widget_dirty = widget_dirty.merge(DirtyFlags::PAINT);
+                            }
+                        }
+                    }
+                }
+            }
             AppEvent::Click { node, .. } => {
                 if self.handle_select_option_click(*node) {
                     widget_dirty = widget_dirty.merge(DirtyFlags::ALL);
