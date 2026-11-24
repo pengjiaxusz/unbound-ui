@@ -2430,7 +2430,7 @@ fn window_caption_buttons_hit_contract_exposes_only_maximize_rect() {
 /// 侧边栏导航目标 100% 覆盖全部 25 个页面与全部 106 个目录组件，且点击组件导航项可精确定位。
 #[test]
 fn sidebar_covers_every_page_and_every_catalog_component() {
-    use showcase::pages::{component_scroll_offset, SIDEBAR_COMPONENT_IDS};
+    use showcase::pages::SIDEBAR_COMPONENT_IDS;
     use showcase::shell::sidebar_all_targets;
     use unbound_widgets::WidgetCatalogId;
 
