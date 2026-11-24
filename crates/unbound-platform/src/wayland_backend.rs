@@ -376,6 +376,28 @@ impl WaylandWindowHandle {
         self.shared.maximized.load(Ordering::Acquire)
     }
 
+    pub(crate) fn is_minimized(&self) -> bool {
+        false
+    }
+
+    pub(crate) fn outer_position(&self) -> Option<(i32, i32)> {
+        None
+    }
+
+    pub(crate) fn set_outer_position(&self, x: i32, y: i32) {
+        let _ = (x, y);
+    }
+
+    pub(crate) fn set_inner_size(&self, width: u32, height: u32) {
+        let _ = (width, height);
+    }
+
+    pub(crate) fn activate_foreground(&self) {
+        if !self.shared.visible.load(Ordering::Acquire) {
+            self.set_visible(true);
+        }
+    }
+
     pub(crate) fn is_decorated(&self) -> bool {
         self.shared.decorated
     }

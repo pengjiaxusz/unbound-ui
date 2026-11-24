@@ -472,6 +472,48 @@ impl<A: Application> WindowedRunner<A> {
                         return Flow::Exit;
                     }
                 }
+                crate::WindowCommand::SetImeCursorArea {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    window.set_ime_cursor_area(
+                        unbound_platform::PhysicalPosition::new(x, y),
+                        unbound_platform::PhysicalSize::new(width, height),
+                    );
+                }
+                crate::WindowCommand::SetVisible(visible) => {
+                    window.set_visible(visible);
+                }
+                crate::WindowCommand::ActivateForeground => {
+                    window.activate_foreground();
+                }
+                crate::WindowCommand::SetOuterPosition { x, y } => {
+                    window.set_outer_position(x, y);
+                }
+                crate::WindowCommand::SetInnerSize { width, height } => {
+                    window.set_inner_size(width, height);
+                }
+                crate::WindowCommand::SetMaximized(maximized) => {
+                    window.set_maximized(maximized);
+                }
+                crate::WindowCommand::SetTaskbarProgress {
+                    completed,
+                    total,
+                    state: progress_state,
+                } => {
+                    if let Some(raw_window_handle::RawWindowHandle::Win32(handle)) =
+                        unbound_platform::backend::raw_window_handle(window)
+                    {
+                        unbound_platform::set_taskbar_progress(
+                            handle.hwnd.get(),
+                            completed,
+                            total,
+                            progress_state,
+                        );
+                    }
+                }
                 crate::WindowCommand::OpenFloatingWindow { .. } => {
                     eprintln!(
                         "[unbound-app] WindowCommand::OpenFloatingWindow requires MultiWindowCoordinator"

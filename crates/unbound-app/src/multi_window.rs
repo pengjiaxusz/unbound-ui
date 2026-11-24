@@ -798,6 +798,39 @@ impl<A: Application> Drop for WindowContext<A> {
     }
 }
 
+/// 原生窗口创建完成时的可选宿主回调钩子（例如挂载系统托盘）。
+pub type WindowCreatedHook = Box<dyn FnMut(WindowId, &NativeWindow) + 'static>;
+
+/// 多窗口运行器配置。
+#[derive(Default)]
+pub struct MultiWindowConfig {
+    /// 主窗口初始配置。
+    pub primary_config: WindowConfig,
+    /// 每个主/辅助原生窗口创建完成后的可选回调钩子。
+    pub on_window_created: Option<WindowCreatedHook>,
+}
+
+impl MultiWindowConfig {
+    /// 基于主窗口配置构造默认多窗口配置。
+    #[must_use]
+    pub fn new(primary_config: WindowConfig) -> Self {
+        Self {
+            primary_config,
+            on_window_created: None,
+        }
+    }
+
+    /// 绑定窗口创建完成回调钩子。
+    #[must_use]
+    pub fn with_on_window_created(
+        mut self,
+        hook: impl FnMut(WindowId, &NativeWindow) + 'static,
+    ) -> Self {
+        self.on_window_created = Some(Box::new(hook));
+        self
+    }
+}
+
 /// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
 #[derive(Clone, Copy, Debug, Default)]
 struct FloatingLiveSync {
@@ -843,6 +876,7 @@ pub struct MultiWindowCoordinator<A: Application> {
     pending_floating_live_syncs: FxHashMap<WindowId, FloatingLiveSync>,
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
+    on_window_created: Option<WindowCreatedHook>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
     /// 多窗口共享主题过渡单调时钟基准。
     theme_clock_epoch: Instant,
@@ -873,10 +907,21 @@ impl<A: Application> MultiWindowCoordinator<A> {
             pending_floating_live_syncs: FxHashMap::default(),
             primary_config,
             factory: Box::new(factory),
+            on_window_created: None,
             waker: None,
             theme_clock_epoch: Instant::now(),
             shared_theme_trigger: None,
         }
+    }
+
+    /// 绑定每个原生窗口创建完成后的回调钩子（例如挂载系统托盘）。
+    #[must_use]
+    pub fn with_on_window_created(
+        mut self,
+        hook: impl FnMut(WindowId, &NativeWindow) + 'static,
+    ) -> Self {
+        self.on_window_created = Some(Box::new(hook));
+        self
     }
 
     /// 借用多窗口注册表。
@@ -1509,7 +1554,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 WindowCommand::StartDrag
                 | WindowCommand::Minimize
                 | WindowCommand::ToggleMaximize
-                | WindowCommand::BeginExternalFileDrag(_) => {}
+                | WindowCommand::BeginExternalFileDrag(_)
+                | WindowCommand::SetImeCursorArea { .. }
+                | WindowCommand::SetVisible(_)
+                | WindowCommand::ActivateForeground
+                | WindowCommand::SetOuterPosition { .. }
+                | WindowCommand::SetInnerSize { .. }
+                | WindowCommand::SetMaximized(_)
+                | WindowCommand::SetTaskbarProgress { .. } => {}
             }
         }
         for target in &to_close {
@@ -1746,6 +1798,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
         } else if visible && self.focused_window_id.is_none() {
             self.focused_window_id = Some(id);
         }
+        if let Some(hook) = self.on_window_created.as_mut() {
+            hook(id, window);
+        }
     }
 
     fn drain_window_commands_live(&mut self, id: WindowId, window: &NativeWindow) -> Flow {
@@ -1802,6 +1857,48 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             close_self = true;
                         } else {
                             close_targets.push(target);
+                        }
+                    }
+                    WindowCommand::SetImeCursorArea {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        window.set_ime_cursor_area(
+                            unbound_platform::PhysicalPosition::new(x, y),
+                            unbound_platform::PhysicalSize::new(width, height),
+                        );
+                    }
+                    WindowCommand::SetVisible(visible) => {
+                        window.set_visible(visible);
+                    }
+                    WindowCommand::ActivateForeground => {
+                        window.activate_foreground();
+                    }
+                    WindowCommand::SetOuterPosition { x, y } => {
+                        window.set_outer_position(x, y);
+                    }
+                    WindowCommand::SetInnerSize { width, height } => {
+                        window.set_inner_size(width, height);
+                    }
+                    WindowCommand::SetMaximized(maximized) => {
+                        window.set_maximized(maximized);
+                    }
+                    WindowCommand::SetTaskbarProgress {
+                        completed,
+                        total,
+                        state: progress_state,
+                    } => {
+                        if let Some(raw_window_handle::RawWindowHandle::Win32(handle)) =
+                            unbound_platform::backend::raw_window_handle(window)
+                        {
+                            unbound_platform::set_taskbar_progress(
+                                handle.hwnd.get(),
+                                completed,
+                                total,
+                                progress_state,
+                            );
                         }
                     }
                     other @ (WindowCommand::UpdateFloatingPolicy { .. }
@@ -2530,16 +2627,30 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 ///
 /// # Errors
 /// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
-pub fn run_multi_window<A, F>(
-    mut primary_config: WindowConfig,
+pub fn run_multi_window<A, F>(primary_config: WindowConfig, factory: F) -> Result<(), PlatformError>
+where
+    A: Application + 'static,
+    F: MultiWindowFactory<A> + 'static,
+{
+    run_multi_window_with_config(MultiWindowConfig::new(primary_config), factory)
+}
+
+/// 使用 [`MultiWindowConfig`] 启动多窗口共享设备应用（支持 `on_window_created` 钩子）。
+///
+/// # Errors
+/// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
+pub fn run_multi_window_with_config<A, F>(
+    mut config: MultiWindowConfig,
     factory: F,
 ) -> Result<(), PlatformError>
 where
     A: Application + 'static,
     F: MultiWindowFactory<A> + 'static,
 {
-    primary_config.decorations = false;
-    let coordinator = MultiWindowCoordinator::new(primary_config.clone(), factory);
+    config.primary_config.decorations = false;
+    let primary_config = config.primary_config.clone();
+    let mut coordinator = MultiWindowCoordinator::new(primary_config.clone(), factory);
+    coordinator.on_window_created = config.on_window_created;
     PlatformWindow::new(&primary_config)?.run(coordinator)
 }
 
