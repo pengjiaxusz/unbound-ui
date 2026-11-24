@@ -54,7 +54,8 @@ use crate::window::{
     PlatformEvent, PlatformState, ScreenRect, WindowConfig,
 };
 
-const X11_CSD_RESIZE_BORDER: f64 = 6.0;
+const X11_CSD_RESIZE_BORDER: f64 = 8.0;
+const X11_DEFAULT_CURSOR_SIZE: u32 = 24;
 
 /// 应用侧向 X11 事件循环发送的窗口控制命令。
 enum X11Command {
@@ -459,6 +460,71 @@ impl WaylandClipboardBackend for X11ClipboardBridge {
     }
 }
 
+/// X11 光标缓存：启动时仅初始化一次 `x11rb::cursor::Handle` 并按样式复用已加载的 `Cursor` XID，
+/// 同时按窗口去重避免 `MotionNotify` 每像素触发磁盘主题扫描阻塞事件循环；
+/// 在 WSLg 等未设置 `XCURSOR_SIZE` 的环境下默认使用 24px 逻辑光标尺寸，防止光标异常巨大。
+struct X11CursorCache {
+    handle: Option<x11rb::cursor::Handle>,
+    cursors: HashMap<u8, u32>,
+    applied: HashMap<X11WindowId, CursorIcon>,
+}
+
+impl X11CursorCache {
+    fn new(conn: &XCBConnection, screen_num: usize) -> Self {
+        let env_size = std::env::var("XCURSOR_SIZE")
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .filter(|&v| (12..=64).contains(&v));
+        let size = env_size.unwrap_or(X11_DEFAULT_CURSOR_SIZE);
+        let db = x11rb::resource_manager::Database::new_from_data(
+            format!("Xcursor.size: {size}\n").as_bytes(),
+        );
+        let handle = x11rb::cursor::Handle::new(conn, screen_num, &db)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok());
+        Self {
+            handle,
+            cursors: HashMap::new(),
+            applied: HashMap::new(),
+        }
+    }
+
+    fn apply(&mut self, conn: &XCBConnection, window: X11WindowId, icon: CursorIcon) {
+        if self.applied.get(&window) == Some(&icon) {
+            return;
+        }
+        let key = icon as u8;
+        let cid = if let Some(&existing) = self.cursors.get(&key) {
+            Some(existing)
+        } else if let Some(handle) = &self.handle {
+            handle
+                .load_cursor(conn, wayland_cursor_name(icon))
+                .ok()
+                .inspect(|&id| {
+                    self.cursors.insert(key, id);
+                })
+        } else {
+            None
+        };
+        if let Some(cid) = cid {
+            let _ = conn
+                .change_window_attributes(window, &ChangeWindowAttributesAux::new().cursor(cid));
+            self.applied.insert(window, icon);
+        }
+    }
+
+    fn remove_window(&mut self, window: X11WindowId) {
+        self.applied.remove(&window);
+    }
+
+    fn destroy_all(&mut self, conn: &XCBConnection) {
+        for (_, cid) in self.cursors.drain() {
+            let _ = conn.free_cursor(cid);
+        }
+        self.applied.clear();
+    }
+}
+
 /// 缓存的 X11 Atom 集合。
 struct X11Atoms {
     wm_protocols: Atom,
@@ -690,6 +756,7 @@ fn send_net_wm_moveresize(
         EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
         event,
     );
+    let _ = conn.flush();
 }
 
 fn wait_x11_or_deadline(x11_fd: RawFd, wake_read_fd: RawFd, wait: Option<Duration>) {
@@ -784,6 +851,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let mut popups: HashMap<u64, X11PopupEntry> = HashMap::new();
     let mut exit_requested = false;
     let mut xdnd_source_window: Option<X11WindowId> = None;
+    let mut cursor_cache = X11CursorCache::new(&conn, screen_num);
 
     let create_toplevel = |cfg: &WindowConfig| -> Result<X11ToplevelEntry, PlatformError> {
         let xid = conn
@@ -900,6 +968,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     };
 
     let primary = create_toplevel(&config)?;
+    cursor_cache.apply(&conn, primary.xid, CursorIcon::Default);
     windows.push(primary);
     if let Some(first) = windows.first_mut() {
         app.resumed(&mut first.state, &first.native_window);
@@ -1012,16 +1081,18 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                                 X11_CSD_RESIZE_BORDER,
                             ) {
                                 entry.csd_edge_active = true;
-                                let _ = cmd_tx.send(X11Command::SetCursor {
-                                    window: entry.xid,
-                                    cursor: cursor_for_resize_direction(dir),
-                                });
+                                cursor_cache.apply(
+                                    &conn,
+                                    entry.xid,
+                                    cursor_for_resize_direction(dir),
+                                );
                             } else if entry.csd_edge_active {
                                 entry.csd_edge_active = false;
-                                let _ = cmd_tx.send(X11Command::SetCursor {
-                                    window: entry.xid,
-                                    cursor: entry.native_window.current_cursor(),
-                                });
+                                cursor_cache.apply(
+                                    &conn,
+                                    entry.xid,
+                                    entry.native_window.current_cursor(),
+                                );
                             }
                         }
                         push_coalesced_event(
@@ -1328,21 +1399,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     }
                 }
                 X11Command::SetCursor { window, cursor } => {
-                    if let Ok(db) = x11rb::resource_manager::new_from_default(&conn) {
-                        if let Ok(handle) = x11rb::cursor::Handle::new(&conn, screen_num, &db) {
-                            if let Ok(handle) = handle.reply() {
-                                if let Ok(cid) =
-                                    handle.load_cursor(&conn, wayland_cursor_name(cursor))
-                                {
-                                    let _ = conn.change_window_attributes(
-                                        window,
-                                        &ChangeWindowAttributesAux::new().cursor(cid),
-                                    );
-                                    let _ = conn.free_cursor(cid);
-                                }
-                            }
-                        }
-                    }
+                    cursor_cache.apply(&conn, window, cursor);
                 }
                 X11Command::DragWindow { window } => {
                     let (rx, ry) = windows
@@ -1453,6 +1510,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             if let Some(pos) = windows.iter().position(|w| w.xid == sec_xid) {
                 let entry = windows.remove(pos);
                 entry.shared.destroyed.store(true, Ordering::Release);
+                cursor_cache.remove_window(entry.xid);
                 app.window_closing(&entry.native_window);
                 let _ = conn.destroy_window(entry.xid);
             }
@@ -1509,6 +1567,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 }
                 let entry = windows.remove(pos);
                 entry.shared.destroyed.store(true, Ordering::Release);
+                cursor_cache.remove_window(entry.xid);
                 app.window_closing(&entry.native_window);
                 let _ = conn.destroy_window(entry.xid);
             }
@@ -1700,6 +1759,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         app.window_closing(&entry.native_window);
         let _ = conn.destroy_window(entry.xid);
     }
+    cursor_cache.destroy_all(&conn);
     let _ = conn.flush();
     Ok(())
 }

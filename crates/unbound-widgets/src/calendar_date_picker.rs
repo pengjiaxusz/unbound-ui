@@ -13,9 +13,7 @@ use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
 use crate::date_picker::NaiveDate;
-use crate::primitive::{
-    curve_stroke, focus_ring, glyphs as emit_glyphs, instance, outlined, surface,
-};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, instance, outlined, surface};
 use crate::text_input::{focus_underline, TEXT_INPUT_LAYER};
 use crate::{
     AlignX, AlignY, ControlState, PointerPhase, TextCtx, UiWidget, WidgetInputEvent, WidgetOutput,
@@ -29,6 +27,10 @@ pub const CALENDAR_DATE_PICKER_RADIUS: f32 = 4.0;
 pub const CALENDAR_DATE_PICKER_FONT_SIZE: f32 = 14.0;
 /// 右侧日历图标触发器的宽度。
 pub const CALENDAR_DATE_PICKER_ICON_WIDTH: f32 = 32.0;
+/// 右侧日历符号图标字形（WinUI 3 `Calendar` 码点 `U+E787`）。
+pub const CALENDAR_DATE_PICKER_ICON_GLYPH: &str = "\u{E787}";
+/// 右侧日历符号图标字号（对齐 WinUI 3 `CalendarDatePickerCalendarGlyph` 的 12px 尺寸）。
+pub const CALENDAR_DATE_PICKER_ICON_FONT_SIZE: f32 = 12.0;
 /// 弹出面板高度（占位外壳）。
 pub const CALENDAR_DATE_PICKER_PANEL_HEIGHT: f32 = 220.0;
 /// 弹出面板圆角半径。对齐 WinUI `OverlayCornerRadius = 8`。
@@ -313,8 +315,15 @@ impl UiWidget for CalendarDatePickerDesc {
                 }
             }
         }
-        // 统一保留内置几何矢量日历图标，彻底消除对 Windows 专有 PUA 图标字体的依赖。
-        emit_calendar_date_picker(node, &desc, state, control, &mut glyphs)
+        // 右侧日历图标优先通过平台感知符号字体塑形；不可用或被禁用时回退 ShellIcon::Calendar。
+        let icon_glyphs = text_ctx
+            .shape_symbol_glyph(
+                CALENDAR_DATE_PICKER_ICON_GLYPH,
+                desc.icon_rect(),
+                CALENDAR_DATE_PICKER_ICON_FONT_SIZE,
+            )
+            .unwrap_or_default();
+        emit_calendar_date_picker_with_icon(node, &desc, state, control, &mut glyphs, &icon_glyphs)
     }
 }
 
@@ -324,7 +333,7 @@ pub const fn calendar_icon_node(node: u64) -> u64 {
     node ^ 0x4341_4C45_4E44
 }
 
-/// 输出日历日期选择器的图元、命中区域与语义节点。
+/// 输出日历日期选择器的图元、命中区域与语义节点（无符号字形时自动回退 [`crate::shell::ShellIcon::Calendar`]）。
 #[must_use]
 pub fn emit_calendar_date_picker(
     node: u64,
@@ -332,6 +341,19 @@ pub fn emit_calendar_date_picker(
     state: &CalendarDatePickerState,
     control: ControlState,
     glyphs: &mut [GlyphQuad],
+) -> WidgetOutput {
+    emit_calendar_date_picker_with_icon(node, desc, state, control, glyphs, &[])
+}
+
+/// 输出日历日期选择器的图元、命中区域与语义节点，支持传入已塑形的右侧日历符号字形。
+#[must_use]
+fn emit_calendar_date_picker_with_icon(
+    node: u64,
+    desc: &CalendarDatePickerDesc,
+    state: &CalendarDatePickerState,
+    control: ControlState,
+    glyphs: &mut [GlyphQuad],
+    icon_glyphs: &[GlyphQuad],
 ) -> WidgetOutput {
     let rect = desc.rect;
     let z = desc.z;
@@ -365,8 +387,8 @@ pub fn emit_calendar_date_picker(
         Token::TEXT_SECONDARY
     };
 
-    let mut primitives = Vec::with_capacity(9 + glyphs.len());
-    let mut payloads = Vec::with_capacity(glyphs.len() + 2);
+    let mut primitives = Vec::with_capacity(9 + glyphs.len() + icon_glyphs.len());
+    let mut payloads = Vec::with_capacity(glyphs.len() + icon_glyphs.len() + 2);
 
     primitives.push(surface(rect, desc.radius, fill, z));
     primitives.push(outlined(
@@ -406,52 +428,20 @@ pub fn emit_calendar_date_picker(
         z + 1,
     ));
 
-    // 右侧日历 glyph：对齐 WinUI 12×12 细线轮廓 + 1px 表头横线 + 两枚短装订环。
-    let body = 12.0;
-    let body_rect = Rect::new(
-        (icon.center().x - body * 0.5).round(),
-        (icon.center().y - body * 0.5 + 0.5).round(),
-        body,
-        body,
-    );
-    primitives.push(outlined(
-        body_rect,
-        1.5,
-        Token::NONE,
-        icon_ink,
-        1.0,
-        0.0,
-        z + 2,
-    ));
-    primitives.push(surface(
-        Rect::new(
-            body_rect.origin.x + 1.0,
-            body_rect.origin.y + 3.0,
-            body_rect.size.x - 2.0,
-            1.0,
-        ),
-        0.0,
-        icon_ink,
-        z + 2,
-    ));
-    curve_stroke(
-        [body_rect.origin.x + 3.0, body_rect.origin.y - 1.5],
-        [body_rect.origin.x + 3.0, body_rect.origin.y + 0.5],
-        1.0,
-        icon_ink,
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
-    curve_stroke(
-        [body_rect.max().x - 3.0, body_rect.origin.y - 1.5],
-        [body_rect.max().x - 3.0, body_rect.origin.y + 0.5],
-        1.0,
-        icon_ink,
-        z + 2,
-        &mut primitives,
-        &mut payloads,
-    );
+    // 右侧日历图标：优先发射符号字体字形；无可用符号字体时回退校准后的 ShellIcon::Calendar。
+    if !icon_glyphs.is_empty() {
+        emit_glyphs(icon_glyphs, icon_ink, z + 2, &mut primitives, &mut payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Calendar,
+            icon,
+            icon_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut primitives,
+            &mut payloads,
+        );
+    }
 
     emit_glyphs(glyphs, ink, z + 2, &mut primitives, &mut payloads);
     primitives.push(focus_ring(

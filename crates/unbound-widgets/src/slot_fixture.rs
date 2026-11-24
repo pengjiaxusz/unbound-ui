@@ -1405,7 +1405,7 @@ pub fn emit_canonical_pips_pager_fixture(
 pub fn emit_canonical_command_bar_fixture(
     rect: Rect,
     state: FixtureState,
-    _text_ctx: &mut TextCtx<'_>,
+    text_ctx: &mut TextCtx<'_>,
     z: u16,
 ) -> CommandBarFixtureOutput {
     let mut out = WidgetOutput::default();
@@ -1450,20 +1450,25 @@ pub fn emit_canonical_command_bar_fixture(
             ));
         }
 
-        let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
-            crate::shell::ShellIcon::Package
+        // 优先通过平台感知符号字体塑形发射原生字形；无可用符号字体时回退校准矢量。
+        if let Some(quads) = text_ctx.shape_symbol_glyph(glyph, btn_r, 16.0) {
+            primitive::glyphs(&quads, icon_ink, z + 2, &mut out.primitives, &mut out.payloads);
         } else {
-            crate::shell::ShellIcon::Folder
-        };
-        crate::shell::emit_shell_icon_primitives(
-            shell_icon,
-            btn_r,
-            icon_ink,
-            Token::SURFACE,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
+            let shell_icon = if glyph == CANONICAL_COMMAND_ITEMS[0].0 {
+                crate::shell::ShellIcon::Save
+            } else {
+                crate::shell::ShellIcon::FolderOpen
+            };
+            crate::shell::emit_shell_icon_primitives(
+                shell_icon,
+                btn_r,
+                icon_ink,
+                Token::SURFACE,
+                z + 2,
+                &mut out.primitives,
+                &mut out.payloads,
+            );
+        }
 
         cur_x += btn_w;
     }
@@ -1493,15 +1498,19 @@ pub fn emit_canonical_command_bar_fixture(
     } else {
         Token::TEXT_PRIMARY
     };
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Ellipsis,
-        more_r,
-        more_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_COMMAND_MORE_GLYPH, more_r, 16.0) {
+        primitive::glyphs(&quads, more_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Ellipsis,
+            more_r,
+            more_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     CommandBarFixtureOutput {
         output: out,
@@ -2071,17 +2080,109 @@ pub fn emit_canonical_flip_view_fixture(
     }
 }
 
-/// 发射标准化下拉刷新容器插桩（顶部环形指示器 + 下方内容卡片）。
+/// 发射 `RefreshContainer` 的 20×20px 顺时针环形刷新箭头图标。
+///
+/// 由 4 段二次贝塞尔圆弧（`quad_curve_stroke`）与 2 段右上角 V 形箭头（`curve_stroke`）组成，
+/// 共计 6 条 `PrimType::Curve` 图元；圆心位于 `(cx, cy)`、半径 `r = 9.2`、线宽 `stroke = 1.5`，
+/// 像素墨迹覆盖参考图对应的 `20×20px` 区域（画布原点 `(16, 16)` 时为 `x=[136..155], y=[56..75]`）。
+fn emit_refresh_ring_icon(
+    cx: f32,
+    cy: f32,
+    color: Token,
+    z: u16,
+    primitives: &mut Vec<GpuPrimitiveInstance>,
+    payloads: &mut Vec<unbound_gpu::data::GpuPayload>,
+) {
+    #[allow(clippy::too_many_arguments)]
+    fn quad_curve_stroke(
+        p0: [f32; 2],
+        p1: [f32; 2],
+        p2: [f32; 2],
+        thickness: f32,
+        color: Token,
+        z: u16,
+        primitives: &mut Vec<GpuPrimitiveInstance>,
+        payloads: &mut Vec<unbound_gpu::data::GpuPayload>,
+    ) {
+        let pad = (thickness * 0.5 + 1.5).ceil();
+        let origin_x = p0[0].min(p1[0]).min(p2[0]) - pad;
+        let origin_y = p0[1].min(p1[1]).min(p2[1]) - pad;
+        let w = (p0[0].max(p1[0]).max(p2[0]) - origin_x + pad).max(1.0);
+        let h = (p0[1].max(p1[1]).max(p2[1]) - origin_y + pad).max(1.0);
+        let payload_idx = payloads.len() as u32;
+        payloads.push(unbound_gpu::data::GpuPayload::curve(
+            [p0[0] - origin_x, p0[1] - origin_y],
+            [p1[0] - origin_x, p1[1] - origin_y],
+            [p2[0] - origin_x, p2[1] - origin_y],
+            thickness,
+        ));
+        let mut prim = primitive::instance(
+            Rect::new(origin_x, origin_y, w, h),
+            [0.0; 4],
+            color,
+            Token::NONE,
+            0.0,
+            0.0,
+            PrimType::Curve,
+            SubElement::Content,
+            z,
+        );
+        prim.extra_payload_idx = payload_idx;
+        primitives.push(prim);
+    }
+
+    let r = 9.2_f32;
+    let stroke = 1.5_f32;
+    // 顺时针开口圆弧：从 2°（3 点钟方向）顺时针旋转至 328°（右上缺口处），等分为 4 段。
+    let start_deg = 2.0_f32;
+    let end_deg = 328.0_f32;
+    let step_deg = (end_deg - start_deg) / 4.0;
+    let half_step_rad = (step_deg * 0.5).to_radians();
+    // 使每段二次贝塞尔曲线的中点精确落在半径 `r` 的圆弧上，避免大角度弧段向外鼓出。
+    let ctrl_r = r * (2.0 - half_step_rad.cos());
+
+    for seg in 0_u8..4 {
+        let a0 = (start_deg + step_deg * f32::from(seg)).to_radians();
+        let a1 = (start_deg + step_deg * f32::from(seg + 1)).to_radians();
+        let mid = (a0 + a1) * 0.5;
+        let p0 = [cx + r * a0.cos(), cy + r * a0.sin()];
+        let p1 = [cx + ctrl_r * mid.cos(), cy + ctrl_r * mid.sin()];
+        let p2 = [cx + r * a1.cos(), cy + r * a1.sin()];
+        quad_curve_stroke(p0, p1, p2, stroke, color, z, primitives, payloads);
+    }
+
+    // 右上角 V 形箭头（2 段直线描边），尖端衔接圆弧终点。
+    let end_rad = end_deg.to_radians();
+    let tip = [cx + r * end_rad.cos(), cy + r * end_rad.sin()];
+    primitive::curve_stroke(
+        [tip[0], tip[1] - 3.8],
+        tip,
+        stroke,
+        color,
+        z,
+        primitives,
+        payloads,
+    );
+    primitive::curve_stroke(
+        [tip[0] - 4.6, tip[1]],
+        tip,
+        stroke,
+        color,
+        z,
+        primitives,
+        payloads,
+    );
+}
+
+/// 发射标准化下拉刷新容器插桩（左上内容文本 + 上方居中 20×20px 浅灰环形刷新箭头）。
 ///
 /// 几何与排版规则：
 /// - 固有尺寸宽 260px、高 160px；
-/// - 顶部包含 24px 直径的 ProgressRing 环形指示器（圆心位于水平居中、距顶 16px 处）：
-///   - 未禁用时：绘制环形底轨、内部掏空与右上四分之一强调色圆弧（[`Token::PRIMARY`]，线宽 2.5px）；
-///   - 禁用时：抑制强调色圆弧，底轨降级为变灰底色；
-/// - 下方为内容卡片（宽 252px、高 120px，圆角 8px）：
-///   - 位于 y = 36px 处，背景为 [`Token::CARD_BG`]、边框为 [`Token::CARD_BORDER`]；
-///   - 内部左内边距 16px、垂直居中排版文本 `"Pull to refresh"`（字号 14px，字重 400）；
-/// - 递归禁用态传播：当 `state.disabled` 为 true 时，指示器与卡片内容全量半透明变灰衰减。
+/// - 指示器包围框 `indicator_rect` 保持 24×24px（圆心位于水平居中、距顶 49.5px 处）：
+///   - `normal` 与 `disabled` 均绘制 6 条 [`PrimType::Curve`] 构成的浅灰（[`Token::TEXT_DISABLED`]）
+///     顺时针环形刷新箭头（半径 `9.2`、线宽 `1.5`，像素墨迹覆盖 20×20px），保持恒定图元数不变量；
+/// - 左上排版文本 `"Pull to refresh"`（字号 14px，字重 400）：
+///   - 未禁用时使用 [`Token::TEXT_PRIMARY`]，禁用时降级为 [`Token::TEXT_DISABLED`]。
 pub fn emit_canonical_refresh_fixture(
     rect: Rect,
     state: FixtureState,
@@ -2101,10 +2202,10 @@ pub fn emit_canonical_refresh_fixture(
     };
     let refresh_rect = Rect::new(rect.origin.x, rect.origin.y, refresh_w, refresh_h);
 
-    // WinUI RefreshContainer 静态无卡片底板：左上显示内容文本，上方居中绘制浅灰刷新图标。
+    // WinUI RefreshContainer 静态无卡片底板：左上显示内容文本，上方居中绘制浅灰环形刷新图标。
     let ring_size = STANDARD_REFRESH_INDICATOR_SIZE;
     let ring_cx = refresh_rect.origin.x + refresh_w * 0.5;
-    let ring_cy = refresh_rect.origin.y + 49.0;
+    let ring_cy = refresh_rect.origin.y + 49.5;
     let ring_rect = Rect::new(
         ring_cx - ring_size * 0.5,
         ring_cy - ring_size * 0.5,
@@ -2113,18 +2214,16 @@ pub fn emit_canonical_refresh_fixture(
     );
     let card_rect = refresh_rect;
 
+    // 正常态与禁用态均绘制浅灰环形刷新箭头，与 WinUI 3 参考图及恒定图元数不变量保持一致。
     let refresh_icon_ink = Token::TEXT_DISABLED;
-    if !state.disabled {
-        crate::shell::emit_shell_icon_primitives(
-            crate::shell::ShellIcon::Redo,
-            ring_rect,
-            refresh_icon_ink,
-            Token::SURFACE,
-            z + 2,
-            &mut out.primitives,
-            &mut out.payloads,
-        );
-    }
+    emit_refresh_ring_icon(
+        ring_cx,
+        ring_cy,
+        refresh_icon_ink,
+        z + 2,
+        &mut out.primitives,
+        &mut out.payloads,
+    );
 
     if state.focused && !state.disabled {
         out.primitives.push(primitive::focus_ring(
@@ -3145,22 +3244,29 @@ pub fn emit_canonical_font_icon_fixture(
     let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
     let disabled = state.disabled;
 
-    // 居中绘制矢量字形
+    // 优先通过平台感知符号字体塑形发射原生字形；无可用符号字体时自动回退校准后的 ShellIcon::AllApps。
     let text_ink = if disabled {
         Token::TEXT_DISABLED
     } else {
         Token::TEXT_PRIMARY
     };
-    let _ = text_ctx;
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Sparkles,
+    if let Some(quads) = text_ctx.shape_symbol_glyph(
+        CANONICAL_FONT_ICON_GLYPH,
         total_r,
-        text_ink,
-        Token::SURFACE,
-        z + 1,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+        CANONICAL_FONT_ICON_FONT_SIZE,
+    ) {
+        primitive::glyphs(&quads, text_ink, z + 1, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::AllApps,
+            total_r,
+            text_ink,
+            Token::SURFACE,
+            z + 1,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // disabled 态下 text_ink 已为 Token::TEXT_DISABLED，不再二次乘以 WINUI_DISABLED_OPACITY。
 
@@ -3577,16 +3683,20 @@ pub fn emit_canonical_app_bar_button_fixture(
     // WinUI 的 AppBarButton 把「16px 图标 + 2px 间隙 + 12px 标签」当成 30px 内容栈
     // 在控件高度内垂直居中；参考截图的图标顶端因此在 y=33（64px 高时为 17）。
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
-    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Package,
-        icon_r,
-        text_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 1.0, w, 16.0);
+    if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_BUTTON_GLYPH, icon_r, 16.0) {
+        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Save,
+            icon_r,
+            text_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 3. 底部文字
     let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);
@@ -3681,16 +3791,22 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
 
     // 2. 顶部图标（与 AppBarButton 相同的 30px 内容栈居中）
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
-    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
-    crate::shell::emit_shell_icon_primitives(
-        crate::shell::ShellIcon::Sliders,
-        icon_r,
-        text_ink,
-        Token::SURFACE,
-        z + 2,
-        &mut out.primitives,
-        &mut out.payloads,
-    );
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 1.0, w, 16.0);
+    if let Some(quads) =
+        text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH, icon_r, 16.0)
+    {
+        primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
+    } else {
+        crate::shell::emit_shell_icon_primitives(
+            crate::shell::ShellIcon::Bold,
+            icon_r,
+            text_ink,
+            Token::SURFACE,
+            z + 2,
+            &mut out.primitives,
+            &mut out.payloads,
+        );
+    }
 
     // 3. 底部文字
     let label_r = Rect::new(total_r.origin.x, stack_top + 18.0, w, 12.0);

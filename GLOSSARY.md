@@ -251,6 +251,16 @@ WinUI 3 官方控件库中不存在、面向专业工具与工业工作台场景
 通过 `canonical.rs` 对全部 `WidgetCatalogId` 穷举声明的正交能力契约（如溢出策略 `OverflowStrategy`、文本截断、浮层翻转等），配对运行期自动化契约测试与 Parity 压力场景，用于在编译期与 CI 期防止控件仅对齐静态理想快照而遗漏溢出或交互维度。
 *避免使用*：静态快照覆盖、隐式滚动能力
 
+## 符号字体与图标回退
+
+**符号字体（Symbol Font）**：
+由 `unbound-text` 按平台能力前置探测并统一解析的系统图标字体（Windows 按 `Segoe Fluent Icons` → `Segoe MDL2 Assets` 顺序探测，非 Windows 默认不可用），通过 `TextEngine::symbol_font_family` 与 `TextCtx::shape_symbol_glyph` 向控件层提供受控字形塑形与 `SymbolFontPolicy` 测试接缝，而非在控件源码中硬编码字面量字体族。
+*避免使用*：硬编码 Segoe Fluent Icons、系统私有字体、PUA 字体补丁
+
+**符号图标回退（Symbol Icon Fallback）**：
+控件在渲染 Fluent 符号图标时遵循的双路径契约：存在可用符号字体时优先发射系统符号字形以对齐 WinUI 3 原生观感；在非 Windows 平台、缺少字体或测试禁用策略下自动回退到校准后的 `ShellIcon` 解析矢量几何，实现零内嵌字体膨胀与零缺字豆腐块。它区别于始终走纯矢量的按钮原生矢量图标。
+*避免使用*：缺字兜底、静态图标替换、强制矢量覆盖
+
 ## 主题过渡
 
 **主题过渡（Theme Transition）**：

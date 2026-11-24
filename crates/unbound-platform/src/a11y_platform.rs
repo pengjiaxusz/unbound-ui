@@ -101,6 +101,7 @@ impl PlatformA11y {
 }
 
 /// 统一排空单个顶层窗口的入站无障碍动作并惰性发布出站语义增量。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn pump_platform_a11y<A: PlatformApp>(
     app: &mut A,
     a11y: &mut PlatformA11y,
