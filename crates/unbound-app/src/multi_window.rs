@@ -823,9 +823,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
     /// 查询指定浮窗最近一次边缘磁吸记录的相对显示器锚点。
     #[must_use]
     pub fn last_snap_anchor(&self, id: WindowId) -> Option<RelativeMonitorAnchor> {
-        self.floating_host
-            .get(id)
-            .and_then(|s| s.last_snap_anchor)
+        self.floating_host.get(id).and_then(|s| s.last_snap_anchor)
     }
 
     /// 查询当前拥有键盘焦点的窗口 ID。
