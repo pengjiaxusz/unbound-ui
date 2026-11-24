@@ -96,6 +96,9 @@ enum X11Command {
     ThemeChanged {
         dark: bool,
     },
+    StartOutboundFileDrag {
+        uri_list: String,
+    },
 }
 
 /// 跨线程管道唤醒信号句柄（持锁写入并在释放时持锁关闭，避免 FD 复用竞态）。
@@ -133,10 +136,13 @@ impl X11WakePipe {
                 "failed to create X11 wake pipe".into(),
             ));
         }
+        // SAFETY: `fds` 为刚创建的有效管道描述符，仅设置非阻塞标志。
         unsafe {
             for fd in fds {
                 let flags = libc::fcntl(fd, libc::F_GETFL);
-                let _ = libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                if flags >= 0 {
+                    let _ = libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
             }
         }
         Ok(Self {
@@ -181,7 +187,38 @@ struct X11SessionGuard;
 impl Drop for X11SessionGuard {
     fn drop(&mut self) {
         register_wayland_clipboard(None);
+        crate::linux_dnd::register_linux_outbound_drag(None);
         set_active_linux_backend(None);
+    }
+}
+
+struct X11OutboundDragBridge {
+    cmd_tx: Mutex<mpsc::Sender<X11Command>>,
+    wake_signal: X11WakeSignal,
+}
+
+impl crate::linux_dnd::LinuxOutboundDragBackend for X11OutboundDragBridge {
+    fn begin_file_drag(
+        &self,
+        request: &crate::ole_drag::OutboundFileDragRequest,
+    ) -> Result<crate::ole_drag::OutboundFileDragOutcome, PlatformError> {
+        let uri_list = crate::linux_dnd::encode_uri_list(&request.paths);
+        let sent = self.cmd_tx.lock().ok().is_some_and(|tx| {
+            tx.send(X11Command::StartOutboundFileDrag { uri_list })
+                .is_ok()
+        });
+        if !sent {
+            return Ok(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+        }
+        self.wake_signal.signal();
+        let effect = if request.allow_copy {
+            crate::overlay_host::FileDragEffect::Copy
+        } else if request.allow_move {
+            crate::overlay_host::FileDragEffect::Move
+        } else {
+            crate::overlay_host::FileDragEffect::Link
+        };
+        Ok(crate::ole_drag::OutboundFileDragOutcome::Completed(effect))
     }
 }
 
@@ -716,11 +753,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let (cmd_tx, cmd_rx) = mpsc::channel::<X11Command>();
     let clipboard_cache = Arc::new(Mutex::new(None));
     let mut clipboard_owned_text = String::new();
+    let mut xdnd_outbound_uri_list = String::new();
 
     let _session_guard = X11SessionGuard;
     set_active_linux_backend(Some(LinuxBackendKind::X11));
     register_wayland_clipboard(Some(Arc::new(X11ClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
+        cmd_tx: Mutex::new(cmd_tx.clone()),
+        wake_signal: wake_signal.clone(),
+    })));
+    crate::linux_dnd::register_linux_outbound_drag(Some(Arc::new(X11OutboundDragBridge {
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
@@ -970,9 +1012,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                                 X11_CSD_RESIZE_BORDER,
                             ) {
                                 entry.csd_edge_active = true;
-                                let _ = cursor_for_resize_direction(dir);
+                                let _ = cmd_tx.send(X11Command::SetCursor {
+                                    window: entry.xid,
+                                    cursor: cursor_for_resize_direction(dir),
+                                });
                             } else if entry.csd_edge_active {
                                 entry.csd_edge_active = false;
+                                let _ = cmd_tx.send(X11Command::SetCursor {
+                                    window: entry.xid,
+                                    cursor: entry.native_window.current_cursor(),
+                                });
                             }
                         }
                         push_coalesced_event(
@@ -1128,6 +1177,14 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             property,
                             AtomEnum::ATOM,
                             &supported,
+                        );
+                    } else if ev.selection == atoms.xdnd_selection && ev.target == atoms.uri_list {
+                        let _ = conn.change_property8(
+                            PropMode::REPLACE,
+                            ev.requestor,
+                            property,
+                            ev.target,
+                            xdnd_outbound_uri_list.as_bytes(),
                         );
                     } else if ev.target == atoms.utf8_string
                         || ev.target == Atom::from(AtomEnum::STRING)
@@ -1336,21 +1393,30 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             .push(PlatformEvent::ThemeChanged { dark });
                     }
                 }
+                X11Command::StartOutboundFileDrag { uri_list } => {
+                    xdnd_outbound_uri_list = uri_list;
+                    if let Some(first) = windows.first() {
+                        let _ = conn.set_selection_owner(
+                            first.xid,
+                            atoms.xdnd_selection,
+                            x11rb::CURRENT_TIME,
+                        );
+                    }
+                }
             }
         }
 
         // 3. 派发顶层窗口事件与副窗独立关闭
         let mut closed_secondary: Vec<X11WindowId> = Vec::new();
-        for idx in 0..windows.len() {
-            let events = std::mem::take(&mut windows[idx].pending_events);
+        for (idx, entry) in windows.iter_mut().enumerate() {
+            let events = std::mem::take(&mut entry.pending_events);
             let ev_now = Instant::now();
             let mut close_req = false;
             for ev in events {
                 if matches!(ev, PlatformEvent::CloseRequested) {
                     close_req = true;
                 }
-                let derived = apply(&mut windows[idx].state, &ev, ev_now);
-                let entry = &mut windows[idx];
+                let derived = apply(&mut entry.state, &ev, ev_now);
                 for out_ev in derived {
                     if app.event(&mut entry.state, &entry.native_window, out_ev) == Flow::Exit {
                         exit_requested = true;
@@ -1365,7 +1431,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 break;
             }
             if close_req && idx > 0 {
-                closed_secondary.push(windows[idx].xid);
+                closed_secondary.push(entry.xid);
             }
         }
         if exit_requested {

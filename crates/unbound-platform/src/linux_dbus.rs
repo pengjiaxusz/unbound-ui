@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, RwLock};
 
 use futures_lite::StreamExt;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, MatchRule, MessageStream};
 
 use crate::dialogs::FileDialogConfig;
@@ -148,9 +148,7 @@ pub(crate) fn portal_open_files(config: &FileDialogConfig) -> Vec<PathBuf> {
 
 /// 通过 `xdg-desktop-portal` `FileChooser` 选择目录（无服务时返回 `None`）。
 pub(crate) fn portal_pick_folder(config: &FileDialogConfig) -> Option<PathBuf> {
-    let Some(rt) = runtime() else {
-        return None;
-    };
+    let rt = runtime()?;
     let (reply_tx, reply_rx) = mpsc::channel();
     let sent = rt.cmd_tx.lock().ok().is_some_and(|tx| {
         tx.send(DbusCommand::OpenFile {
@@ -209,9 +207,7 @@ pub(crate) fn linux_show_notification(title: &str, message: &str, urgency: u8) -
 
 /// 通过 `xdg-desktop-portal` `FileChooser` 打开保存文件对话框（无服务时返回 `None`）。
 pub(crate) fn portal_save_file(config: &FileDialogConfig) -> Option<PathBuf> {
-    let Some(rt) = runtime() else {
-        return None;
-    };
+    let rt = runtime()?;
     let (reply_tx, reply_rx) = mpsc::channel();
     let sent = rt.cmd_tx.lock().ok().is_some_and(|tx| {
         tx.send(DbusCommand::SaveFile {
@@ -421,8 +417,18 @@ async fn watch_appearance_signals(
             "accent-color" => {
                 if let Some((r, g, b)) = unwrap_variant_rgb(&val) {
                     let accent = parse_portal_accent_color(r, g, b);
-                    if let Ok(mut guard) = appearance.write() {
+                    let dark_hint = if let Ok(mut guard) = appearance.write() {
                         guard.accent_srgb8 = accent;
+                        guard.dark_mode
+                    } else {
+                        None
+                    };
+                    if let Some(is_dark) = dark_hint {
+                        if let Ok(listeners) = theme_listeners.lock() {
+                            for cb in listeners.iter() {
+                                cb(is_dark);
+                            }
+                        }
                     }
                 }
             }
@@ -443,23 +449,31 @@ fn build_portal_filters(filters: &[(String, String)]) -> Option<Value<'static>> 
     Some(Value::from(raw))
 }
 
-async fn wait_portal_request_uris(
-    conn: &Connection,
-    request_path: &ObjectPath<'_>,
-) -> Vec<PathBuf> {
-    let Ok(rule) = MatchRule::builder()
+/// 依据 `xdg-desktop-portal` 规范在发起调用前预计算请求对象路径并订阅 `Response` 信号，
+/// 彻底避免快速取消/失败时信号先于订阅到达导致的永久阻塞竞态。
+fn predict_portal_request_path(conn: &Connection, token: &str) -> Option<String> {
+    let unique = conn.unique_name()?;
+    let sender = unique.as_str().trim_start_matches(':').replace('.', "_");
+    Some(format!(
+        "/org/freedesktop/portal/desktop/request/{sender}/{token}"
+    ))
+}
+
+async fn subscribe_portal_response(conn: &Connection, request_path: &str) -> Option<MessageStream> {
+    let rule = MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface(PORTAL_REQUEST_IFACE)
         .and_then(|b| b.member("Response"))
-        .and_then(|b| b.path(request_path.as_str()))
-        .map(zbus::match_rule::Builder::build)
-    else {
-        return Vec::new();
-    };
-    let Ok(mut stream) = MessageStream::for_match_rule(rule, conn, Some(4)).await else {
-        return Vec::new();
-    };
-    while let Some(Ok(msg)) = stream.next().await {
+        .and_then(|b| b.path(request_path))
+        .ok()?
+        .build();
+    MessageStream::for_match_rule(rule, conn, Some(4))
+        .await
+        .ok()
+}
+
+async fn read_portal_response_uris(mut stream: MessageStream) -> Vec<PathBuf> {
+    if let Some(Ok(msg)) = stream.next().await {
         let Ok((response_code, results)) = msg
             .body()
             .deserialize::<(u32, HashMap<String, OwnedValue>)>()
@@ -512,6 +526,10 @@ async fn handle_open_file(
         options.insert("filters", fval);
     }
 
+    let pre_stream = match predict_portal_request_path(conn, &token) {
+        Some(path) => subscribe_portal_response(conn, &path).await,
+        None => None,
+    };
     let Ok(reply) = conn
         .call_method(
             Some(PORTAL_BUS_NAME),
@@ -527,7 +545,14 @@ async fn handle_open_file(
     let Ok(req_path) = reply.body().deserialize::<OwnedObjectPath>() else {
         return Vec::new();
     };
-    wait_portal_request_uris(conn, &req_path.as_ref()).await
+    let stream = match pre_stream {
+        Some(st) => st,
+        None => match subscribe_portal_response(conn, req_path.as_str()).await {
+            Some(st) => st,
+            None => return Vec::new(),
+        },
+    };
+    read_portal_response_uris(stream).await
 }
 
 async fn handle_save_file(conn: &Connection, config: &FileDialogConfig) -> Option<PathBuf> {
@@ -551,6 +576,10 @@ async fn handle_save_file(conn: &Connection, config: &FileDialogConfig) -> Optio
         options.insert("filters", fval);
     }
 
+    let pre_stream = match predict_portal_request_path(conn, &token) {
+        Some(path) => subscribe_portal_response(conn, &path).await,
+        None => None,
+    };
     let Ok(reply) = conn
         .call_method(
             Some(PORTAL_BUS_NAME),
@@ -566,10 +595,11 @@ async fn handle_save_file(conn: &Connection, config: &FileDialogConfig) -> Optio
     let Ok(req_path) = reply.body().deserialize::<OwnedObjectPath>() else {
         return None;
     };
-    wait_portal_request_uris(conn, &req_path.as_ref())
-        .await
-        .into_iter()
-        .next()
+    let stream = match pre_stream {
+        Some(st) => st,
+        None => subscribe_portal_response(conn, req_path.as_str()).await?,
+    };
+    read_portal_response_uris(stream).await.into_iter().next()
 }
 
 /// `org.kde.StatusNotifierItem` 最小 D-Bus 接口实现。

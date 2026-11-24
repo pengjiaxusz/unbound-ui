@@ -337,22 +337,23 @@ pub fn pick_folder(config: FileDialogConfig) -> Option<PathBuf> {
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
-        if let Some(selected) = crate::linux_dbus::portal_pick_folder(&config) {
-            return Some(selected);
-        }
+        crate::linux_dbus::portal_pick_folder(&config)
     }
-    if let Some(dir) = config.initial_dir.clone() {
-        if dir.exists() {
-            return Some(dir);
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "android"))))]
+    {
+        if let Some(dir) = config.initial_dir.clone() {
+            if dir.exists() {
+                return Some(dir);
+            }
         }
+        open_file(config).map(|p| {
+            if p.is_dir() {
+                p
+            } else {
+                p.parent().map_or(p.clone(), PathBuf::from)
+            }
+        })
     }
-    open_file(config).map(|p| {
-        if p.is_dir() {
-            p
-        } else {
-            p.parent().map_or(p.clone(), PathBuf::from)
-        }
-    })
 }
 
 /// 在工作线程上运行的非阻塞异步文件夹选择对话框。

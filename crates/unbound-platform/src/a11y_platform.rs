@@ -112,7 +112,7 @@ pub(crate) fn pump_platform_a11y<A: PlatformApp>(
             return Flow::Exit;
         }
     }
-    a11y.publish_with(|| app.accessibility_update());
+    a11y.publish_with(|| app.accessibility_update_for_window(window));
     Flow::Continue
 }
 

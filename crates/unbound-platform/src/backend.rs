@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::a11y_win32::Win32A11y;
+use crate::a11y_platform::PlatformA11y;
 use crate::native_window::NativeWindow;
 #[cfg(windows)]
 use crate::win32_window::Window;
@@ -52,6 +52,15 @@ pub trait PlatformApp {
     /// 待发布的无障碍语义增量（若应用发布了更新）。
     fn accessibility_update(&mut self) -> Option<accesskit::TreeUpdate> {
         None
+    }
+
+    /// 按窗口维度的待发布无障碍语义增量（多窗场景默认回退至 [`Self::accessibility_update`]）。
+    fn accessibility_update_for_window(
+        &mut self,
+        window: &NativeWindow,
+    ) -> Option<accesskit::TreeUpdate> {
+        let _ = window;
+        self.accessibility_update()
     }
 
     /// 辅助技术请求执行某个动作。
@@ -199,7 +208,7 @@ pub fn raw_window_handle(window: &NativeWindow) -> Option<raw_window_handle::Raw
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn pump_a11y<A: PlatformApp>(
     app: &mut A,
-    a11y: &mut Win32A11y,
+    a11y: &mut PlatformA11y,
     state: &mut PlatformState,
     window: &NativeWindow,
 ) -> Flow {
@@ -208,7 +217,7 @@ pub(crate) fn pump_a11y<A: PlatformApp>(
             return Flow::Exit;
         }
     }
-    a11y.publish_with(|| app.accessibility_update());
+    a11y.publish_with(|| app.accessibility_update_for_window(window));
     Flow::Continue
 }
 
@@ -1520,7 +1529,7 @@ mod win32 {
     struct WindowEntry {
         window: NativeWindow,
         state: PlatformState,
-        a11y: Win32A11y,
+        a11y: PlatformA11y,
         user_data: Rc<WindowUserData>,
         hwnd: HWND,
     }
@@ -1721,7 +1730,7 @@ mod win32 {
             redraw_requested,
             destroyed,
         ));
-        let a11y = Win32A11y::new(hwnd.0 as isize);
+        let a11y = PlatformA11y::for_win32(hwnd.0 as isize);
         if config.visible {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_SHOW);
@@ -1844,7 +1853,7 @@ mod win32 {
             )
             .with_popup_id(popup_id),
         );
-        let a11y = Win32A11y::new(hwnd.0 as isize);
+        let a11y = PlatformA11y::for_win32(hwnd.0 as isize);
         let popup_win_cfg = WindowConfig {
             title: String::new(),
             width: rect.width.max(1),

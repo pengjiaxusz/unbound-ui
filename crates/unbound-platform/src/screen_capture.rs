@@ -117,14 +117,6 @@ pub fn screen_rect_uv(rect: ScreenRect, screen: ScreenRect) -> [f32; 4] {
     ]
 }
 
-/// 捕获主屏上的指定区域。
-///
-/// 请求会先按主屏矩形钳制，因此返回的 [`CapturedScreen::origin`] 可能与请求不同。
-/// 自绘后景纹理只覆盖主屏，所以捕获也以主屏为界，两者才能落到同一套 UV 坐标。
-///
-/// # Errors
-/// 非 Windows 平台返回 [`CaptureError::Unsupported`]；拿不到屏幕设备上下文、
-/// 位图创建失败、位块复制失败或读回行数不符时返回 [`CaptureError::Failed`]。
 /// 将 X11 32 位 `ZPixmap`（BGRX）字节流规范化为不透明 BGRA（每像素 alpha 置为 `0xFF`）。
 #[must_use]
 pub fn normalize_x11_bgrx_to_bgra(src: &[u8]) -> Vec<u8> {
@@ -135,6 +127,14 @@ pub fn normalize_x11_bgrx_to_bgra(src: &[u8]) -> Vec<u8> {
     out
 }
 
+/// 捕获主屏上的指定区域。
+///
+/// 请求会先按主屏矩形钳制，因此返回的 [`CapturedScreen::origin`] 可能与请求不同。
+/// 自绘后景纹理只覆盖主屏，所以捕获也以主屏为界，两者才能落到同一套 UV 坐标。
+///
+/// # Errors
+/// Wayland 会话或不支持截屏的平台返回 [`CaptureError::Unsupported`]；
+/// 拿不到屏幕上下文、捕获区域无交集、位块复制失败或读回字节数不符时返回 [`CaptureError::Failed`]。
 pub fn capture_screen_region(requested: ScreenRect) -> Result<CapturedScreen, CaptureError> {
     #[cfg(windows)]
     {

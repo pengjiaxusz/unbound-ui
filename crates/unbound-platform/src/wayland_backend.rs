@@ -231,6 +231,7 @@ impl Drop for ClipboardRegistrationGuard {
 }
 
 struct WaylandOutboundDragBridge {
+    event_loop_thread: std::thread::ThreadId,
     cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
     wake_signal: WakeSignal,
 }
@@ -264,6 +265,15 @@ impl crate::linux_dnd::LinuxOutboundDragBackend for WaylandOutboundDragBridge {
             return Ok(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
         }
         self.wake_signal.signal();
+        // 若由事件循环自身线程调用，严禁同步阻塞等待，避免自死锁：拖拽已在命令队列排队，直接返回已启动结果。
+        if std::thread::current().id() == self.event_loop_thread {
+            let effect = if request.allow_copy {
+                crate::overlay_host::FileDragEffect::Copy
+            } else {
+                crate::overlay_host::FileDragEffect::Move
+            };
+            return Ok(crate::ole_drag::OutboundFileDragOutcome::Completed(effect));
+        }
         Ok(reply_rx
             .recv_timeout(Duration::from_secs(30))
             .unwrap_or(crate::ole_drag::OutboundFileDragOutcome::Cancelled))
@@ -2023,6 +2033,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         wake_signal: wake_signal.clone(),
     })));
     crate::linux_dnd::register_linux_outbound_drag(Some(Arc::new(WaylandOutboundDragBridge {
+        event_loop_thread: std::thread::current().id(),
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
