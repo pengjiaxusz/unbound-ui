@@ -29,8 +29,10 @@ pub const PIVOT_HEIGHT: f32 = 48.0;
 pub const PIVOT_GAP: f32 = 24.0;
 /// 选中指示器厚度。WinUI `SelectedPipe` 的 `Height = 3`。
 pub const PIVOT_INDICATOR_HEIGHT: f32 = 3.0;
-/// 选中指示器距控件底边的留白。WinUI `SelectedPipe` 的 `Margin = 0,0,0,2`。
-const PIVOT_INDICATOR_INSET: f32 = 2.0;
+/// 选中指示器距控件底边的留白（避开 `item.inflate(-2.0)` 的 2px 焦点环底边）。
+const PIVOT_INDICATOR_INSET: f32 = 5.0;
+/// 选中指示器左右内缩量（与 `item.inflate(-2.0)` 焦点环内侧对齐，避免左右外凸）。
+const PIVOT_INDICATOR_INSET_X: f32 = 4.0;
 
 /// Pivot 的单个标签。
 #[derive(Clone, Debug, PartialEq)]
@@ -171,14 +173,15 @@ impl PivotDesc {
         Rect::new(x, self.rect.origin.y, width, self.rect.height())
     }
 
-    /// 第 `index` 个标签的选中指示器矩形。
+    /// 第 `index` 个标签的选中指示器矩形（内缩至焦点环内侧，避免盖住白框底边与左右外凸）。
     #[must_use]
     pub fn indicator_rect(&self, index: usize) -> Rect {
         let item = self.item_rect(index);
+        let inset_x = PIVOT_INDICATOR_INSET_X.min(item.width() * 0.5);
         Rect::new(
-            item.origin.x,
+            item.origin.x + inset_x,
             item.max().y - PIVOT_INDICATOR_INSET - self.indicator_height,
-            item.width(),
+            (item.width() - inset_x * 2.0).max(0.0),
             self.indicator_height,
         )
     }
@@ -322,11 +325,13 @@ impl UiWidget for PivotDesc {
         )
     }
 
-    fn reduce(&self, state: &mut Self::State, _rect: Rect, event: &WidgetInputEvent) -> bool {
+    fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
         match event {
             WidgetInputEvent::PointerDown { pos, .. } => {
-                for index in 0..self.items.len() {
-                    if self.item_rect(index).contains_point(*pos) {
+                let mut laid = self.clone();
+                laid.rect = rect;
+                for index in 0..laid.items.len() {
+                    if laid.item_rect(index).contains_point(*pos) {
                         if state.selected != index {
                             state.selected = index;
                             return true;
@@ -445,10 +450,13 @@ mod tests {
     #[test]
     fn indicator_hugs_the_bottom_edge() {
         let desc = desc();
+        let item = desc.item_rect(1);
         let indicator = desc.indicator_rect(1);
+        let ring = item.inflate(-2.0);
         assert!((indicator.height() - PIVOT_INDICATOR_HEIGHT).abs() < 0.01);
         assert!((indicator.max().y - (desc.rect.max().y - PIVOT_INDICATOR_INSET)).abs() < 0.01);
-        assert!((indicator.width() - desc.item_rect(1).width()).abs() < 0.01);
+        assert!((indicator.width() - (item.width() - PIVOT_INDICATOR_INSET_X * 2.0)).abs() < 0.01);
+        assert!(ring.contains_rect(&indicator));
     }
 
     #[test]
@@ -492,5 +500,21 @@ mod tests {
             desc.rect,
             &WidgetInputEvent::KeyDown(unbound_input::KeyChord::named("Home"))
         ));
+
+        // 描述符矩形为空时，reduce 必须使用布局后的 rect 判定命中。
+        let zero_desc = PivotDesc::new(Rect::ZERO, &["Overview", "Activity", "Settings"]);
+        let laid_rect = Rect::new(40.0, 80.0, 300.0, PIVOT_HEIGHT);
+        let mut laid = zero_desc.clone();
+        laid.rect = laid_rect;
+        let second_pos = Vec2::new(laid.item_rect(1).origin.x + 6.0, laid_rect.origin.y + 10.0);
+        assert!(zero_desc.reduce(
+            &mut state,
+            laid_rect,
+            &WidgetInputEvent::PointerDown {
+                pos: second_pos,
+                click_count: 1,
+            }
+        ));
+        assert_eq!(state.selected, 1);
     }
 }
