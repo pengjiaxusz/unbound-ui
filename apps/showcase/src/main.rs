@@ -27,6 +27,7 @@ use unbound_app::appearance::{
 };
 
 use raw_window_handle::HasDisplayHandle;
+use unbound_app::ThemeTransitionDriver;
 use unbound_app::{AppKey, AppRuntime, DirtyFlags, Modifiers as AppModifiers};
 use unbound_gpu::atlas::{AtlasKind, AtlasSet, AtlasUpload};
 use unbound_gpu::data::PassLayer;
@@ -45,7 +46,7 @@ use unbound_platform::{
     CursorIcon, Extent, NativeWindow, NativeWindowId, PhysicalPosition, PhysicalSize,
     ResizeDirection, WindowPosition,
 };
-use unbound_theme::{ThemeKind, ThemeState};
+use unbound_theme::{ThemeKind, ThemeSet};
 
 use showcase::shell::WindowCommand;
 
@@ -81,7 +82,6 @@ struct Showcase {
     swapchain: Option<Swapchain>,
     atlases: Option<Arc<AtlasSet>>,
     /// 当前已上传到 GPU 的主题。
-    uploaded_theme: Option<ThemeMode>,
     /// 上一次 `SceneUpload` 的上传代次。
     ///
     /// 当代次未推进时渲染器跳过上传；宿主恰好在运行时报告全场景变更时推进它。
@@ -102,7 +102,10 @@ struct Showcase {
     committed_request: (u32, u32),
     /// 当前生效的主题：引擎拥有颜色表，应用仅请求切换不同的调色板。
     ///
-    theme: ThemeState,
+    /// 展厅主题集（供统一过渡驱动器查表）。
+    theme_set: ThemeSet,
+    /// 框架级统一主题过渡驱动器（ADR 0034）。
+    theme_driver: ThemeTransitionDriver,
     /// 物理指针位置。
     pointer: Vec2,
     /// 键盘修饰键状态。
@@ -162,11 +165,11 @@ impl Showcase {
             surface: None,
             swapchain: None,
             atlases: None,
-            uploaded_theme: None,
             scene_generation: 0,
             frame_dropped: false,
             committed_request: (0, 0),
-            theme: ThemeState::new(theme::theme_set(), ThemeKind::Light),
+            theme_set: theme::theme_set(),
+            theme_driver: ThemeTransitionDriver::new(theme::theme_set(), ThemeKind::Light),
             pointer: Vec2::new(0.0, 0.0),
             modifiers: Modifiers::default(),
             cursor: CursorKind::Default,
@@ -351,17 +354,19 @@ impl Showcase {
 
     fn write_theme_if_needed(&mut self) {
         let mode = self.shell().state.theme;
-        if self.uploaded_theme == Some(mode) {
+        let dark = mode.is_dark();
+        let kind = theme::kind(dark);
+        let id = u64::from(dark);
+        let cfg = self.app.context().theme_transition;
+        let force_instant = self.compare.is_some();
+        if self.renderer.is_none() {
             return;
         }
-        let dark = mode.is_dark();
-        if let Some(renderer) = &mut self.renderer {
-            // 切换主题仅重写 4 KiB 颜色表：无需重新布局，也无需重传实例。
-            //
-            let _ = self.theme.switch(theme::kind(dark));
-            let _ = renderer.write_theme_lut(self.theme.lut());
-            self.uploaded_theme = Some(mode);
-        }
+        let palette = self.theme_set.palette(kind);
+        let outcome =
+            self.theme_driver
+                .sync_palette(id, palette, cfg, force_instant, self.renderer.as_mut());
+        self.app.context_mut().theme_transition_remaining_secs = outcome.remaining_secs;
     }
 
     /// 通过运行时重建场景、做 diff 并上传重建产生的字形。
@@ -1628,6 +1633,8 @@ impl Showcase {
             || self.shell().state.fps_limit == 0
             || self.shell().state.show_hud
             || self.shell().state.active_page == showcase::pages::PageId::Telemetry
+            || self.theme_driver.is_active()
+            || self.shell().mica.needs_frame()
             || moving;
         state.pacer.set_animating(keep_animating);
         // 此处不调用 `request_redraw`：`about_to_wait` 在每次迭代都会设置

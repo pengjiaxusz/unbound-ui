@@ -24,8 +24,9 @@ pub use crate::{
     AppEventSender, AppKey, AppRuntime, Application, ClipboardProvider, DirtyFlags, ErasedUiWidget,
     EventOutcome, ExternalTextureHandle, ExternalTextureOp, ExternalTextureState, FrameReport,
     I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale, Modifiers, OverlayManager,
-    PendingWidget, Propagation, TabHitTarget, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec,
-    WindowCommand, ROOT,
+    PendingWidget, Propagation, TabHitTarget, ThemeSnapshotKey, ThemeSyncOutcome,
+    ThemeTransitionDriver, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, WindowCommand,
+    ROOT,
 };
 
 pub use accesskit::Role;

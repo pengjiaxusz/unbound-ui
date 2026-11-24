@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::theme_driver::{make_theme_snapshot_key, ThemeTransitionDriver};
 use rustc_hash::FxHashMap;
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::{is_device_lost, recover_with, RecoveryPolicy};
@@ -22,7 +23,7 @@ use unbound_platform::{
     begin_outbound_file_drag, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
     PopupWindowConfig, WindowId,
 };
-use unbound_theme::{ThemeSet, ThemeState, ThemeTransition};
+use unbound_theme::ThemeSet;
 
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
@@ -179,20 +180,8 @@ pub struct WindowedRunner<A: Application> {
     /// 当前窗口的系统物理显示 DPI 缩放比（`window.scale_factor()`）。
     os_scale: f32,
     frame_metrics: Option<Arc<FrameHitMetrics>>,
-    /// GPU 着色器用于解析颜色 token 的语义颜色表。
-    theme: ThemeState,
-    /// 框架级主题过渡状态机（ADR 0034：Oklab 4 KiB LUT 逐帧插值）。
-    theme_transition: ThemeTransition,
-    /// 主题过渡单调时钟基准。
-    theme_clock_epoch: Instant,
-    /// 当前渲染器 LUT 中已写入的主题与品牌色三元组；`None` 表示仍需上传
-    /// （设备重建完成后同样如此）。
-    uploaded_theme: Option<(
-        ThemeKind,
-        unbound_theme::ProductPreset,
-        unbound_theme::AccentBrand,
-        Option<[u32; 4]>,
-    )>,
+    /// 框架级统一主题过渡驱动器（ADR 0034）。
+    theme_driver: ThemeTransitionDriver,
     /// 原生窗口句柄创建完成后的可选宿主回调（例如供下游渲染工具注册主窗口 HWND）。
     on_hwnd_created: Option<Box<dyn FnMut(isize) + Send>>,
     /// 每帧开始时的可选宿主回调，拿到运行时的可变引用。
@@ -231,7 +220,7 @@ impl<A: Application> WindowedRunner<A> {
         runtime.set_backdrop(config.backdrop);
         runtime.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
         let ctx = runtime.context();
-        let theme = ThemeState::new(
+        let theme_driver = ThemeTransitionDriver::new(
             ThemeSet::for_product_with_system_accent(
                 ctx.preset,
                 ctx.accent,
@@ -239,7 +228,6 @@ impl<A: Application> WindowedRunner<A> {
             ),
             ctx.theme,
         );
-        let theme_transition = ThemeTransition::new(theme.active_palette());
 
         // 根据 ADR 0014 与建窗契约：建窗计算 surface_alpha 时，只有当配置中显式意图开启原生后景
         // （config.backdrop 存在且非 WindowBackdropMaterial::None）时，才强制覆盖为 PreMultiplied；
@@ -254,10 +242,7 @@ impl<A: Application> WindowedRunner<A> {
 
         Self {
             runtime,
-            theme,
-            theme_transition,
-            theme_clock_epoch: Instant::now(),
-            uploaded_theme: None,
+            theme_driver,
             on_hwnd_created: None,
             on_frame: None,
             renderer: None,
@@ -337,61 +322,23 @@ impl<A: Application> WindowedRunner<A> {
         let (key, sys_accent, transition_cfg) = {
             let ctx = self.runtime.context();
             let sys_accent = ctx.resolved_system_accent();
-            let sys_bits =
-                sys_accent.map(|c| [c.r.to_bits(), c.g.to_bits(), c.b.to_bits(), c.a.to_bits()]);
             (
-                (ctx.theme, ctx.preset, ctx.accent, sys_bits),
+                make_theme_snapshot_key(ctx.theme, ctx.preset, ctx.accent, sys_accent),
                 sys_accent,
                 ctx.theme_transition,
             )
         };
-        let key_changed = self.uploaded_theme != Some(key);
-        if !key_changed && !self.theme_transition.is_active() {
+        if self.renderer.is_none() {
             return;
         }
-
-        let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
-        if key_changed {
-            let prev_preset_accent = self.uploaded_theme.map(|(_, p, a, sa)| (p, a, sa));
-            if prev_preset_accent != Some((key.1, key.2, key.3)) {
-                self.theme = ThemeState::new(
-                    ThemeSet::for_product_with_system_accent(key.1, key.2, sys_accent),
-                    key.0,
-                );
-            } else {
-                self.theme.switch(key.0);
-            }
-            if self.uploaded_theme.is_none() {
-                // 首帧或设备重建后强制瞬切，避免启动时播放主题动画。
-                self.theme_transition.snap_to(self.theme.active_palette());
-            } else {
-                let reduced_motion = unbound_platform::prefers_reduced_motion();
-                let duration = transition_cfg.effective_duration_secs(reduced_motion);
-                let _ =
-                    self.theme_transition
-                        .begin(self.theme.active_palette(), now_secs, duration);
-            }
-        }
-
-        let still_active = self.theme_transition.advance(now_secs);
-        self.runtime.context_mut().theme_transition_remaining_secs =
-            self.theme_transition.remaining_secs(now_secs);
-        let lut = self.theme_transition.lut().clone();
-        let Some(renderer) = &mut self.renderer else {
-            return;
-        };
-        match renderer.write_theme_lut(&lut) {
-            Ok(()) => {
-                self.uploaded_theme = Some(key);
-                // 切换主题或强调色只改变 4 KiB LUT：既不重排也不重传图元，
-                // 过渡期间逐帧请求重绘，收敛后自动停止请求并回落 0% 占用。
-                if still_active || key_changed {
-                    window.request_redraw();
-                }
-            }
-            Err(error) => {
-                eprintln!("[unbound-app] Could not upload the theme LUT: {error:?}");
-            }
+        let outcome =
+            self.theme_driver
+                .sync_preset(key, sys_accent, transition_cfg, self.renderer.as_mut());
+        self.runtime.context_mut().theme_transition_remaining_secs = outcome.remaining_secs;
+        if outcome.lut_updated {
+            // 切换主题或强调色只改变 4 KiB LUT：既不重排也不重传图元，
+            // 过渡期间逐帧请求重绘，收敛后自动停止请求并回落 0% 占用。
+            window.request_redraw();
         }
     }
 
@@ -402,8 +349,8 @@ impl<A: Application> WindowedRunner<A> {
             self.runtime.premultiplied_surface(),
             unbound_platform::accent_policy_export_available(),
         );
-        // 原生后景在主题过渡期间延迟至中点（t >= 0.5）再翻转 DWM 深色模式（ADR 0034）。
-        let theme = self.theme_transition.effective_backdrop_theme();
+        // 修订后 ADR 0034：原生后景在 t = 0 即刻同步目标深浅模式，与系统 Mica 渐变同步起跑。
+        let theme = self.theme_driver.effective_backdrop_theme();
         self.appearance
             .set_host_clear_alpha(self.runtime.clear_alpha());
         let diff = self
@@ -768,7 +715,7 @@ impl<A: Application> WindowedRunner<A> {
                 self.swapchain_dirty = true;
                 self.frame_dropped = true;
                 // 新建的渲染器此时只有占位 LUT。
-                self.uploaded_theme = None;
+                self.theme_driver.invalidate_uploaded();
                 self.sync_theme(window);
                 self.runtime.request_full_rebuild();
                 window.request_redraw();

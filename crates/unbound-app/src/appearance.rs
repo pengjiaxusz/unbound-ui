@@ -483,7 +483,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_backdrop_dark_mode_flips_once_at_transition_midpoint() {
+    fn native_backdrop_dark_mode_flips_once_at_transition_start() {
         let caps = AppearanceCaps::new(Some(22631), true, true);
         let mut ledger = WindowAppearance::new();
         let set = unbound_theme::ThemeSet::default_set();
@@ -501,25 +501,24 @@ mod tests {
         let mut tr = unbound_theme::ThemeTransition::new(light);
         assert!(tr.begin(dark, 0.0, 0.24));
 
-        // t < 0.5：原生 DWM 深色标记不提前翻转。
-        assert!(tr.advance(0.08));
-        let early = ledger.set_intent(
+        // 修订后 ADR 0034：t = 0 起跑立即下发一次 DWM 深色标记，与系统 Mica 渐变同步起跑。
+        assert!(tr.advance(0.01));
+        let start = ledger.set_intent(
             AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
             caps,
             tr.effective_backdrop_theme(),
         );
-        assert_eq!(early.dark_mode, None);
+        assert_eq!(start.dark_mode, Some(true));
 
-        // t >= 0.5：精确翻转一次。
+        // 后续中间帧与终态帧继续去重，不再重复下发。
         assert!(tr.advance(0.12));
         let mid = ledger.set_intent(
             AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),
             caps,
             tr.effective_backdrop_theme(),
         );
-        assert_eq!(mid.dark_mode, Some(true));
+        assert_eq!(mid.dark_mode, None);
 
-        // 后续帧继续去重，不再重复下发。
         assert!(!tr.advance(0.24));
         let done = ledger.set_intent(
             AppearanceIntent::Material(Some(WindowBackdropMaterial::Mica)),

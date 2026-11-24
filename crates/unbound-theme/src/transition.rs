@@ -355,14 +355,12 @@ impl ThemeTransition {
 
     /// 原生后景（如 DWM `DWMWA_USE_IMMERSIVE_DARK_MODE`）在当前时刻应采用的主题。
     ///
-    /// 过渡进度未过中点（`progress < 0.5`）时维持起点主题，跨越中点（`>= 0.5`）后
-    /// 一次性翻转至目标主题，避免背景先于前景猛闪。
+    /// 按修订后的 ADR 0034：Win11 原生 Mica 在收到深色模式切换后本身自带约 200–300ms 的
+    /// 系统级渐变，因此在过渡起点（`t = 0`）即刻返回目标主题，使原生后景与前景 240ms
+    /// Oklab LUT 渐变同步起跑，避免前后错拍。
     #[must_use]
-    pub fn effective_backdrop_theme(&self) -> ThemeKind {
-        match &self.active {
-            Some(active) if active.raw_progress < 0.5 => active.from_kind,
-            _ => self.target_kind,
-        }
+    pub const fn effective_backdrop_theme(&self) -> ThemeKind {
+        self.target_kind
     }
 
     /// 当前帧可直接上传至 GPU 的 4 KiB 主题 LUT。
@@ -427,9 +425,10 @@ mod tests {
         assert!(tr.begin(dark, 1.0, 0.24));
         assert!(tr.is_active());
 
-        // t = 0.25 (< 0.5)：后景仍保持 Light。
+        // 按修订后的 ADR 0034：t = 0 起跑即刻返回目标主题 Dark，与 DWM 原生渐变同步起跑。
+        assert_eq!(tr.effective_backdrop_theme(), ThemeKind::Dark);
         assert!(tr.advance(1.06));
-        assert_eq!(tr.effective_backdrop_theme(), ThemeKind::Light);
+        assert_eq!(tr.effective_backdrop_theme(), ThemeKind::Dark);
         assert_eq!(tr.lut().color(Token::NONE), Color::TRANSPARENT);
         let mid_surface = tr.lut().color(Token::SURFACE);
         let light_surface = light.color(Token::SURFACE);
