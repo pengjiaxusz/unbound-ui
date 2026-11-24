@@ -2744,23 +2744,36 @@ impl GalleryApp {
                 }
             }
             PageId::Home => match card {
-                0 => {
-                    if part == 1 {
-                        self.navigate(PageId::Buttons);
-                    } else if part == 2 {
-                        self.navigate(PageId::Viewport);
-                    }
-                }
+                0 => match part {
+                    1 => self.navigate_to_category(None),
+                    2 => self.navigate(PageId::Viewport),
+                    3 => self.navigate(PageId::Parity),
+                    _ => {}
+                },
                 1 => {
                     if let Some((_, _, target, _)) =
-                        pages::home::CAPABILITIES.get(part as usize - 1)
+                        pages::home::CAPABILITIES.get(part.saturating_sub(1) as usize)
                     {
                         self.navigate(*target);
                     }
                 }
                 2 => {
-                    if let Some(target) = pages::home::INDEX_PAGES.get(part as usize - 1) {
-                        self.navigate(*target);
+                    self.state.home_quick_tab = (part as u8).min(1);
+                    self.state.bump();
+                }
+                3 => {
+                    if let Some(cat) = ControlCategory::from_index(part as usize) {
+                        self.navigate_to_category(Some(cat));
+                    }
+                }
+                4 => {
+                    if let Some(&id) = WidgetCatalogId::ALL.get(part as usize) {
+                        self.navigate_to_component(id);
+                    }
+                }
+                5 => {
+                    if let Some(&id) = WidgetCatalogId::ALL.get(part as usize) {
+                        self.state.toggle_favorite(id);
                     }
                 }
                 _ => {}

@@ -1301,12 +1301,14 @@ fn escape_outside_click_and_scroll_close_the_context_menu() {
 #[test]
 fn code_panels_change_the_page_extent() {
     let mut app = app();
+    app.navigate(PageId::Buttons);
+    app.rebuild(VIEWPORT);
     let closed = app.frame().nodes.len();
-    app.state.toggle_code(PageId::Home, 0);
+    app.state.toggle_code(PageId::Buttons, 0);
     app.rebuild(VIEWPORT);
     let open = app.frame().nodes.len();
     assert!(open > closed, "expanded code should add semantic nodes");
-    app.state.toggle_code(PageId::Home, 0);
+    app.state.toggle_code(PageId::Buttons, 0);
     app.rebuild(VIEWPORT);
     assert_eq!(app.frame().nodes.len(), closed);
 }
@@ -1577,7 +1579,7 @@ fn losing_the_focus_cancels_the_pointer_capture() {
 #[test]
 fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild(VIEWPORT);
     let card = &app.page_layout().expect("page layout").cards[0];
     assert!(
@@ -1595,7 +1597,7 @@ fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
 #[test]
 fn a_narrow_card_folds_its_options_panel_below_the_stage() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild((560.0, 900.0));
     let card = &app.page_layout().expect("page layout").cards[0];
     assert!(
@@ -1617,7 +1619,7 @@ fn a_narrow_card_folds_its_options_panel_below_the_stage() {
 #[test]
 fn the_options_panel_folds_while_the_window_is_resized() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     let mut folded = Vec::new();
     for width in [1440.0, 1200.0, 1000.0, 800.0, 580.0, 500.0, 1440.0] {
         app.rebuild((width, 900.0));
@@ -1645,7 +1647,7 @@ fn the_options_panel_folds_while_the_window_is_resized() {
 #[test]
 fn every_card_is_a_relayout_boundary() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild(VIEWPORT);
     let cards = app.page_layout().expect("page layout").cards.len();
     assert!(cards > 0, "the page should have cards");
@@ -2453,7 +2455,8 @@ fn sidebar_covers_every_page_and_every_catalog_component() {
     assert_eq!(app.state.active_page, PageId::Components);
     assert_eq!(app.state.active_component, Some(WidgetCatalogId::ToolTip));
     assert!(
-        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::ToolTip)).abs() < 1.0
+        app.state.content_scroll.abs() < 1.0,
+        "single control detail page must start at scroll 0"
     );
 }
 
@@ -3343,11 +3346,11 @@ fn shell_tooltip_full_coverage_supports_delay_rich_kbd_and_bilingual_switch() {
     let compact_viewport = (900.0, 760.0);
     app.nav_view.is_pane_open = false;
     app.rebuild(compact_viewport);
-    let nav_btn = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let nav_btn = target::id(Target::NavPage(PageId::Components.index() as u8));
     let nav_tip = hover_and_expect_tooltip(&mut app, compact_viewport, nav_btn);
     assert_eq!(
         nav_tip,
-        PageId::Buttons.localized_info(app.state.locale).short
+        PageId::Components.localized_info(app.state.locale).short
     );
 
     // 6. 切换至简体中文后，壳层 Tooltip 同步切换为中文文案。

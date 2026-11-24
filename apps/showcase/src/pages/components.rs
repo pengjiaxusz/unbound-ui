@@ -1529,3 +1529,103 @@ pub fn draw_category_hub(
         draw_control_tile(canvas, state, cell, comp_id);
     }
 }
+
+
+/// 使用 `Target::Demo` 命名空间绘制控件卡片（用于首页快捷区，避免与 `NavigationView` 导航项 ID 冲突）。
+pub fn draw_control_tile_demo(
+    canvas: &mut crate::canvas::Canvas<'_>,
+    state: &crate::state::GalleryState,
+    rect: Rect,
+    id: WidgetCatalogId,
+    page: super::PageId,
+) {
+    let palette = *canvas.palette;
+    let nav_node = crate::target::id(crate::target::Target::Demo(page.index() as u8, 4, id as u16));
+    let star_node = crate::target::id(crate::target::Target::Demo(page.index() as u8, 5, id as u16));
+    let visual = canvas.visual(nav_node, false);
+    let bg = if visual.is_pressed() || visual.is_hovered() {
+        palette.primary_soft
+    } else {
+        palette.card_bg
+    };
+    let border = if visual.is_hovered() {
+        palette.primary
+    } else {
+        palette.card_border
+    };
+    canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+
+    let cat = id.category();
+    let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
+    let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
+    canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
+    crate::widgets::icon(canvas, super::home::category_widget_icon(cat), icon_box, accent_fg, accent_bg);
+
+    let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
+    let starred = state.is_favorite(id);
+    let star_visual = canvas.visual(star_node, starred);
+    let star_fg = if starred || star_visual.is_hovered() {
+        palette.warning
+    } else {
+        palette.text_muted
+    };
+    canvas.text(
+        if starred { "★" } else { "☆" },
+        star_rect,
+        12.5,
+        star_fg,
+        AlignX::Center,
+        AlignY::Center,
+    );
+
+    let badge_text = super::control_class_badge(id.class());
+    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
+    let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
+    let badge_rect = Rect::new(star_rect.origin.x - badge_w - 4.0, rect.origin.y + 10.0, badge_w, 16.0);
+    crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
+
+    let label = component_nav_label_localized(id, state.locale);
+    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
+    canvas.text(
+        label,
+        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        12.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let desc = super::category_localized_summary(cat, state.locale);
+    canvas.text(
+        desc,
+        Rect::new(
+            icon_box.max().x + 10.0,
+            rect.origin.y + 34.0,
+            (rect.size.x - 66.0).max(40.0),
+            30.0,
+        ),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Top,
+    );
+
+    let card_hit = Rect::new(rect.origin.x, rect.origin.y, rect.size.x - 30.0, rect.size.y);
+    canvas.control(
+        nav_node,
+        card_hit,
+        accesskit::Role::Link,
+        label,
+        unbound_input::CursorKind::Pointer,
+        false,
+        false,
+    );
+    canvas.control(
+        star_node,
+        star_rect,
+        accesskit::Role::Button,
+        if starred { "Remove favorite" } else { "Add favorite" },
+        unbound_input::CursorKind::Pointer,
+        starred,
+        false,
+    );
+}

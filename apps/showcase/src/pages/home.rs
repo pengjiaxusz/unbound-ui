@@ -218,7 +218,7 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             CAP_CARD_H,
         );
         let (title, subtitle) = localized_capability(index, state.locale);
-        let node = target::id(Target::NavPage(page.index() as u8));
+        let node = target::id(Target::Demo(PageId::Home.index() as u8, 1, index as u16 + 1));
         widgets::feature_card(canvas, node, cell, *icon, title, subtitle, title, index);
     }
     let cap_rows = CAPABILITIES.len().div_ceil(cap_cols);
@@ -257,7 +257,7 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
                 q_w,
                 QUICK_CARD_H,
             );
-            super::components::draw_control_tile(canvas, state, cell, comp_id);
+            super::components::draw_control_tile_demo(canvas, state, cell, comp_id, PageId::Home);
         }
         let q_rows = items.len().div_ceil(q_cols);
         y += q_rows as f32 * QUICK_CARD_H + (q_rows.saturating_sub(1)) as f32 * GRID_GAP + SECTION_GAP;
@@ -292,7 +292,7 @@ pub fn draw_landing(canvas: &mut Canvas<'_>, state: &GalleryState, body: Rect) {
             c_w,
             CAT_CARD_H,
         );
-        let node = target::id(Target::NavCategory(cat.index() as u8));
+        let node = target::id(Target::Demo(PageId::Home.index() as u8, 3, cat.index() as u16));
         let visual = canvas.visual(node, false);
         let bg = if visual.is_pressed() || visual.is_hovered() {
             palette.primary_soft
@@ -410,7 +410,7 @@ fn draw_quick_access_header(canvas: &mut Canvas<'_>, state: &GalleryState, rect:
         x -= w;
         let pill = Rect::new(x, rect.origin.y, w, 24.0);
         let active = state.home_quick_tab == tab_idx;
-        let node = target::id(Target::HomeQuickTab(tab_idx));
+        let node = target::id(Target::Demo(PageId::Home.index() as u8, 2, u16::from(tab_idx)));
         let visual = canvas.visual(node, active);
         let fill = if active {
             palette.primary
@@ -511,7 +511,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
     let primary = Rect::new(left.origin.x, cta_y, primary_w, 34.0);
     widgets::button(
         canvas,
-        target::id(Target::NavPage(PageId::Components.index() as u8)),
+        target::id(Target::Demo(PageId::Home.index() as u8, 0, 1)),
         primary,
         primary_label,
         ButtonVariant::OnHero,
@@ -522,7 +522,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
     let secondary = Rect::new(primary.max().x + 10.0, cta_y, secondary_w, 34.0);
     widgets::button(
         canvas,
-        target::id(Target::NavPage(PageId::Viewport.index() as u8)),
+        target::id(Target::Demo(PageId::Home.index() as u8, 0, 2)),
         secondary,
         secondary_label,
         ButtonVariant::OnHeroSecondary,
@@ -585,7 +585,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         let parity_btn = Rect::new(stat.origin.x + 14.0, stat.max().y - 42.0, stat.size.x - 28.0, 30.0);
         widgets::button(
             canvas,
-            target::id(Target::NavPage(PageId::Parity.index() as u8)),
+            target::id(Target::Demo(PageId::Home.index() as u8, 0, 3)),
             parity_btn,
             if zh { "打开像素对照检视台 →" } else { "Open Parity Inspector →" },
             ButtonVariant::OnHeroSecondary,
