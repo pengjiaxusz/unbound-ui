@@ -3683,7 +3683,7 @@ pub fn emit_canonical_app_bar_button_fixture(
     // WinUI 的 AppBarButton 把「16px 图标 + 2px 间隙 + 12px 标签」当成 30px 内容栈
     // 在控件高度内垂直居中；参考截图的图标顶端因此在 y=33（64px 高时为 17）。
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
-    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 1.0, w, 16.0);
     if let Some(quads) = text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_BUTTON_GLYPH, icon_r, 16.0) {
         primitive::glyphs(&quads, text_ink, z + 2, &mut out.primitives, &mut out.payloads);
     } else {
@@ -3791,7 +3791,7 @@ pub fn emit_canonical_app_bar_toggle_button_fixture(
 
     // 2. 顶部图标（与 AppBarButton 相同的 30px 内容栈居中）
     let stack_top = total_r.origin.y + ((h - 30.0) * 0.5).round();
-    let icon_r = Rect::new(total_r.origin.x, stack_top - 3.0, w, 16.0);
+    let icon_r = Rect::new(total_r.origin.x, stack_top - 1.0, w, 16.0);
     if let Some(quads) =
         text_ctx.shape_symbol_glyph(CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH, icon_r, 16.0)
     {

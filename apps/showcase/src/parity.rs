@@ -2057,7 +2057,7 @@ fn emit_case(
                     unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT
                 };
                 let stack_top = rect.origin.y + ((h - 30.0) * 0.5).round();
-                let icon_r = Rect::new(rect.origin.x, stack_top - 3.0, w, 16.0);
+                let icon_r = Rect::new(rect.origin.x, stack_top - 1.0, w, 16.0);
                 // 存在平台符号字体时，剥离线性混合字形并改用 sRGB 预混纹理绘制强调色底板上的图标与文字；
                 // 无符号字体时保留 fixture 内的 ShellIcon::Bold 矢量与标签图元，避免清空曲线载荷。
                 if let Some(icon_quads) = text_ctx.shape_symbol_glyph(

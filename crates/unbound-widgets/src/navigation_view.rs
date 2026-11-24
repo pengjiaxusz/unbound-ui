@@ -2580,6 +2580,24 @@ pub fn emit_navigation_view(
         );
     }
 
+    // 7.4 Left 窗格菜单溢出且存在页脚时，按 WinUI 3 FooterMenuItemsTopSeparator 发射 1px 页脚顶部分隔线。
+    let has_footer = desc.is_settings_visible || !desc.footer_menu_items.is_empty();
+    let pane_visible = !(layout.display_mode == NavigationViewDisplayMode::Minimal && !state.is_pane_open);
+    if !layout.is_top && pane_visible && has_footer && layout.scroll_max > 0.5 {
+        let sep_w = (pane_right_edge - active_pane_rect.origin.x).max(0.0);
+        out.primitives.push(surface(
+            Rect::new(
+                active_pane_rect.origin.x,
+                layout.menu_viewport_rect.max().y,
+                sep_w,
+                1.0,
+            ),
+            0.0,
+            Token::DIVIDER,
+            active_z + 1,
+        ));
+    }
+
     // 7.5 Left 窗格菜单区按需叠加滚动条（Top 模式与未溢出态均不发射图元与命中区）。
     if let Some(bar_desc) = desc.menu_scrollbar_desc(&layout, state, disabled) {
         let bar_out = emit_scrollbar(node, &bar_desc);
