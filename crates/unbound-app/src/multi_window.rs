@@ -1609,10 +1609,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 ///
 /// # Errors
 /// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
-pub fn run_multi_window<A, F>(
-    primary_config: WindowConfig,
-    factory: F,
-) -> Result<(), PlatformError>
+pub fn run_multi_window<A, F>(primary_config: WindowConfig, factory: F) -> Result<(), PlatformError>
 where
     A: Application + 'static,
     F: MultiWindowFactory<A> + 'static,

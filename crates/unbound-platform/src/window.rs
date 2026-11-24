@@ -347,23 +347,23 @@ pub fn resolve_window_placement(
         (ix, iy)
     } else {
         match config.position {
-        WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
-            let cx = work_left + ((work_w - width) / 2).max(0);
-            let cy = work_top + ((work_h - height) / 2).max(0);
-            (cx, cy)
-        }
-        WindowPosition::Logical { x, y } => (
-            work_left + (f64::from(x) * scale).round() as i32,
-            work_top + (f64::from(y) * scale).round() as i32,
-        ),
-        WindowPosition::Physical { x, y } => (x, y),
-        WindowPosition::SystemDefault => {
-            let offset = (48.0 * scale).round() as i32;
-            (
-                work_left + offset.min((work_w - width).max(0)),
-                work_top + offset.min((work_h - height).max(0)),
-            )
-        }
+            WindowPosition::CenterPrimary | WindowPosition::CenterActiveMonitor => {
+                let cx = work_left + ((work_w - width) / 2).max(0);
+                let cy = work_top + ((work_h - height) / 2).max(0);
+                (cx, cy)
+            }
+            WindowPosition::Logical { x, y } => (
+                work_left + (f64::from(x) * scale).round() as i32,
+                work_top + (f64::from(y) * scale).round() as i32,
+            ),
+            WindowPosition::Physical { x, y } => (x, y),
+            WindowPosition::SystemDefault => {
+                let offset = (48.0 * scale).round() as i32;
+                (
+                    work_left + offset.min((work_w - width).max(0)),
+                    work_top + offset.min((work_h - height).max(0)),
+                )
+            }
         }
     };
 

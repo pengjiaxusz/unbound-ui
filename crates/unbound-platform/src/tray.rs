@@ -100,9 +100,8 @@ mod win32 {
     };
     use ::windows::Win32::UI::Shell::{
         ExtractIconExW, ITaskbarList3, Shell_NotifyIconW, TaskbarList, NIF_ICON, NIF_INFO,
-        NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE,
-        NIM_MODIFY, NOTIFYICONDATAW, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
-        TBPF_PAUSED,
+        NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+        NOTIFYICONDATAW, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED,
     };
     use ::windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos, LoadIconW,
@@ -133,9 +132,8 @@ mod win32 {
                 .chain(core::iter::once(0))
                 .collect();
             let mut small_icon = HICON::default();
-            let extracted = unsafe {
-                ExtractIconExW(PCWSTR(wide.as_ptr()), 0, None, Some(&mut small_icon), 1)
-            };
+            let extracted =
+                unsafe { ExtractIconExW(PCWSTR(wide.as_ptr()), 0, None, Some(&mut small_icon), 1) };
             if extracted > 0 && !small_icon.is_invalid() {
                 return (small_icon, true);
             }

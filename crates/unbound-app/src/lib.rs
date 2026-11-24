@@ -10910,7 +10910,12 @@ mod tests {
         impl Application for HookTestApp {
             type State = ();
             fn init(&mut self, _: &mut AppContext) {}
-            fn reduce(&mut self, _: &mut (), event: AppEvent, ctx: &mut AppContext) -> EventOutcome {
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
                 match event {
                     AppEvent::Custom { id: 1, .. } => {
                         ctx.set_ime_cursor_area(12, 34, 2, 20);
