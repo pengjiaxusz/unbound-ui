@@ -215,7 +215,15 @@ pub fn begin_outbound_file_drag(
     {
         win32::run_ole_file_drag(payload, request.allowed_effect_mask())
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        let _ = payload;
+        crate::linux_dnd::dispatch_linux_outbound_file_drag(request)
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = payload;
         Ok(OutboundFileDragOutcome::Unsupported)

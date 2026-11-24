@@ -149,13 +149,62 @@ pub fn set_taskbar_progress(hwnd: isize, completed: u64, total: u64, state: Task
     }
 }
 
+/// 将 [`TrayNotificationSeverity`] 映射为 `org.freedesktop.Notifications` 紧急度字节（0=Low, 1=Normal, 2=Critical）。
+#[must_use]
+pub const fn notification_urgency(severity: TrayNotificationSeverity) -> u8 {
+    match severity {
+        TrayNotificationSeverity::Info => 0,
+        TrayNotificationSeverity::Warning => 1,
+        TrayNotificationSeverity::Error => 2,
+    }
+}
+
+/// 跨平台系统托盘可见性与提示文案状态机（纯逻辑可单测）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrayIconState {
+    visible: bool,
+    tooltip: String,
+}
+
+impl TrayIconState {
+    /// 更新托盘可见性与悬停提示文本。
+    pub fn update(&mut self, tooltip: &str, visible: bool) {
+        self.visible = visible;
+        if visible {
+            self.tooltip = tooltip.to_owned();
+        } else {
+            self.tooltip.clear();
+        }
+    }
+
+    /// 当前托盘图标是否处于显示态。
+    #[must_use]
+    pub const fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// 当前悬停提示文案。
+    #[must_use]
+    pub fn tooltip(&self) -> &str {
+        &self.tooltip
+    }
+}
+
 /// 为指定窗口显示或隐藏系统托盘图标。
 pub fn set_tray_icon(hwnd: isize, tooltip: &str, visible: bool) -> bool {
     #[cfg(windows)]
     {
         win32::set_tray_icon(hwnd, tooltip, visible)
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        let _ = hwnd;
+        crate::linux_dbus::linux_set_tray_icon(tooltip, visible)
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = (hwnd, tooltip, visible);
         false
@@ -173,9 +222,50 @@ pub fn show_tray_balloon(
     {
         win32::show_tray_balloon(hwnd, title, message, severity)
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        let _ = hwnd;
+        crate::linux_dbus::linux_show_notification(title, message, notification_urgency(severity))
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = (hwnd, title, message, severity);
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_urgency_maps_all_severities() {
+        assert_eq!(notification_urgency(TrayNotificationSeverity::Info), 0);
+        assert_eq!(notification_urgency(TrayNotificationSeverity::Warning), 1);
+        assert_eq!(notification_urgency(TrayNotificationSeverity::Error), 2);
+    }
+
+    #[test]
+    fn tray_icon_state_tracks_visibility_and_clears_tooltip_on_hide() {
+        let mut state = TrayIconState::default();
+        assert!(!state.is_visible());
+        state.update("Unbound UI", true);
+        assert!(state.is_visible());
+        assert_eq!(state.tooltip(), "Unbound UI");
+        state.update("ignored", false);
+        assert!(!state.is_visible());
+        assert!(state.tooltip().is_empty());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[test]
+    fn linux_tray_and_balloon_degrade_safely_without_bus() {
+        // 无 D-Bus 会话或无托盘宿主时应安全返回布尔值而不 panic
+        let _ = set_tray_icon(0, "Unbound UI", true);
+        let _ = show_tray_balloon(0, "Notice", "Body", TrayNotificationSeverity::Info);
+        let _ = set_tray_icon(0, "", false);
     }
 }

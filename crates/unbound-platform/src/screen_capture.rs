@@ -117,26 +117,107 @@ pub fn screen_rect_uv(rect: ScreenRect, screen: ScreenRect) -> [f32; 4] {
     ]
 }
 
+/// 将 X11 32 位 `ZPixmap`（BGRX）字节流规范化为不透明 BGRA（每像素 alpha 置为 `0xFF`）。
+#[must_use]
+pub fn normalize_x11_bgrx_to_bgra(src: &[u8]) -> Vec<u8> {
+    let mut out = src.to_vec();
+    for pixel in out.chunks_exact_mut(4) {
+        pixel[3] = 0xFF;
+    }
+    out
+}
+
 /// 捕获主屏上的指定区域。
 ///
 /// 请求会先按主屏矩形钳制，因此返回的 [`CapturedScreen::origin`] 可能与请求不同。
 /// 自绘后景纹理只覆盖主屏，所以捕获也以主屏为界，两者才能落到同一套 UV 坐标。
 ///
 /// # Errors
-/// 非 Windows 平台返回 [`CaptureError::Unsupported`]；拿不到屏幕设备上下文、
-/// 位图创建失败、位块复制失败或读回行数不符时返回 [`CaptureError::Failed`]。
+/// Wayland 会话或不支持截屏的平台返回 [`CaptureError::Unsupported`]；
+/// 拿不到屏幕上下文、捕获区域无交集、位块复制失败或读回字节数不符时返回 [`CaptureError::Failed`]。
 pub fn capture_screen_region(requested: ScreenRect) -> Result<CapturedScreen, CaptureError> {
     #[cfg(windows)]
     {
         capture_impl(requested)
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        capture_linux_impl(requested)
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = requested;
         Err(CaptureError::Unsupported(
-            "screen capture is only available on Windows".to_string(),
+            "screen capture is not implemented on this platform".to_string(),
         ))
     }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+fn capture_linux_impl(requested: ScreenRect) -> Result<CapturedScreen, CaptureError> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
+    use x11rb::xcb_ffi::XCBConnection;
+
+    if crate::linux_backend::active_linux_backend()
+        == Some(crate::linux_backend::LinuxBackendKind::Wayland)
+    {
+        return Err(CaptureError::Unsupported(
+            "screen capture is unsupported on Wayland compositors without portal authorization"
+                .to_string(),
+        ));
+    }
+
+    let (conn, screen_num) = XCBConnection::connect(None).map_err(|e| {
+        CaptureError::Unsupported(format!(
+            "X11 screen capture unavailable (no X11 display or libxcb): {e}"
+        ))
+    })?;
+    let screen = &conn.setup().roots[screen_num];
+    let primary = ScreenRect::new(
+        0,
+        0,
+        u32::from(screen.width_in_pixels),
+        u32::from(screen.height_in_pixels),
+    );
+    let region = clamp_to_screen(requested, primary).ok_or_else(|| {
+        CaptureError::Failed(format!(
+            "capture region {}x{} at ({}, {}) does not intersect the primary screen",
+            requested.width, requested.height, requested.x, requested.y
+        ))
+    })?;
+    let x = i16::try_from(region.x)
+        .map_err(|_| CaptureError::Failed("capture x is out of X11 range".to_string()))?;
+    let y = i16::try_from(region.y)
+        .map_err(|_| CaptureError::Failed("capture y is out of X11 range".to_string()))?;
+    let w = u16::try_from(region.width)
+        .map_err(|_| CaptureError::Failed("capture width is out of X11 range".to_string()))?;
+    let h = u16::try_from(region.height)
+        .map_err(|_| CaptureError::Failed("capture height is out of X11 range".to_string()))?;
+
+    let reply = conn
+        .get_image(ImageFormat::Z_PIXMAP, screen.root, x, y, w, h, !0u32)
+        .map_err(|e| CaptureError::Failed(format!("X11 GetImage request failed: {e}")))?
+        .reply()
+        .map_err(|e| CaptureError::Failed(format!("X11 GetImage reply failed: {e}")))?;
+
+    let expected_bytes = region.width as usize * region.height as usize * 4;
+    if reply.data.len() != expected_bytes {
+        return Err(CaptureError::Failed(format!(
+            "X11 GetImage returned {} bytes, expected {expected_bytes}",
+            reply.data.len()
+        )));
+    }
+    let bgra = normalize_x11_bgrx_to_bgra(&reply.data);
+    Ok(CapturedScreen {
+        origin: region,
+        width: region.width,
+        height: region.height,
+        bgra,
+    })
 }
 
 #[cfg(windows)]
@@ -333,5 +414,24 @@ mod tests {
         assert_eq!(captured.index_of(1925, 5), Some((5 * 10 + 5) * 4));
         assert_eq!(captured.index_of(1919, 0), None);
         assert_eq!(captured.index_of(1930, 0), None);
+    }
+
+    #[test]
+    fn normalize_x11_bgrx_to_bgra_sets_opaque_alpha() {
+        let raw = vec![10, 20, 30, 0, 40, 50, 60, 128];
+        let bgra = normalize_x11_bgrx_to_bgra(&raw);
+        assert_eq!(bgra, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[test]
+    fn wayland_backend_screen_capture_returns_unsupported_error() {
+        let prev = crate::linux_backend::active_linux_backend();
+        crate::linux_backend::set_active_linux_backend(Some(
+            crate::linux_backend::LinuxBackendKind::Wayland,
+        ));
+        let res = capture_screen_region(ScreenRect::new(0, 0, 64, 64));
+        crate::linux_backend::set_active_linux_backend(prev);
+        assert!(matches!(res, Err(CaptureError::Unsupported(_))));
     }
 }

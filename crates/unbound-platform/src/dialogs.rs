@@ -207,7 +207,16 @@ pub fn open_file(config: FileDialogConfig) -> Option<PathBuf> {
     {
         win32::pick_open(&config).into_iter().next()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        crate::linux_dbus::portal_open_files(&config)
+            .into_iter()
+            .next()
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = config;
         None
@@ -226,7 +235,16 @@ pub fn open_files(config: FileDialogConfig) -> Vec<PathBuf> {
         cfg.multi_select = true;
         win32::pick_open(&cfg)
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        let mut cfg = config;
+        cfg.multi_select = true;
+        crate::linux_dbus::portal_open_files(&cfg)
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = config;
         Vec::new()
@@ -243,7 +261,14 @@ pub fn save_file(config: FileDialogConfig) -> Option<PathBuf> {
     {
         win32::pick_save(&config)
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        crate::linux_dbus::portal_save_file(&config)
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         let _ = config;
         None
@@ -310,18 +335,25 @@ pub fn pick_folder(config: FileDialogConfig) -> Option<PathBuf> {
     if let Some(mock) = take_or_peek_mock_path() {
         return Some(mock);
     }
-    if let Some(dir) = config.initial_dir.clone() {
-        if dir.exists() {
-            return Some(dir);
-        }
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        crate::linux_dbus::portal_pick_folder(&config)
     }
-    open_file(config).map(|p| {
-        if p.is_dir() {
-            p
-        } else {
-            p.parent().map_or(p.clone(), PathBuf::from)
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "android"))))]
+    {
+        if let Some(dir) = config.initial_dir.clone() {
+            if dir.exists() {
+                return Some(dir);
+            }
         }
-    })
+        open_file(config).map(|p| {
+            if p.is_dir() {
+                p
+            } else {
+                p.parent().map_or(p.clone(), PathBuf::from)
+            }
+        })
+    }
 }
 
 /// 在工作线程上运行的非阻塞异步文件夹选择对话框。

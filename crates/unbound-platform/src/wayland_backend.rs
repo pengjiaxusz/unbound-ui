@@ -26,7 +26,7 @@ use smithay_client_toolkit::compositor::{CompositorHandler, CompositorState};
 use smithay_client_toolkit::data_device_manager::data_device::{DataDevice, DataDeviceHandler};
 use smithay_client_toolkit::data_device_manager::data_offer::{DataOfferHandler, DragOffer};
 use smithay_client_toolkit::data_device_manager::data_source::{
-    CopyPasteSource, DataSourceHandler,
+    CopyPasteSource, DataSourceHandler, DragSource,
 };
 use smithay_client_toolkit::data_device_manager::{DataDeviceManagerState, WritePipe};
 use smithay_client_toolkit::output::{OutputHandler, OutputState};
@@ -53,6 +53,9 @@ use wayland_client::protocol::{
     wl_pointer, wl_seat, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_protocols::wp::text_input::zv3::client::{
+    zwp_text_input_manager_v3, zwp_text_input_v3,
+};
 use wayland_protocols::xdg::shell::client::{xdg_positioner, xdg_toplevel};
 
 use crate::backend::{push_coalesced_event, Flow, PlatformApp};
@@ -61,12 +64,15 @@ use crate::pacing::PresentWaitPolicy;
 use crate::popup_host::PopupWindowConfig;
 use crate::resize::Extent;
 use crate::wayland_logic::{
-    compute_wayland_popup_placement, csd_resize_direction_at, cursor_for_resize_direction,
-    register_wayland_clipboard, set_primary_output_metrics, translate_evdev_key, KeyRepeatState,
-    PrimaryOutputMetrics, WaylandClipboardBackend, WaylandFrameThrottle,
+    compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
+    cursor_for_resize_direction, register_wayland_clipboard, set_primary_output_metrics,
+    translate_evdev_key, KeyRepeatState, PrimaryOutputMetrics, WaylandClipboardBackend,
+    WaylandFrameThrottle, WaylandImeProtocolAction, WaylandImeState,
 };
 use crate::win32_frame::FrameHitMetrics;
-use crate::win32_window::{CursorIcon, PhysicalSize, ResizeDirection, WindowId as NativeWindowId};
+use crate::win32_window::{
+    CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, WindowId as NativeWindowId,
+};
 use crate::window::{
     apply, ButtonState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformState,
     ScreenRect, WindowConfig,
@@ -111,6 +117,27 @@ enum WaylandCommand {
     },
     ClipboardWrite {
         text: String,
+    },
+    SetImeAllowed {
+        id: isize,
+        allowed: bool,
+    },
+    SetImeCursorArea {
+        id: isize,
+        position: PhysicalPosition,
+        size: PhysicalSize,
+    },
+    ThemeChanged {
+        dark: bool,
+    },
+    FilesDropped {
+        surface_id: u32,
+        paths: Vec<std::path::PathBuf>,
+    },
+    StartOutboundFileDrag {
+        uri_list: String,
+        actions: DndAction,
+        reply: mpsc::Sender<crate::ole_drag::OutboundFileDragOutcome>,
     },
 }
 
@@ -198,7 +225,65 @@ struct ClipboardRegistrationGuard;
 impl Drop for ClipboardRegistrationGuard {
     fn drop(&mut self) {
         register_wayland_clipboard(None);
+        crate::linux_dnd::register_linux_outbound_drag(None);
+        crate::linux_backend::set_active_linux_backend(None);
     }
+}
+
+struct WaylandOutboundDragBridge {
+    event_loop_thread: std::thread::ThreadId,
+    cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
+    wake_signal: WakeSignal,
+}
+
+impl crate::linux_dnd::LinuxOutboundDragBackend for WaylandOutboundDragBridge {
+    fn begin_file_drag(
+        &self,
+        request: &crate::ole_drag::OutboundFileDragRequest,
+    ) -> Result<crate::ole_drag::OutboundFileDragOutcome, PlatformError> {
+        let mut actions = DndAction::empty();
+        if request.allow_copy {
+            actions |= DndAction::Copy;
+        }
+        if request.allow_move {
+            actions |= DndAction::Move;
+        }
+        if actions.is_empty() {
+            actions = DndAction::Copy;
+        }
+        let uri_list = crate::linux_dnd::encode_uri_list(&request.paths);
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let sent = self.cmd_tx.lock().ok().is_some_and(|tx| {
+            tx.send(WaylandCommand::StartOutboundFileDrag {
+                uri_list,
+                actions,
+                reply: reply_tx,
+            })
+            .is_ok()
+        });
+        if !sent {
+            return Ok(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+        }
+        self.wake_signal.signal();
+        // 若由事件循环自身线程调用，严禁同步阻塞等待，避免自死锁：拖拽已在命令队列排队，直接返回已启动结果。
+        if std::thread::current().id() == self.event_loop_thread {
+            let effect = if request.allow_copy {
+                crate::overlay_host::FileDragEffect::Copy
+            } else {
+                crate::overlay_host::FileDragEffect::Move
+            };
+            return Ok(crate::ole_drag::OutboundFileDragOutcome::Completed(effect));
+        }
+        Ok(reply_rx
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or(crate::ole_drag::OutboundFileDragOutcome::Cancelled))
+    }
+}
+
+/// 轻量探测当前环境是否可建立 Wayland 合成器连接（供 `auto` 后端回退决策使用）。
+#[must_use]
+pub(crate) fn can_connect_wayland() -> bool {
+    Connection::connect_to_env().is_ok()
 }
 
 /// 窗口句柄与事件循环共享的状态快照。
@@ -361,6 +446,21 @@ impl WaylandWindowHandle {
             false
         }
     }
+
+    pub(crate) fn set_ime_allowed(&self, allowed: bool) {
+        self.send(WaylandCommand::SetImeAllowed {
+            id: self.shared.id,
+            allowed,
+        });
+    }
+
+    pub(crate) fn set_ime_cursor_area(&self, position: PhysicalPosition, size: PhysicalSize) {
+        self.send(WaylandCommand::SetImeCursorArea {
+            id: self.shared.id,
+            position,
+            size,
+        });
+    }
 }
 
 impl HasWindowHandle for WaylandWindowHandle {
@@ -475,6 +575,7 @@ struct ToplevelEntry {
     csd_edge_active: bool,
     pending_events: Vec<PlatformEvent>,
     cursor_logical: (f64, f64),
+    a11y: crate::a11y_platform::PlatformA11y,
 }
 
 /// 越界原生弹出窗（`xdg_popup`）运行时条目。
@@ -502,10 +603,19 @@ struct WaylandState {
     clipboard_source: Option<CopyPasteSource>,
     clipboard_owned_text: String,
     clipboard_cache: Arc<Mutex<Option<String>>>,
+    dnd_source: Option<DragSource>,
+    dnd_outbound_uri_list: String,
+    dnd_outbound_reply: Option<mpsc::Sender<crate::ole_drag::OutboundFileDragOutcome>>,
+    dnd_outbound_action: DndAction,
+    dnd_enter_surface_id: Option<u32>,
+    dnd_offer_has_uri_list: bool,
 
     seat: Option<wl_seat::WlSeat>,
     themed_pointer: Option<ThemedPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
+    text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+    ime_state: WaylandImeState,
 
     modifiers: Modifiers,
     key_repeat: KeyRepeatState,
@@ -596,6 +706,11 @@ impl WaylandState {
         state.scale_factor = init_scale;
 
         self.surface_to_window.insert(surface_proto_id, id);
+        let a11y_wake = self.wake_signal.clone();
+        let a11y = crate::a11y_platform::PlatformA11y::for_linux(
+            id as u64,
+            Some(Arc::new(move || a11y_wake.signal())),
+        );
         self.windows.push(ToplevelEntry {
             id,
             sctk_window,
@@ -609,6 +724,7 @@ impl WaylandState {
             csd_edge_active: false,
             pending_events: Vec::new(),
             cursor_logical: (0.0, 0.0),
+            a11y,
         });
         Ok(self.windows.len() - 1)
     }
@@ -859,6 +975,95 @@ impl WaylandState {
                     self.clipboard_source = Some(source);
                 }
             }
+            WaylandCommand::SetImeAllowed { id, allowed } => {
+                let (action, ime_ev) = self.ime_state.set_allowed(allowed);
+                self.apply_ime_protocol_action(action);
+                if let Some(ev) = ime_ev {
+                    if let Some(entry) = self.window_by_id_mut(id) {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
+                }
+            }
+            WaylandCommand::SetImeCursorArea { id, position, size } => {
+                let Some(entry) = self.windows.iter().find(|w| w.id == id) else {
+                    return;
+                };
+                let scale = entry.native_window.scale_factor();
+                let win_size = entry.native_window.inner_size();
+                let rect = compute_wayland_ime_cursor_rect(position, size, scale, win_size);
+                let action = self.ime_state.set_cursor_area(rect);
+                self.apply_ime_protocol_action(action);
+            }
+            WaylandCommand::ThemeChanged { dark } => {
+                for entry in &mut self.windows {
+                    entry
+                        .pending_events
+                        .push(PlatformEvent::ThemeChanged { dark });
+                }
+            }
+            WaylandCommand::FilesDropped { surface_id, paths } => {
+                if let Some(entry) = self.window_by_surface_mut(surface_id) {
+                    for path in paths {
+                        entry.pending_events.push(PlatformEvent::FileDrop(path));
+                    }
+                }
+            }
+            WaylandCommand::StartOutboundFileDrag {
+                uri_list,
+                actions,
+                reply,
+            } => {
+                let origin_surface = self
+                    .pointer_surface_id
+                    .or(self.focused_surface_id)
+                    .and_then(|sid| {
+                        self.surface_to_window
+                            .get(&sid)
+                            .and_then(|&wid| self.windows.iter().find(|w| w.id == wid))
+                    })
+                    .or_else(|| self.windows.first())
+                    .map(|w| w.sctk_window.wl_surface().clone());
+                if let (Some(ddm), Some(dd), Some(origin)) =
+                    (&self.data_device_manager, &self.data_device, origin_surface)
+                {
+                    let source = ddm.create_drag_and_drop_source(
+                        qh,
+                        [crate::linux_dnd::URI_LIST_MIME],
+                        actions,
+                    );
+                    self.dnd_outbound_uri_list = uri_list;
+                    self.dnd_outbound_reply = Some(reply);
+                    self.dnd_outbound_action = DndAction::empty();
+                    source.start_drag(dd, &origin, None, self.last_pointer_serial);
+                    self.dnd_source = Some(source);
+                } else {
+                    let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+                }
+            }
+        }
+    }
+
+    fn apply_ime_protocol_action(&self, action: WaylandImeProtocolAction) {
+        let Some(ti) = &self.text_input else {
+            return;
+        };
+        match action {
+            WaylandImeProtocolAction::None => {}
+            WaylandImeProtocolAction::Enable { cursor_rect } => {
+                ti.enable();
+                if let Some(r) = cursor_rect {
+                    ti.set_cursor_rectangle(r.x, r.y, r.width, r.height);
+                }
+                ti.commit();
+            }
+            WaylandImeProtocolAction::UpdateCursorRect(r) => {
+                ti.set_cursor_rectangle(r.x, r.y, r.width, r.height);
+                ti.commit();
+            }
+            WaylandImeProtocolAction::Disable => {
+                ti.disable();
+                ti.commit();
+            }
         }
     }
 }
@@ -1072,6 +1277,9 @@ impl SeatHandler for WaylandState {
             self.seat = Some(seat.clone());
             if let Some(ddm) = &self.data_device_manager {
                 self.data_device = Some(ddm.get_data_device(qh, &seat));
+            }
+            if let Some(mgr) = &self.text_input_manager {
+                self.text_input = Some(mgr.get_text_input(&seat, qh, ()));
             }
         }
     }
@@ -1327,6 +1535,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                 let proto_id = surface.id().protocol_id();
                 state.focused_surface_id = Some(proto_id);
                 if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                    entry.a11y.set_focus(true);
                     entry.pending_events.push(PlatformEvent::Focused(true));
                 }
             }
@@ -1336,7 +1545,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                     state.focused_surface_id = None;
                 }
                 state.key_repeat.clear();
+                let (ime_action, ime_cancel) = state.ime_state.on_focus_lost();
+                state.apply_ime_protocol_action(ime_action);
                 if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                    if let Some(ev) = ime_cancel {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
+                    entry.a11y.set_focus(false);
                     entry.pending_events.push(PlatformEvent::Focused(false));
                 }
             }
@@ -1409,6 +1624,76 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
     }
 }
 
+impl Dispatch<zwp_text_input_manager_v3::ZwpTextInputManagerV3, ()> for WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &zwp_text_input_manager_v3::ZwpTextInputManagerV3,
+        _event: zwp_text_input_manager_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandState {
+    fn event(
+        state: &mut Self,
+        _proxy: &zwp_text_input_v3::ZwpTextInputV3,
+        event: zwp_text_input_v3::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_text_input_v3::Event::Enter { surface } => {
+                let proto_id = surface.id().protocol_id();
+                let action = state.ime_state.on_enter(proto_id);
+                state.apply_ime_protocol_action(action);
+            }
+            zwp_text_input_v3::Event::Leave { surface } => {
+                let proto_id = surface.id().protocol_id();
+                let (action, cancel_ev) = state.ime_state.on_leave(proto_id);
+                state.apply_ime_protocol_action(action);
+                if let Some(ev) = cancel_ev {
+                    if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                        entry.pending_events.push(PlatformEvent::Ime(ev));
+                    }
+                }
+            }
+            zwp_text_input_v3::Event::PreeditString {
+                text,
+                cursor_begin,
+                cursor_end,
+            } => {
+                state.ime_state.on_preedit(text, cursor_begin, cursor_end);
+            }
+            zwp_text_input_v3::Event::CommitString { text } => {
+                state.ime_state.on_commit(text);
+            }
+            zwp_text_input_v3::Event::DeleteSurroundingText { .. } => {}
+            zwp_text_input_v3::Event::Done { .. } => {
+                let events = state.ime_state.on_done();
+                if events.is_empty() {
+                    return;
+                }
+                let target_surface = state
+                    .ime_state
+                    .focused_surface()
+                    .or(state.focused_surface_id);
+                if let Some(proto_id) = target_surface {
+                    if let Some(entry) = state.window_by_surface_mut(proto_id) {
+                        for ev in events {
+                            entry.pending_events.push(PlatformEvent::Ime(ev));
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 impl DataDeviceHandler for WaylandState {
     fn enter(
         &mut self,
@@ -1417,8 +1702,31 @@ impl DataDeviceHandler for WaylandState {
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
         _x: f64,
         _y: f64,
-        _wl_surface: &wl_surface::WlSurface,
+        wl_surface: &wl_surface::WlSurface,
     ) {
+        let proto_id = wl_surface.id().protocol_id();
+        self.dnd_enter_surface_id = Some(proto_id);
+        self.dnd_offer_has_uri_list = false;
+        if let Some(dd) = &self.data_device {
+            if let Some(offer) = dd.data().drag_offer() {
+                let has_uri = offer.with_mime_types(|mimes| {
+                    mimes.iter().any(|m| m == crate::linux_dnd::URI_LIST_MIME)
+                });
+                if has_uri {
+                    self.dnd_offer_has_uri_list = true;
+                    offer.accept_mime_type(
+                        offer.serial,
+                        Some(crate::linux_dnd::URI_LIST_MIME.to_owned()),
+                    );
+                    offer.set_actions(DndAction::Copy | DndAction::Move, DndAction::Copy);
+                    if let Some(entry) = self.window_by_surface_mut(proto_id) {
+                        entry
+                            .pending_events
+                            .push(PlatformEvent::FileHover(std::path::PathBuf::new()));
+                    }
+                }
+            }
+        }
     }
     fn leave(
         &mut self,
@@ -1426,6 +1734,14 @@ impl DataDeviceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
     ) {
+        if let Some(proto_id) = self.dnd_enter_surface_id.take() {
+            if self.dnd_offer_has_uri_list {
+                if let Some(entry) = self.window_by_surface_mut(proto_id) {
+                    entry.pending_events.push(PlatformEvent::FileHoverCancelled);
+                }
+            }
+        }
+        self.dnd_offer_has_uri_list = false;
     }
     fn motion(
         &mut self,
@@ -1480,10 +1796,43 @@ impl DataDeviceHandler for WaylandState {
     }
     fn drop_performed(
         &mut self,
-        _conn: &Connection,
+        conn: &Connection,
         _qh: &QueueHandle<Self>,
         _data_device: &wayland_client::protocol::wl_data_device::WlDataDevice,
     ) {
+        let Some(surface_id) = self.dnd_enter_surface_id.take() else {
+            return;
+        };
+        let has_uri = self.dnd_offer_has_uri_list;
+        self.dnd_offer_has_uri_list = false;
+        if !has_uri {
+            return;
+        }
+        if let Some(dd) = &self.data_device {
+            if let Some(offer) = dd.data().drag_offer() {
+                if let Ok(mut pipe) = offer.receive(crate::linux_dnd::URI_LIST_MIME.to_owned()) {
+                    let _ = conn.flush();
+                    let tx = self.cmd_tx.clone();
+                    let wake = self.wake_signal.clone();
+                    std::thread::spawn(move || {
+                        let mut bytes = Vec::new();
+                        if pipe.read_to_end(&mut bytes).is_ok() {
+                            if let Ok(raw) = String::from_utf8(bytes) {
+                                let paths = crate::linux_dnd::decode_uri_list(&raw);
+                                if !paths.is_empty()
+                                    && tx
+                                        .send(WaylandCommand::FilesDropped { surface_id, paths })
+                                        .is_ok()
+                                {
+                                    wake.signal();
+                                }
+                            }
+                        }
+                    });
+                }
+                offer.finish();
+            }
+        }
     }
 }
 
@@ -1521,17 +1870,32 @@ impl DataSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
-        _mime: String,
+        mime: String,
         mut fd: WritePipe,
     ) {
-        let payload = self.clipboard_owned_text.as_bytes().to_vec();
+        let payload = if mime == crate::linux_dnd::URI_LIST_MIME {
+            self.dnd_outbound_uri_list.as_bytes().to_vec()
+        } else {
+            self.clipboard_owned_text.as_bytes().to_vec()
+        };
         std::thread::spawn(move || {
             let _ = fd.write_all(&payload);
         });
     }
 
-    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
-        self.clipboard_source = None;
+    fn cancelled(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, source: &WlDataSource) {
+        if self
+            .dnd_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source)
+        {
+            self.dnd_source = None;
+            if let Some(reply) = self.dnd_outbound_reply.take() {
+                let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Cancelled);
+            }
+        } else {
+            self.clipboard_source = None;
+        }
     }
 
     fn dnd_dropped(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _source: &WlDataSource) {
@@ -1543,6 +1907,15 @@ impl DataSourceHandler for WaylandState {
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
     ) {
+        self.dnd_source = None;
+        if let Some(reply) = self.dnd_outbound_reply.take() {
+            let effect = if self.dnd_outbound_action.contains(DndAction::Move) {
+                crate::overlay_host::FileDragEffect::Move
+            } else {
+                crate::overlay_host::FileDragEffect::Copy
+            };
+            let _ = reply.send(crate::ole_drag::OutboundFileDragOutcome::Completed(effect));
+        }
     }
 
     fn action(
@@ -1550,8 +1923,9 @@ impl DataSourceHandler for WaylandState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _source: &WlDataSource,
-        _action: DndAction,
+        action: DndAction,
     ) {
+        self.dnd_outbound_action = action;
     }
 }
 
@@ -1639,6 +2013,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let output_state = OutputState::new(&globals, &qh);
     let seat_state = SeatState::new(&globals, &qh);
     let data_device_manager = DataDeviceManagerState::bind(&globals, &qh).ok();
+    let text_input_manager = globals
+        .bind::<zwp_text_input_manager_v3::ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ())
+        .ok();
 
     let wake_pipe = WakePipe::new()?;
     let wake_signal = wake_pipe.signal_handle();
@@ -1647,8 +2024,16 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
 
     // 注册全局 Wayland 剪贴板后端，使 `SystemClipboard` 在 Linux/WSLg 下透明读写。
     let _clipboard_guard = ClipboardRegistrationGuard;
+    crate::linux_backend::set_active_linux_backend(Some(
+        crate::linux_backend::LinuxBackendKind::Wayland,
+    ));
     register_wayland_clipboard(Some(Arc::new(WaylandClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
+        cmd_tx: Mutex::new(cmd_tx.clone()),
+        wake_signal: wake_signal.clone(),
+    })));
+    crate::linux_dnd::register_linux_outbound_drag(Some(Arc::new(WaylandOutboundDragBridge {
+        event_loop_thread: std::thread::current().id(),
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
@@ -1665,9 +2050,18 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         clipboard_source: None,
         clipboard_owned_text: String::new(),
         clipboard_cache,
+        dnd_source: None,
+        dnd_outbound_uri_list: String::new(),
+        dnd_outbound_reply: None,
+        dnd_outbound_action: DndAction::empty(),
+        dnd_enter_surface_id: None,
+        dnd_offer_has_uri_list: false,
         seat: None,
         themed_pointer: None,
         keyboard: None,
+        text_input_manager,
+        text_input: None,
+        ime_state: WaylandImeState::default(),
         modifiers: Modifiers::default(),
         key_repeat: KeyRepeatState::default(),
         focused_surface_id: None,
@@ -1692,6 +2086,17 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     // 安装跨线程事件循环唤醒回调。
     let waker_sig = wake_signal.clone();
     app.attach_waker(Arc::new(move || waker_sig.signal()));
+
+    // 订阅桌面门户深色模式变更，异步通过命令通道与唤醒管道通知事件循环
+    let theme_tx = Mutex::new(wl.cmd_tx.clone());
+    let theme_wake = wake_signal.clone();
+    crate::linux_dbus::register_theme_change_listener(Arc::new(move |dark| {
+        if let Ok(tx) = theme_tx.lock() {
+            if tx.send(WaylandCommand::ThemeChanged { dark }).is_ok() {
+                theme_wake.signal();
+            }
+        }
+    }));
 
     // 创建主顶层窗口并等待首次 configure。
     wl.create_toplevel(&qh, &config)?;
@@ -1902,6 +2307,25 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                     wl.windows[idx].throttle.on_frame_requested(frame_now);
                 }
                 let entry = &mut wl.windows[idx];
+                let sz = entry.native_window.inner_size();
+                entry
+                    .a11y
+                    .set_window_bounds(crate::a11y_linux::A11yWindowBounds::new(
+                        0.0,
+                        0.0,
+                        f64::from(sz.width),
+                        f64::from(sz.height),
+                    ));
+                if crate::a11y_platform::pump_platform_a11y(
+                    &mut app,
+                    &mut entry.a11y,
+                    &mut entry.state,
+                    &entry.native_window,
+                ) == Flow::Exit
+                {
+                    wl.exit_requested = true;
+                    break;
+                }
                 if app.frame(&mut entry.state, &entry.native_window) == Flow::Exit {
                     wl.exit_requested = true;
                     break;

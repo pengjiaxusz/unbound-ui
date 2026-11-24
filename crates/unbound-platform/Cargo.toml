@@ -13,6 +13,7 @@ unbound-gpu.workspace = true
 unbound-a11y.workspace = true
 accesskit.workspace = true
 raw-window-handle = "0.6"
+log.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
@@ -28,6 +29,10 @@ wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
 libc = "0.2"
+x11rb = { version = "0.14", default-features = false, features = ["allow-unsafe-code", "dl-libxcb", "randr", "xfixes", "cursor"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+futures-lite = "2"
+accesskit_unix = "0.24.1"
 
 [lints]
 workspace = true

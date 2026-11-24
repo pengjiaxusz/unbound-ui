@@ -40,7 +40,16 @@ pub fn read_system_accent_color() -> Option<Color> {
     {
         win32::read_dwm_accent_srgb8().map(|[r, g, b, a]| Color::from_srgb8(r, g, b, a))
     }
-    #[cfg(not(windows))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    {
+        crate::linux_dbus::cached_appearance()
+            .accent_srgb8
+            .map(|[r, g, b, a]| Color::from_srgb8(r, g, b, a))
+    }
+    #[cfg(not(any(
+        windows,
+        all(unix, not(target_os = "macos"), not(target_os = "android"))
+    )))]
     {
         None
     }

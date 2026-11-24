@@ -19,16 +19,23 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 pub mod a11y_bridge;
+pub mod a11y_linux;
+pub mod a11y_platform;
 pub mod a11y_win32;
 pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
 pub mod latency;
+pub mod linux_backend;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod linux_dbus;
+pub mod linux_dnd;
 pub mod native_window;
 pub mod ole_drag;
 pub mod overlay_host;
 pub mod pacing;
 pub mod popup_host;
+pub mod portal_logic;
 pub mod resize;
 pub mod screen_capture;
 pub mod system_accent;
@@ -43,8 +50,12 @@ pub mod win32_window;
 pub mod window;
 pub mod windows;
 pub mod windows_build;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+pub mod x11_backend;
 
 pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
+pub use a11y_linux::{A11yWindowBounds, LinuxA11y};
+pub use a11y_platform::PlatformA11y;
 pub use a11y_win32::Win32A11y;
 pub use backend::{Flow, PlatformApp, PlatformWindow};
 pub use clipboard::{
@@ -55,6 +66,16 @@ pub use dialogs::{
     save_file_async, set_mock_dialog_path, FileDialogConfig,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
+pub use linux_backend::{
+    active_linux_backend, parse_linux_backend_env, place_x11_popup_in_work_area,
+    select_linux_backend_order, set_active_linux_backend, LinuxBackendKind, LinuxBackendPreference,
+    LinuxDisplayEnv,
+};
+pub use linux_dnd::{
+    decode_uri_list, dispatch_linux_outbound_file_drag, encode_uri_list,
+    register_linux_outbound_drag, LinuxOutboundDragBackend, TabTearDragState, TabTearDropOutcome,
+    TabTearPayload, UNBOUND_TAB_TEAR_MIME, URI_LIST_MIME,
+};
 pub use native_window::NativeWindow;
 pub use ole_drag::{
     begin_outbound_file_drag, build_cf_hdrop_payload, OutboundFileDragOutcome,
@@ -67,22 +88,29 @@ pub use pacing::{
 pub use popup_host::{
     clamp_popup_to_work_area, PopupHostEntry, PopupHostRegistry, PopupSyncAction, PopupWindowConfig,
 };
+pub use portal_logic::{
+    convert_dialog_filters, decode_file_uri, parse_portal_accent_color, parse_portal_color_scheme,
+    percent_decode_bytes, LinuxAppearanceSnapshot, PortalColorScheme, PortalFileFilter,
+};
 pub use resize::{Extent, ResizeAction, ResizeTracker};
 pub use screen_capture::{
-    capture_screen_region, clamp_to_screen, screen_rect_uv, CaptureError, CapturedScreen,
+    capture_screen_region, clamp_to_screen, normalize_x11_bgrx_to_bgra, screen_rect_uv,
+    CaptureError, CapturedScreen,
 };
 pub use system_accent::{
     decode_abgr_accent, decode_argb_colorization, read_system_accent_color, system_accent_color,
     DEFAULT_SYSTEM_ACCENT_SRGB,
 };
 pub use tray::{
-    set_taskbar_progress, set_tray_icon, show_tray_balloon, TaskbarProgressState,
-    TrayNotificationSeverity,
+    notification_urgency, set_taskbar_progress, set_tray_icon, show_tray_balloon,
+    TaskbarProgressState, TrayIconState, TrayNotificationSeverity,
 };
 pub use wayland_logic::{
-    compute_wayland_popup_placement, csd_resize_direction_at, cursor_for_resize_direction,
-    primary_output_metrics, set_primary_output_metrics, translate_evdev_key, wayland_cursor_name,
-    KeyRepeatState, PrimaryOutputMetrics, WaylandFrameThrottle, WaylandPopupPlacement,
+    compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
+    cursor_for_resize_direction, primary_output_metrics, set_primary_output_metrics,
+    translate_evdev_key, wayland_cursor_name, KeyRepeatState, PrimaryOutputMetrics,
+    WaylandFrameThrottle, WaylandImeCursorRect, WaylandImeProtocolAction, WaylandImeState,
+    WaylandPopupPlacement,
 };
 pub use win32_frame::{
     accent_policy_export_available, clear_window_accent_tint, install_custom_frame,

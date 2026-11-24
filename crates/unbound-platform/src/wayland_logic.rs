@@ -8,8 +8,8 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::win32_window::{CursorIcon, ResizeDirection};
-use crate::window::{Modifiers, PlatformKey, ScreenRect};
+use crate::win32_window::{CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection};
+use crate::window::{ImeEvent, Modifiers, PlatformKey, ScreenRect};
 
 /// Wayland `wl_output` 采集到的主显示器物理尺寸、缩放因子与刷新率。
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -498,6 +498,244 @@ pub fn compute_wayland_popup_placement(
     }
 }
 
+/// Wayland `zwp_text_input_v3` 候选框锚点逻辑矩形（表面局部逻辑像素，宽高至少为 1）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WaylandImeCursorRect {
+    /// 相对表面左上角的逻辑 X 坐标。
+    pub x: i32,
+    /// 相对表面左上角的逻辑 Y 坐标。
+    pub y: i32,
+    /// 逻辑宽度（至少为 1）。
+    pub width: i32,
+    /// 逻辑高度（至少为 1）。
+    pub height: i32,
+}
+
+/// 将绘制阶段回写的物理像素输入法锚点换算为 Wayland 表面局部逻辑坐标并钳制在客户区内。
+#[must_use]
+pub fn compute_wayland_ime_cursor_rect(
+    position: PhysicalPosition,
+    size: PhysicalSize,
+    scale_factor: f64,
+    window_size: PhysicalSize,
+) -> WaylandImeCursorRect {
+    let scale = if scale_factor.is_finite() && scale_factor > 0.0 {
+        scale_factor
+    } else {
+        1.0
+    };
+    let win_w = (f64::from(window_size.width.max(1)) / scale)
+        .round()
+        .max(1.0) as i32;
+    let win_h = (f64::from(window_size.height.max(1)) / scale)
+        .round()
+        .max(1.0) as i32;
+
+    let raw_x = (f64::from(position.x) / scale).round() as i32;
+    let raw_y = (f64::from(position.y) / scale).round() as i32;
+    let raw_w = (f64::from(size.width) / scale).round().max(1.0) as i32;
+    let raw_h = (f64::from(size.height) / scale).round().max(1.0) as i32;
+
+    let x = raw_x.clamp(0, win_w.saturating_sub(1));
+    let y = raw_y.clamp(0, win_h.saturating_sub(1));
+    let max_w = (win_w - x).max(1);
+    let max_h = (win_h - y).max(1);
+    let width = raw_w.clamp(1, max_w);
+    let height = raw_h.clamp(1, max_h);
+
+    WaylandImeCursorRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+/// 将字节索引向低位对齐至合法 UTF-8 字符边界。
+fn clamp_utf8_boundary(text: &str, idx: usize) -> usize {
+    let mut pos = idx.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+/// `WaylandImeState` 要求向合成器下发的协议动作。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum WaylandImeProtocolAction {
+    /// 无需向合成器发送协议请求。
+    None,
+    /// 发送 `enable`（可选附带 `set_cursor_rectangle`）并 `commit`。
+    Enable {
+        /// 若已有有效锚点则一并同步。
+        cursor_rect: Option<WaylandImeCursorRect>,
+    },
+    /// 仅更新候选框锚点并 `commit`。
+    UpdateCursorRect(WaylandImeCursorRect),
+    /// 发送 `disable` 并 `commit`。
+    Disable,
+}
+
+/// Wayland `zwp_text_input_v3` 双缓冲状态机（对齐 ADR 0011，纯逻辑可单测）。
+///
+/// 协议中 `preedit_string` 与 `commit_string` 在收到 `done` 之前仅暂存于双缓冲槽，
+/// 收到 `done` 后按规范顺序（先 `commit` 后 `preedit`）原子消费并立即清空，
+/// 绝不在平台层长期缓存待提交文本。
+#[derive(Clone, Debug, Default)]
+pub struct WaylandImeState {
+    focused_surface: Option<u32>,
+    ime_allowed: bool,
+    enabled_on_compositor: bool,
+    active_composition: bool,
+    pending_preedit: Option<(String, Option<(usize, usize)>)>,
+    pending_commit: Option<String>,
+    last_cursor_rect: Option<WaylandImeCursorRect>,
+}
+
+impl WaylandImeState {
+    /// 当前输入法焦点所在表面协议 ID。
+    #[must_use]
+    pub const fn focused_surface(&self) -> Option<u32> {
+        self.focused_surface
+    }
+
+    /// 当前是否处于活跃预编辑组合状态。
+    #[must_use]
+    pub const fn has_active_composition(&self) -> bool {
+        self.active_composition
+    }
+
+    /// 表面获得 `zwp_text_input_v3::enter` 焦点。
+    pub fn on_enter(&mut self, surface_id: u32) -> WaylandImeProtocolAction {
+        self.focused_surface = Some(surface_id);
+        self.pending_preedit = None;
+        self.pending_commit = None;
+        if self.ime_allowed && !self.enabled_on_compositor {
+            self.enabled_on_compositor = true;
+            WaylandImeProtocolAction::Enable {
+                cursor_rect: self.last_cursor_rect,
+            }
+        } else {
+            WaylandImeProtocolAction::None
+        }
+    }
+
+    /// 表面失去 `zwp_text_input_v3::leave` 焦点；若存在活跃组合则同步取消并恢复快照。
+    pub fn on_leave(&mut self, surface_id: u32) -> (WaylandImeProtocolAction, Option<ImeEvent>) {
+        if self.focused_surface == Some(surface_id) {
+            self.focused_surface = None;
+        }
+        self.cancel_and_disable()
+    }
+
+    /// 键盘失焦时的兜底取消路径：立即清空暂存并向编辑核心派发 `ImeEvent::Disabled`。
+    pub fn on_focus_lost(&mut self) -> (WaylandImeProtocolAction, Option<ImeEvent>) {
+        self.cancel_and_disable()
+    }
+
+    /// 应用层切换当前聚焦控件是否允许 IME。
+    pub fn set_allowed(&mut self, allowed: bool) -> (WaylandImeProtocolAction, Option<ImeEvent>) {
+        self.ime_allowed = allowed;
+        if allowed {
+            if self.focused_surface.is_some() && !self.enabled_on_compositor {
+                self.enabled_on_compositor = true;
+                return (
+                    WaylandImeProtocolAction::Enable {
+                        cursor_rect: self.last_cursor_rect,
+                    },
+                    None,
+                );
+            }
+            (WaylandImeProtocolAction::None, None)
+        } else {
+            self.cancel_and_disable()
+        }
+    }
+
+    /// 更新逻辑候选框锚点；未变化或未启用时跳过冗余协议提交。
+    pub fn set_cursor_area(&mut self, rect: WaylandImeCursorRect) -> WaylandImeProtocolAction {
+        if self.last_cursor_rect == Some(rect) {
+            return WaylandImeProtocolAction::None;
+        }
+        self.last_cursor_rect = Some(rect);
+        if self.enabled_on_compositor {
+            WaylandImeProtocolAction::UpdateCursorRect(rect)
+        } else {
+            WaylandImeProtocolAction::None
+        }
+    }
+
+    /// 暂存协议双缓冲 `preedit_string` 事件。
+    pub fn on_preedit(&mut self, text: Option<String>, cursor_begin: i32, cursor_end: i32) {
+        let text = text.unwrap_or_default();
+        let selection = if cursor_begin >= 0 && cursor_end >= 0 {
+            let start = clamp_utf8_boundary(&text, cursor_begin as usize);
+            let end = clamp_utf8_boundary(&text, cursor_end as usize);
+            Some((start.min(end), start.max(end)))
+        } else {
+            None
+        };
+        self.pending_preedit = Some((text, selection));
+    }
+
+    /// 暂存协议双缓冲 `commit_string` 事件。
+    pub fn on_commit(&mut self, text: Option<String>) {
+        self.pending_commit = text.filter(|s| !s.is_empty());
+    }
+
+    /// 收到 `zwp_text_input_v3::done` 时原子归并并清空双缓冲槽。
+    pub fn on_done(&mut self) -> Vec<ImeEvent> {
+        let commit = self.pending_commit.take();
+        let preedit = self.pending_preedit.take();
+        let mut out = Vec::new();
+
+        if let Some(text) = commit {
+            self.active_composition = false;
+            out.push(ImeEvent::Commit(text));
+        }
+
+        match preedit {
+            Some((text, sel)) if !text.is_empty() => {
+                self.active_composition = true;
+                out.push(ImeEvent::Preedit(text, sel));
+            }
+            Some(_) => {
+                if self.active_composition {
+                    self.active_composition = false;
+                    out.push(ImeEvent::Preedit(String::new(), None));
+                }
+            }
+            None => {
+                // `text_input_v3` 规定 `done` 前未收到 `preedit_string` 即清除旧预编辑。
+                if self.active_composition {
+                    self.active_composition = false;
+                    out.push(ImeEvent::Preedit(String::new(), None));
+                }
+            }
+        }
+
+        out
+    }
+
+    fn cancel_and_disable(&mut self) -> (WaylandImeProtocolAction, Option<ImeEvent>) {
+        self.pending_preedit = None;
+        self.pending_commit = None;
+        let action = if self.enabled_on_compositor {
+            self.enabled_on_compositor = false;
+            WaylandImeProtocolAction::Disable
+        } else {
+            WaylandImeProtocolAction::None
+        };
+        let event = if self.active_composition {
+            self.active_composition = false;
+            Some(ImeEvent::Disabled)
+        } else {
+            None
+        };
+        (action, event)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -624,5 +862,112 @@ mod tests {
             cursor_for_resize_direction(ResizeDirection::East),
             CursorIcon::EwResize
         );
+    }
+
+    #[test]
+    fn wayland_ime_cursor_rect_scales_clamps_and_deduplicates() {
+        let rect = compute_wayland_ime_cursor_rect(
+            PhysicalPosition::new(300, 150),
+            PhysicalSize::new(3, 36),
+            1.5,
+            PhysicalSize::new(1200, 900),
+        );
+        assert_eq!(
+            rect,
+            WaylandImeCursorRect {
+                x: 200,
+                y: 100,
+                width: 2,
+                height: 24,
+            }
+        );
+
+        // 越界与零尺寸锚点必须钳制在逻辑客户区内且宽高 >= 1
+        let clamped = compute_wayland_ime_cursor_rect(
+            PhysicalPosition::new(-40, 2000),
+            PhysicalSize::new(0, 0),
+            2.0,
+            PhysicalSize::new(800, 600),
+        );
+        assert_eq!(
+            clamped,
+            WaylandImeCursorRect {
+                x: 0,
+                y: 299,
+                width: 1,
+                height: 1,
+            }
+        );
+
+        let mut ime = WaylandImeState::default();
+        assert_eq!(ime.on_enter(7), WaylandImeProtocolAction::None);
+        assert_eq!(
+            ime.set_allowed(true),
+            (WaylandImeProtocolAction::Enable { cursor_rect: None }, None)
+        );
+        assert_eq!(
+            ime.set_cursor_area(rect),
+            WaylandImeProtocolAction::UpdateCursorRect(rect)
+        );
+        // 相同锚点不重复提交
+        assert_eq!(ime.set_cursor_area(rect), WaylandImeProtocolAction::None);
+    }
+
+    #[test]
+    fn wayland_ime_double_buffer_flushes_atomically_on_done_without_caching_commits() {
+        let mut ime = WaylandImeState::default();
+        ime.on_enter(1);
+        let _ = ime.set_allowed(true);
+
+        // 长 CJK 预编辑文本在 done 前暂存，done 时原子派发且保留 UTF-8 边界
+        let long_cjk = "中文输入法超长预编辑测试内容校验组合区间".to_string(); // lang-ok: CJK UTF-8 test fixture
+        ime.on_preedit(Some(long_cjk.clone()), 0, long_cjk.len() as i32);
+        assert!(!ime.has_active_composition());
+        let events = ime.on_done();
+        assert_eq!(
+            events,
+            vec![ImeEvent::Preedit(
+                long_cjk.clone(),
+                Some((0, long_cjk.len()))
+            )]
+        );
+        assert!(ime.has_active_composition());
+
+        // commit + 清除预编辑在同一次 done 中先 commit，不产生重复提交
+        ime.on_commit(Some("你好世界".to_string())); // lang-ok: CJK UTF-8 test fixture
+        let events = ime.on_done();
+        assert_eq!(events, vec![ImeEvent::Commit("你好世界".to_string())]); // lang-ok: CJK UTF-8 test fixture
+        assert!(!ime.has_active_composition());
+
+        // 下一次空 done 不重复提交已消费的 commit
+        assert!(ime.on_done().is_empty());
+    }
+
+    #[test]
+    fn wayland_ime_cancels_active_composition_on_leave_focus_loss_or_disable() {
+        let mut ime = WaylandImeState::default();
+        ime.on_enter(9);
+        let _ = ime.set_allowed(true);
+        ime.on_preedit(Some("zhongwen".to_string()), 8, 8);
+        let _ = ime.on_done();
+        assert!(ime.has_active_composition());
+
+        // leave 立即下发 Disable 并派发 ImeEvent::Disabled
+        let (action, ev) = ime.on_leave(9);
+        assert_eq!(action, WaylandImeProtocolAction::Disable);
+        assert_eq!(ev, Some(ImeEvent::Disabled));
+        assert!(!ime.has_active_composition());
+
+        // 重新激活后再测试禁用 IME 取消组合
+        assert_eq!(
+            ime.on_enter(9),
+            WaylandImeProtocolAction::Enable { cursor_rect: None }
+        );
+        ime.on_preedit(Some("nihao".to_string()), 5, 5);
+        let _ = ime.on_done();
+        let (action, ev) = ime.set_allowed(false);
+        assert_eq!(action, WaylandImeProtocolAction::Disable);
+        assert_eq!(ev, Some(ImeEvent::Disabled));
+        assert!(!ime.has_active_composition());
     }
 }

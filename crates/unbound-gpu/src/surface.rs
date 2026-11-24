@@ -30,6 +30,10 @@ pub struct Surface {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     #[allow(dead_code)]
     wayland_surface: Option<ash::khr::wayland_surface::Instance>,
+    /// X11 (XCB) 专用加载器。需在表面存活期间保持有效，因为表面由其函数指针创建。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    #[allow(dead_code)]
+    xcb_surface: Option<ash::khr::xcb_surface::Instance>,
 }
 
 impl core::fmt::Debug for Surface {
@@ -119,6 +123,51 @@ impl Surface {
             surface: vk_surface,
             khr_surface,
             wayland_surface: Some(wayland_surface),
+            xcb_surface: None,
+        })
+    }
+
+    /// 为 X11 (XCB) 连接与窗口句柄创建 Vulkan 表面。
+    ///
+    /// `connection` 为 `xcb_connection_t*`，`window` 为 X11 窗口 ID（`xcb_window_t`）。
+    ///
+    /// # Safety
+    /// `connection` 与 `window` 必须指向存活的 XCB 连接与窗口，且在整个表面生命周期内保持有效。
+    ///
+    /// # Errors
+    /// 缺少必需实例扩展或 Vulkan 创建表面失败时返回错误。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    pub unsafe fn new_xcb(
+        gpu: &Gpu,
+        connection: *mut core::ffi::c_void,
+        window: u32,
+    ) -> Result<Self, GpuError> {
+        const REQUIRED: [&str; 2] = ["VK_KHR_surface", "VK_KHR_xcb_surface"];
+        let missing: Vec<&'static str> = REQUIRED
+            .into_iter()
+            .filter(|name| {
+                !gpu.enabled_instance_extensions
+                    .iter()
+                    .any(|enabled| enabled == name)
+            })
+            .collect();
+        if !missing.is_empty() {
+            return Err(GpuError::UnsupportedFeatures(missing));
+        }
+
+        let khr_surface = ash::khr::surface::Instance::new(&gpu.entry, &gpu.instance);
+        let xcb_surface = ash::khr::xcb_surface::Instance::new(&gpu.entry, &gpu.instance);
+        let create_info = vk::XcbSurfaceCreateInfoKHR::default()
+            .connection(connection)
+            .window(window);
+        // SAFETY: 调用方保证 `connection` 与 `window` 指向有效 XCB 对象。
+        let vk_surface = unsafe { xcb_surface.create_xcb_surface(&create_info, None) }
+            .map_err(GpuError::from)?;
+        Ok(Self {
+            surface: vk_surface,
+            khr_surface,
+            wayland_surface: None,
+            xcb_surface: Some(xcb_surface),
         })
     }
 
@@ -158,6 +207,18 @@ impl Surface {
                     // SAFETY: 由调用方契约保证句柄在表面存活期内有效。
                     unsafe { Self::new_wayland(gpu, d.display.as_ptr(), w.surface.as_ptr()) }
                 }
+                (
+                    raw_window_handle::RawDisplayHandle::Xcb(d),
+                    raw_window_handle::RawWindowHandle::Xcb(w),
+                ) => {
+                    let Some(conn) = d.connection else {
+                        return Err(GpuError::Allocation(
+                            "XCB display handle has null connection pointer".into(),
+                        ));
+                    };
+                    // SAFETY: 由调用方契约保证 XCB 连接与窗口在表面存活期内有效。
+                    unsafe { Self::new_xcb(gpu, conn.as_ptr(), w.window.get()) }
+                }
                 (d, w) => Err(GpuError::Allocation(format!(
                     "unsupported display/window handle pair on Unix: ({d:?}, {w:?})"
                 ))),
@@ -189,9 +250,16 @@ impl Surface {
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
         {
-            let RawWindowHandle::Wayland { display, surface } = raw_handle;
-            // SAFETY: 句柄由存活的 Wayland 窗口提供。
-            unsafe { Self::new_wayland(gpu, display, surface) }
+            match raw_handle {
+                RawWindowHandle::Wayland { display, surface } => {
+                    // SAFETY: 句柄由存活的 Wayland 窗口提供。
+                    unsafe { Self::new_wayland(gpu, display, surface) }
+                }
+                RawWindowHandle::Xcb { connection, window } => {
+                    // SAFETY: 句柄由存活的 X11/XCB 窗口提供。
+                    unsafe { Self::new_xcb(gpu, connection, window) }
+                }
+            }
         }
         #[cfg(not(any(
             windows,
@@ -329,6 +397,14 @@ pub enum RawWindowHandle {
         display: *mut core::ffi::c_void,
         /// `wl_surface` 原始指针。
         surface: *mut core::ffi::c_void,
+    },
+    /// X11 (XCB) `xcb_connection_t*` 与 `xcb_window_t`。
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    Xcb {
+        /// `xcb_connection_t` 原始指针。
+        connection: *mut core::ffi::c_void,
+        /// X11 窗口 ID。
+        window: u32,
     },
 }
 
