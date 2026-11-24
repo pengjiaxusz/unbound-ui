@@ -203,18 +203,30 @@ impl Application for ManagedTooltipApp {
         let rect_a = Rect::new(80.0, 200.0, 100.0, 32.0);
         let rect_b = Rect::new(220.0, 200.0, 100.0, 32.0);
 
-        let desc_a = ButtonDesc::new(rect_a, "Action A");
-        let ctrl_a = view.ctx.control_state(MANAGED_BTN_A, false, false);
-        view.push(
-            MANAGED_BTN_A,
-            emit_button(MANAGED_BTN_A, &desc_a, ctrl_a, &mut []),
+        view.container(
+            ui_key!("managed_slot_a"),
+            RawNodeDesc::container().absolute().bounds(
+                rect_a.origin.x,
+                rect_a.origin.y,
+                rect_a.width(),
+                rect_a.height(),
+            ),
+            |c| {
+                c.button(MANAGED_BTN_A, ButtonDesc::label("Action A"));
+            },
         );
 
-        let desc_b = ButtonDesc::new(rect_b, "Action B");
-        let ctrl_b = view.ctx.control_state(MANAGED_BTN_B, false, false);
-        view.push(
-            MANAGED_BTN_B,
-            emit_button(MANAGED_BTN_B, &desc_b, ctrl_b, &mut []),
+        view.container(
+            ui_key!("managed_slot_b"),
+            RawNodeDesc::container().absolute().bounds(
+                rect_b.origin.x,
+                rect_b.origin.y,
+                rect_b.width(),
+                rect_b.height(),
+            ),
+            |c| {
+                c.button(MANAGED_BTN_B, ButtonDesc::label("Action B"));
+            },
         );
 
         view.tooltip_for(
@@ -223,8 +235,8 @@ impl Application for ManagedTooltipApp {
         );
 
         let builds = std::rc::Rc::clone(&state.rich_builds);
-        let rich_desc = TooltipDesc::rich(rect_b, viewport, Vec2::new(140.0, 32.0))
-            .with_label("Tooltip B");
+        let rich_desc =
+            TooltipDesc::rich(rect_b, viewport, Vec2::new(140.0, 32.0)).with_label("Tooltip B");
         view.tooltip_for_with(MANAGED_BTN_B, rich_desc, move |tip| {
             builds.set(builds.get() + 1);
             tip.text_primary(ui_key!("managed_b_title"), "Tooltip B", 12.0, 600);

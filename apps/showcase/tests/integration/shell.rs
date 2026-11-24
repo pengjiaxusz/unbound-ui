@@ -3263,8 +3263,10 @@ fn collapsible_code_bar_emits_expander_and_code_block_on_toggle() {
 
 /// 辅助：悬停指定节点、确认首帧未弹出（保局部修补预算），推进延迟后再读取 Tooltip 语义标签。
 fn hover_and_expect_tooltip(app: &mut App, viewport: (f32, f32), node: u64) -> String {
-    // 先移离上一个触发器以重置延迟计时，再悬停目标节点验证首帧不弹窗与延迟后弹出。
+    // 先移离上一个触发器并越过 300ms 悬停预热窗口（ADR-0035）以重置延迟计时，
+    // 再悬停目标节点验证首帧不弹窗与延迟后弹出。
     app.pointer_move(Vec2::new(2.0, 2.0));
+    let _ = app.tick(0.35);
     app.rebuild(viewport);
     let pos = rect_of(app, node).center();
     app.pointer_move(pos);
