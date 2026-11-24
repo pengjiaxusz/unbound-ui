@@ -1301,14 +1301,20 @@ fn escape_outside_click_and_scroll_close_the_context_menu() {
 #[test]
 fn code_panels_change_the_page_extent() {
     let mut app = app();
-    let closed = app.frame().nodes.len();
-    app.state.toggle_code(PageId::Home, 0);
+    app.navigate(PageId::Elevation);
     app.rebuild(VIEWPORT);
-    let open = app.frame().nodes.len();
-    assert!(open > closed, "expanded code should add semantic nodes");
-    app.state.toggle_code(PageId::Home, 0);
+    let closed_h = app.page_layout().expect("page layout").content_height;
+    let closed_nodes = app.frame().nodes.len();
+    app.state.toggle_code(PageId::Elevation, 0);
     app.rebuild(VIEWPORT);
-    assert_eq!(app.frame().nodes.len(), closed);
+    let open_h = app.page_layout().expect("page layout").content_height;
+    assert!(
+        open_h > closed_h,
+        "expanded code should increase page extent ({open_h} > {closed_h})"
+    );
+    app.state.toggle_code(PageId::Elevation, 0);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.frame().nodes.len(), closed_nodes);
 }
 
 #[test]
@@ -1577,7 +1583,7 @@ fn losing_the_focus_cancels_the_pointer_capture() {
 #[test]
 fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild(VIEWPORT);
     let card = &app.page_layout().expect("page layout").cards[0];
     assert!(
@@ -1595,7 +1601,7 @@ fn a_wide_card_keeps_its_options_panel_beside_the_stage() {
 #[test]
 fn a_narrow_card_folds_its_options_panel_below_the_stage() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild((560.0, 900.0));
     let card = &app.page_layout().expect("page layout").cards[0];
     assert!(
@@ -1617,7 +1623,7 @@ fn a_narrow_card_folds_its_options_panel_below_the_stage() {
 #[test]
 fn the_options_panel_folds_while_the_window_is_resized() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     let mut folded = Vec::new();
     for width in [1440.0, 1200.0, 1000.0, 800.0, 580.0, 500.0, 1440.0] {
         app.rebuild((width, 900.0));
@@ -1645,7 +1651,7 @@ fn the_options_panel_folds_while_the_window_is_resized() {
 #[test]
 fn every_card_is_a_relayout_boundary() {
     let mut app = app();
-    app.navigate(PageId::Home);
+    app.navigate(PageId::Buttons);
     app.rebuild(VIEWPORT);
     let cards = app.page_layout().expect("page layout").cards.len();
     assert!(cards > 0, "the page should have cards");
@@ -1663,7 +1669,7 @@ fn every_card_is_a_relayout_boundary() {
 #[test]
 fn a_hover_repaints_without_relaying_out() {
     let mut app = app();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
@@ -1682,7 +1688,7 @@ fn a_hover_repaints_without_relaying_out() {
 #[test]
 fn a_hover_uploads_a_handful_of_bytes() {
     let mut app = app();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
@@ -1704,7 +1710,7 @@ fn a_hover_uploads_a_handful_of_bytes() {
 fn a_paint_only_change_keeps_the_upload_generation() {
     let mut app = app();
     let generation = app.generation();
-    let node = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let node = target::id(Target::NavPage(PageId::Components.index() as u8));
     let point = rect_of(&app, node).center();
     app.pointer_move(point);
     app.rebuild(VIEWPORT);
@@ -2213,24 +2219,17 @@ fn the_component_gallery_emits_every_catalog_widget() {
     use unbound_widgets::WidgetCatalogId;
 
     let mut app = app();
-    app.navigate(PageId::Components);
-    app.rebuild(VIEWPORT);
-
-    let content = app.layout.content;
-    let page_height = app.page_layout().expect("page layout").content_height;
-    let max_scroll = (page_height - content.size.y + 48.0).max(0.0);
-    let step = (content.size.y * 0.35).max(120.0);
-
     let mut seen = rustc_hash::FxHashSet::default();
-    let mut scroll = 0.0;
-    loop {
-        app.state.content_scroll = scroll;
+    for &id in WidgetCatalogId::ALL {
+        app.navigate_to_component(id);
         app.rebuild(VIEWPORT);
+        let page_layout = app.page_layout().expect("page layout");
+        assert_eq!(
+            page_layout.cards.len(),
+            1,
+            "single control detail page must render exactly 1 card for {id:?}"
+        );
         seen.extend(app.emitted_widgets().iter().copied());
-        if scroll >= max_scroll {
-            break;
-        }
-        scroll = (scroll + step).min(max_scroll);
     }
 
     let missing: Vec<&str> = WidgetCatalogId::ALL
@@ -2431,7 +2430,7 @@ fn window_caption_buttons_hit_contract_exposes_only_maximize_rect() {
 /// 侧边栏导航目标 100% 覆盖全部 25 个页面与全部 106 个目录组件，且点击组件导航项可精确定位。
 #[test]
 fn sidebar_covers_every_page_and_every_catalog_component() {
-    use showcase::pages::{component_scroll_offset, SIDEBAR_COMPONENT_IDS};
+    use showcase::pages::SIDEBAR_COMPONENT_IDS;
     use showcase::shell::sidebar_all_targets;
     use unbound_widgets::WidgetCatalogId;
 
@@ -2460,7 +2459,8 @@ fn sidebar_covers_every_page_and_every_catalog_component() {
     assert_eq!(app.state.active_page, PageId::Components);
     assert_eq!(app.state.active_component, Some(WidgetCatalogId::ToolTip));
     assert!(
-        (app.state.content_scroll - component_scroll_offset(WidgetCatalogId::ToolTip)).abs() < 1.0
+        app.state.content_scroll.abs() < 1.0,
+        "single control detail page must start at scroll 0"
     );
 }
 
@@ -3352,11 +3352,11 @@ fn shell_tooltip_full_coverage_supports_delay_rich_kbd_and_bilingual_switch() {
     let compact_viewport = (900.0, 760.0);
     app.nav_view.is_pane_open = false;
     app.rebuild(compact_viewport);
-    let nav_btn = target::id(Target::NavPage(PageId::Buttons.index() as u8));
+    let nav_btn = target::id(Target::NavPage(PageId::Components.index() as u8));
     let nav_tip = hover_and_expect_tooltip(&mut app, compact_viewport, nav_btn);
     assert_eq!(
         nav_tip,
-        PageId::Buttons.localized_info(app.state.locale).short
+        PageId::Components.localized_info(app.state.locale).short
     );
 
     // 6. 切换至简体中文后，壳层 Tooltip 同步切换为中文文案。
@@ -3639,4 +3639,127 @@ fn nav_view_scrollbar_supports_hover_expand_track_page_thumb_drag_and_compact_au
             .any(|r| r.node == NAV_SCROLLBAR_THUMB_NODE || r.node == NAV_SCROLLBAR_TRACK_NODE),
         "leaving compact collapsed showcase pane must hide scrollbar again"
     );
+}
+
+#[test]
+fn home_landing_uses_frameless_template_and_exposes_all_10_categories() {
+    use showcase::pages::PageTemplate;
+    use unbound_widgets::ControlCategory;
+
+    let mut app = app();
+    app.navigate(PageId::Home);
+    app.rebuild(VIEWPORT);
+    let layout = app.page_layout().expect("home page layout");
+    assert_eq!(layout.template, PageTemplate::Landing);
+    assert!(
+        layout.cards.is_empty(),
+        "home landing must not use ExampleCard chrome"
+    );
+
+    app.navigate_to_category(Some(ControlCategory::BasicInput));
+    app.rebuild(VIEWPORT);
+    let cat_layout = app.page_layout().expect("category hub layout");
+    assert_eq!(cat_layout.template, PageTemplate::CategoryHub);
+    assert!(cat_layout.cards.is_empty());
+    assert_eq!(app.state.active_category, Some(ControlCategory::BasicInput));
+}
+
+#[test]
+fn category_hub_and_single_control_detail_track_recents_and_favorites() {
+    use unbound_widgets::{ControlClass, WidgetCatalogId};
+
+    let mut app = app();
+    app.navigate_to_category(None);
+    app.state.control_origin_filter = Some(ControlClass::Exclusive);
+    let filtered = showcase::pages::components::filtered_hub_controls(&app.state);
+    assert_eq!(filtered.len(), unbound_widgets::EXCLUSIVE_COUNT);
+
+    app.navigate_to_component(WidgetCatalogId::NodeGraph);
+    app.rebuild(VIEWPORT);
+    assert_eq!(app.state.active_component, Some(WidgetCatalogId::NodeGraph));
+    assert_eq!(
+        app.state.recent_controls.front(),
+        Some(&WidgetCatalogId::NodeGraph)
+    );
+    app.state.toggle_favorite(WidgetCatalogId::NodeGraph);
+    assert!(app.state.is_favorite(WidgetCatalogId::NodeGraph));
+}
+
+#[test]
+fn parity_inspector_uses_inspector_template_and_supports_view_modes() {
+    use showcase::pages::parity_report::{
+        ParityCase, ParityReport, ParityStatus, ParityStatusFilter, ParityViewMode,
+    };
+    use showcase::pages::PageTemplate;
+
+    let mut app = app();
+    app.state.demo.parity_report = Some(ParityReport {
+        cases: vec![
+            ParityCase {
+                name: "Button_normal_light".into(),
+                control: "Button".into(),
+                state: "normal".into(),
+                theme: "light".into(),
+                backdrop: "solid".into(),
+                mean_de: 0.3,
+                p95_de: 0.8,
+                p99_de: 1.0,
+                over_limit_ratio: 0.0,
+                intrinsic_matches: true,
+                cache_hit: true,
+                bbox_delta: [0; 4],
+                status: ParityStatus::Pass,
+                images: [None; 3],
+                image_keys: [0; 3],
+            },
+            ParityCase {
+                name: "Slider_hover_dark".into(),
+                control: "Slider".into(),
+                state: "hover".into(),
+                theme: "dark".into(),
+                backdrop: "mica".into(),
+                mean_de: 5.2,
+                p95_de: 9.4,
+                p99_de: 11.0,
+                over_limit_ratio: 0.12,
+                intrinsic_matches: true,
+                cache_hit: false,
+                bbox_delta: [0; 4],
+                status: ParityStatus::Fail,
+                images: [None; 3],
+                image_keys: [0; 3],
+            },
+        ],
+        passed: 1,
+        failed: 1,
+        invalid: 0,
+        exempt: 0,
+        cache_hits: 1,
+        error: None,
+        hint: String::new(),
+    });
+    app.navigate(PageId::Parity);
+    app.rebuild(VIEWPORT);
+
+    let layout = app.page_layout().expect("parity layout");
+    assert_eq!(layout.template, PageTemplate::Inspector);
+    assert_eq!(
+        app.state.parity_inspector.status_filter,
+        ParityStatusFilter::Issues
+    );
+    assert_eq!(
+        app.state.parity_inspector.view_mode,
+        ParityViewMode::Curtain
+    );
+
+    let stage = app
+        .state
+        .parity_inspector
+        .curtain_stage_rect
+        .get()
+        .expect("curtain stage rect");
+    let target_x = stage.origin.x + stage.size.x * 0.72;
+    let target_y = stage.origin.y + stage.size.y * 0.5;
+    app.pointer_move(unbound_math::Vec2::new(target_x, target_y));
+    assert!((app.state.parity_inspector.curtain_ratio - 0.72).abs() < 0.02);
 }

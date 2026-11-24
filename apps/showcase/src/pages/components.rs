@@ -1224,3 +1224,492 @@ pub fn component(ctx: &mut DemoCtx<'_, '_>, id: WidgetCatalogId) {
     });
     ctx.canvas.widget_output(id, node, &output);
 }
+
+// ============================================================================
+// 分类索引页（Category Hub）与直观控件卡片（ADR 0036）
+// ============================================================================
+
+const HUB_FILTER_H: f32 = 34.0;
+const HUB_CAT_STRIP_H: f32 = 34.0;
+const HUB_GAP: f32 = 12.0;
+const HUB_CARD_H: f32 = 76.0;
+
+fn hub_columns(width: f32) -> usize {
+    if width >= 1040.0 {
+        4
+    } else if width >= 720.0 {
+        3
+    } else if width >= 440.0 {
+        2
+    } else {
+        1
+    }
+}
+
+/// 按当前分类与来源层级过滤控件列表。
+#[must_use]
+pub fn filtered_hub_controls(state: &crate::state::GalleryState) -> Vec<WidgetCatalogId> {
+    WidgetCatalogId::ALL
+        .iter()
+        .copied()
+        .filter(|id| {
+            if let Some(cat) = state.active_category {
+                if id.category() != cat {
+                    return false;
+                }
+            }
+            if let Some(class) = state.control_origin_filter {
+                if id.class() != class {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
+}
+
+/// 返回分类索引页在指定宽度下的总高度。
+#[must_use]
+pub fn hub_height(width: f32, state: &crate::state::GalleryState) -> f32 {
+    let items = filtered_hub_controls(state);
+    let cols = hub_columns(width);
+    let rows = items.len().max(1).div_ceil(cols);
+    let cat_strip = if state.active_category.is_none() {
+        HUB_CAT_STRIP_H + HUB_GAP
+    } else {
+        0.0
+    };
+    HUB_FILTER_H
+        + HUB_GAP
+        + cat_strip
+        + rows as f32 * HUB_CARD_H
+        + (rows.saturating_sub(1)) as f32 * HUB_GAP
+        + 16.0
+}
+
+/// 绘制单张直观控件卡片（用于首页快捷区与分类索引页）。
+pub fn draw_control_tile(
+    canvas: &mut crate::canvas::Canvas<'_>,
+    state: &crate::state::GalleryState,
+    rect: Rect,
+    id: WidgetCatalogId,
+) {
+    let palette = *canvas.palette;
+    let nav_node = crate::target::id(crate::target::Target::NavComponent(id as u8));
+    let visual = canvas.visual(nav_node, false);
+    let bg = if visual.is_pressed() || visual.is_hovered() {
+        palette.primary_soft
+    } else {
+        palette.card_bg
+    };
+    let border = if visual.is_hovered() {
+        palette.primary
+    } else {
+        palette.card_border
+    };
+    canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+
+    // 左侧语义图标盒（取代原先单字母圆标）
+    let cat = id.category();
+    let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
+    let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
+    canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
+    crate::widgets::icon(
+        canvas,
+        super::home::category_widget_icon(cat),
+        icon_box,
+        accent_fg,
+        accent_bg,
+    );
+
+    // 右上来源徽章（WinUI 3 / Toolkit / Unbound）与收藏星标
+    let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
+    let starred = state.is_favorite(id);
+    let star_node = crate::target::id(crate::target::Target::FavoriteToggle(id as u8));
+    let star_visual = canvas.visual(star_node, starred);
+    let star_fg = if starred || star_visual.is_hovered() {
+        palette.warning
+    } else {
+        palette.text_muted
+    };
+    canvas.text(
+        if starred { "★" } else { "☆" },
+        star_rect,
+        12.5,
+        star_fg,
+        AlignX::Center,
+        AlignY::Center,
+    );
+
+    let badge_text = super::control_class_badge(id.class());
+    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
+    let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
+    let badge_rect = Rect::new(
+        star_rect.origin.x - badge_w - 4.0,
+        rect.origin.y + 10.0,
+        badge_w,
+        16.0,
+    );
+    crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
+
+    // 控件规范名 + 一句话用途
+    let label = component_nav_label_localized(id, state.locale);
+    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
+    canvas.text(
+        label,
+        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        12.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let desc = super::category_localized_summary(cat, state.locale);
+    canvas.text(
+        desc,
+        Rect::new(
+            icon_box.max().x + 10.0,
+            rect.origin.y + 34.0,
+            (rect.size.x - 66.0).max(40.0),
+            30.0,
+        ),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Top,
+    );
+
+    // 主卡片命中区排除右上角收藏星标，避免重叠误触
+    let card_hit = Rect::new(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.x - 30.0,
+        rect.size.y,
+    );
+    canvas.control(
+        nav_node,
+        card_hit,
+        accesskit::Role::Link,
+        label,
+        unbound_input::CursorKind::Pointer,
+        false,
+        false,
+    );
+    canvas.control(
+        star_node,
+        star_rect,
+        accesskit::Role::Button,
+        if starred {
+            "Remove favorite"
+        } else {
+            "Add favorite"
+        },
+        unbound_input::CursorKind::Pointer,
+        starred,
+        false,
+    );
+}
+
+/// 绘制分类索引页 / 全部控件总览页（脱离 `ExampleCard` 外框）。
+pub fn draw_category_hub(
+    canvas: &mut crate::canvas::Canvas<'_>,
+    state: &crate::state::GalleryState,
+    body: Rect,
+) {
+    let palette = *canvas.palette;
+    let zh = state.locale.is_zh();
+    let mut y = body.origin.y;
+
+    // 1. 来源层级筛选条：All / WinUI 3 / Toolkit / Unbound
+    let scoped: Vec<WidgetCatalogId> = WidgetCatalogId::ALL
+        .iter()
+        .copied()
+        .filter(|id| state.active_category.is_none_or(|c| id.category() == c))
+        .collect();
+    let n_all = scoped.len();
+    let n_base = scoped
+        .iter()
+        .filter(|id| id.class() == unbound_widgets::ControlClass::Baseline)
+        .count();
+    let n_tk = scoped
+        .iter()
+        .filter(|id| id.class() == unbound_widgets::ControlClass::Toolkit)
+        .count();
+    let n_ex = scoped
+        .iter()
+        .filter(|id| id.class() == unbound_widgets::ControlClass::Exclusive)
+        .count();
+
+    let filters = [
+        (
+            0u8,
+            None,
+            if zh {
+                format!("全部 ({n_all})")
+            } else {
+                format!("All ({n_all})")
+            },
+        ),
+        (
+            1u8,
+            Some(unbound_widgets::ControlClass::Baseline),
+            format!("WinUI 3 ({n_base})"),
+        ),
+        (
+            2u8,
+            Some(unbound_widgets::ControlClass::Toolkit),
+            format!("Toolkit ({n_tk})"),
+        ),
+        (
+            3u8,
+            Some(unbound_widgets::ControlClass::Exclusive),
+            format!("Unbound ({n_ex})"),
+        ),
+    ];
+    let mut fx = body.origin.x;
+    for (idx, class_opt, label) in filters {
+        let w = canvas.labels.measure(&label, 11.0).x + 20.0;
+        let pill = Rect::new(fx, y, w, 28.0);
+        let active = state.control_origin_filter == class_opt;
+        let node = crate::target::id(crate::target::Target::ControlFilter(idx));
+        let visual = canvas.visual(node, active);
+        let fill = if active {
+            palette.primary
+        } else if visual.is_hovered() {
+            palette.primary_soft
+        } else {
+            palette.card_bg
+        };
+        let fg = if active {
+            palette.on_primary
+        } else {
+            palette.text
+        };
+        canvas.rect(
+            pill,
+            14.0,
+            fill,
+            palette.card_border,
+            if active { 0.0 } else { 1.0 },
+            0.0,
+        );
+        canvas.text(&label, pill, 11.0, fg, AlignX::Center, AlignY::Center);
+        canvas.control(
+            node,
+            pill,
+            accesskit::Role::Button,
+            &label,
+            unbound_input::CursorKind::Pointer,
+            active,
+            false,
+        );
+        fx += w + 8.0;
+    }
+    y += HUB_FILTER_H + HUB_GAP;
+
+    // 2. 在 All Controls 总览页提供快捷分类跳转胶囊
+    if state.active_category.is_none() {
+        let mut cx = body.origin.x;
+        for cat in unbound_widgets::ControlCategory::ALL {
+            let label = super::category_localized_label(cat, state.locale);
+            let w = canvas.labels.measure(label, 10.0).x + 16.0;
+            if cx + w > body.max().x {
+                break;
+            }
+            let pill = Rect::new(cx, y, w, 24.0);
+            let node = crate::target::id(crate::target::Target::NavCategory(cat.index() as u8));
+            let visual = canvas.visual(node, false);
+            let fill = if visual.is_hovered() {
+                palette.primary_soft
+            } else {
+                palette.surface
+            };
+            canvas.rect(pill, 12.0, fill, palette.card_border, 1.0, 0.0);
+            canvas.text(
+                label,
+                pill,
+                10.0,
+                palette.text,
+                AlignX::Center,
+                AlignY::Center,
+            );
+            canvas.control(
+                node,
+                pill,
+                accesskit::Role::Link,
+                label,
+                unbound_input::CursorKind::Pointer,
+                false,
+                false,
+            );
+            cx += w + 6.0;
+        }
+        y += HUB_CAT_STRIP_H + HUB_GAP;
+    }
+
+    // 3. 响应式控件卡片网格
+    let items = filtered_hub_controls(state);
+    if items.is_empty() {
+        let empty = Rect::new(body.origin.x, y, body.size.x, 76.0);
+        canvas.rect(empty, 10.0, palette.card_bg, palette.card_border, 1.0, 0.0);
+        canvas.text(
+            if zh {
+                "当前来源筛选下暂无控件，点击上方“全部”可恢复显示。"
+            } else {
+                "No controls match this origin filter. Select 'All' above to view every control."
+            },
+            empty,
+            12.0,
+            palette.text_muted,
+            AlignX::Center,
+            AlignY::Center,
+        );
+        return;
+    }
+
+    let cols = hub_columns(body.size.x);
+    let cell_w = (body.size.x - HUB_GAP * (cols - 1) as f32) / cols as f32;
+    let visible_top = canvas.viewport.origin.y - 60.0;
+    let visible_bottom = canvas.viewport.max().y + 60.0;
+
+    for (idx, comp_id) in items.iter().copied().enumerate() {
+        let col = idx % cols;
+        let row = idx / cols;
+        let cell = Rect::new(
+            body.origin.x + col as f32 * (cell_w + HUB_GAP),
+            y + row as f32 * (HUB_CARD_H + HUB_GAP),
+            cell_w,
+            HUB_CARD_H,
+        );
+        if cell.max().y < visible_top || cell.origin.y > visible_bottom {
+            continue;
+        }
+        draw_control_tile(canvas, state, cell, comp_id);
+    }
+}
+
+/// 使用 `Target::Demo` 命名空间绘制控件卡片（用于首页快捷区，避免与 `NavigationView` 导航项 ID 冲突）。
+pub fn draw_control_tile_demo(
+    canvas: &mut crate::canvas::Canvas<'_>,
+    state: &crate::state::GalleryState,
+    rect: Rect,
+    id: WidgetCatalogId,
+    page: super::PageId,
+) {
+    let palette = *canvas.palette;
+    let nav_node = crate::target::id(crate::target::Target::Demo(
+        page.index() as u8,
+        4,
+        id as u16,
+    ));
+    let star_node = crate::target::id(crate::target::Target::Demo(
+        page.index() as u8,
+        5,
+        id as u16,
+    ));
+    let visual = canvas.visual(nav_node, false);
+    let bg = if visual.is_pressed() || visual.is_hovered() {
+        palette.primary_soft
+    } else {
+        palette.card_bg
+    };
+    let border = if visual.is_hovered() {
+        palette.primary
+    } else {
+        palette.card_border
+    };
+    canvas.rect(rect, 10.0, bg, border, 1.0, 0.0);
+
+    let cat = id.category();
+    let (accent_fg, accent_bg) = super::home::category_accent(palette, cat.index());
+    let icon_box = Rect::new(rect.origin.x + 10.0, rect.origin.y + 18.0, 36.0, 36.0);
+    canvas.rect(icon_box, 8.0, accent_bg, 0, 0.0, 0.0);
+    crate::widgets::icon(
+        canvas,
+        super::home::category_widget_icon(cat),
+        icon_box,
+        accent_fg,
+        accent_bg,
+    );
+
+    let star_rect = Rect::new(rect.max().x - 28.0, rect.origin.y + 8.0, 20.0, 20.0);
+    let starred = state.is_favorite(id);
+    let star_visual = canvas.visual(star_node, starred);
+    let star_fg = if starred || star_visual.is_hovered() {
+        palette.warning
+    } else {
+        palette.text_muted
+    };
+    canvas.text(
+        if starred { "★" } else { "☆" },
+        star_rect,
+        12.5,
+        star_fg,
+        AlignX::Center,
+        AlignY::Center,
+    );
+
+    let badge_text = super::control_class_badge(id.class());
+    let (b_fg, b_bg) = super::home::origin_badge_colors(palette, id.class());
+    let badge_w = canvas.labels.measure(badge_text, 9.0).x + 12.0;
+    let badge_rect = Rect::new(
+        star_rect.origin.x - badge_w - 4.0,
+        rect.origin.y + 10.0,
+        badge_w,
+        16.0,
+    );
+    crate::widgets::badge(canvas, badge_rect, badge_text, b_fg, b_bg);
+
+    let label = component_nav_label_localized(id, state.locale);
+    let title_w = (badge_rect.origin.x - (icon_box.max().x + 10.0) - 6.0).max(40.0);
+    canvas.text(
+        label,
+        Rect::new(icon_box.max().x + 10.0, rect.origin.y + 10.0, title_w, 18.0),
+        12.0,
+        palette.text,
+        AlignX::Start,
+        AlignY::Center,
+    );
+    let desc = super::category_localized_summary(cat, state.locale);
+    canvas.text(
+        desc,
+        Rect::new(
+            icon_box.max().x + 10.0,
+            rect.origin.y + 34.0,
+            (rect.size.x - 66.0).max(40.0),
+            30.0,
+        ),
+        10.0,
+        palette.text_muted,
+        AlignX::Start,
+        AlignY::Top,
+    );
+
+    let card_hit = Rect::new(
+        rect.origin.x,
+        rect.origin.y,
+        rect.size.x - 30.0,
+        rect.size.y,
+    );
+    canvas.control(
+        nav_node,
+        card_hit,
+        accesskit::Role::Link,
+        label,
+        unbound_input::CursorKind::Pointer,
+        false,
+        false,
+    );
+    canvas.control(
+        star_node,
+        star_rect,
+        accesskit::Role::Button,
+        if starred {
+            "Remove favorite"
+        } else {
+            "Add favorite"
+        },
+        unbound_input::CursorKind::Pointer,
+        starred,
+        false,
+    );
+}

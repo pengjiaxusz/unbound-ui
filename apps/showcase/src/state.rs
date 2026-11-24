@@ -20,10 +20,11 @@ use unbound_math::Vec2;
 use unbound_widgets::curve_editor::CurveEditorState;
 use unbound_widgets::progress::ProgressState;
 use unbound_widgets::text_input::TextEditState;
-use unbound_widgets::WidgetCatalogId;
+use unbound_widgets::{ControlCategory, ControlClass, WidgetCatalogId};
 use unbound_world::virtualize::{VirtualList, WindowUpdate};
 
-use crate::pages::{component_scroll_offset, ExampleDef, KnobSpec, PageId};
+use crate::pages::parity_report::ParityInspectorState;
+use crate::pages::{ExampleDef, KnobSpec, PageId, PageTemplate};
 
 /// 随附的两个应用主题。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -419,8 +420,20 @@ pub struct GalleryState {
     /// 由平台层在移动、尺寸与 DPI 变化时写入；布局不使用它，只有依赖屏幕位置的
     /// 自绘后景取样会读取。
     pub window_screen_rect: Option<unbound_platform::ScreenRect>,
-    /// 当通过侧边栏直接选中某个具体组件时记录该组件 ID。
+    /// 当通过侧边栏或索引页进入某个单控件详情页时记录该组件 ID。
     pub active_component: Option<WidgetCatalogId>,
+    /// 当浏览分类索引页时记录当前激活的功能分类；`None` 表示 All Controls 总览页。
+    pub active_category: Option<ControlCategory>,
+    /// 分类索引页的来源层级筛选；`None` 表示全部。
+    pub control_origin_filter: Option<ControlClass>,
+    /// 最近访问的目录控件列表（头部最新，上限 12 项）。
+    pub recent_controls: VecDeque<WidgetCatalogId>,
+    /// 用户星标收藏的目录控件列表。
+    pub favorite_controls: Vec<WidgetCatalogId>,
+    /// 首页快捷访问区当前标签（`0` = Recent，`1` = Favorites）。
+    pub home_quick_tab: u8,
+    /// 像素对照检视台交互状态（筛选、排序、视图模式、卷帘与缩放）。
+    pub parity_inspector: ParityInspectorState,
     /// 顶栏全局搜索框的共享编辑状态。
     pub search: TextEditor,
     /// 搜索命中列表中的键盘选中项索引；随查询变化归零。
@@ -480,6 +493,12 @@ impl Default for GalleryState {
             windows_build: None,
             window_screen_rect: None,
             active_component: None,
+            active_category: None,
+            control_origin_filter: None,
+            recent_controls: VecDeque::new(),
+            favorite_controls: Vec::new(),
+            home_quick_tab: 0,
+            parity_inspector: ParityInspectorState::default(),
             search: TextEditor::default(),
             search_selection: 0,
             editor_views: core::array::from_fn(|_| core::cell::Cell::new(200.0)),
@@ -882,11 +901,27 @@ impl GalleryState {
         self.fps_input.blur();
     }
 
+    /// 返回当前激活页面应使用的顶层布局模板（ADR 0036）。
+    #[must_use]
+    pub const fn page_template(&self) -> PageTemplate {
+        match self.active_page {
+            PageId::Home => PageTemplate::Landing,
+            PageId::Components if self.active_component.is_none() => PageTemplate::CategoryHub,
+            PageId::Parity => PageTemplate::Inspector,
+            _ => PageTemplate::Workshop,
+        }
+    }
+
     /// 导航到指定页面；重置内容滚动位置以使页头可见。
     pub fn navigate(&mut self, page: PageId) {
-        if self.active_page != page || self.active_component.is_some() {
+        if self.active_page != page
+            || self.active_component.is_some()
+            || self.active_category.is_some()
+        {
             self.active_page = page;
             self.active_component = None;
+            self.active_category = None;
+            self.control_origin_filter = None;
             self.content_scroll = 0.0;
             self.demo.modal_open = false;
             self.demo.dropdown_open = false;
@@ -897,16 +932,53 @@ impl GalleryState {
         }
     }
 
-    /// 导航到组件展厅并自动将页面滚动到指定组件的卡片位置。
-    pub fn navigate_to_component(&mut self, id: WidgetCatalogId) {
+    /// 导航到指定功能分类索引页（`None` 表示全部 133 个控件总览页）。
+    pub fn navigate_to_category(&mut self, category: Option<ControlCategory>) {
         self.active_page = PageId::Components;
-        self.active_component = Some(id);
-        self.content_scroll = component_scroll_offset(id);
+        self.active_component = None;
+        self.active_category = category;
+        self.control_origin_filter = None;
+        self.content_scroll = 0.0;
         self.demo.modal_open = false;
         self.demo.dropdown_open = false;
         self.lang_dropdown_open = false;
         self.zoom_dropdown_open = false;
         self.blur_editors();
+        self.bump();
+    }
+
+    /// 导航到指定目录控件的独立详情页，并记录到最近访问列表。
+    pub fn navigate_to_component(&mut self, id: WidgetCatalogId) {
+        self.active_page = PageId::Components;
+        self.active_component = Some(id);
+        self.active_category = Some(id.category());
+        self.content_scroll = 0.0;
+        self.recent_controls.retain(|&existing| existing != id);
+        self.recent_controls.push_front(id);
+        while self.recent_controls.len() > 12 {
+            self.recent_controls.pop_back();
+        }
+        self.demo.modal_open = false;
+        self.demo.dropdown_open = false;
+        self.lang_dropdown_open = false;
+        self.zoom_dropdown_open = false;
+        self.blur_editors();
+        self.bump();
+    }
+
+    /// 查询控件是否已加入收藏。
+    #[must_use]
+    pub fn is_favorite(&self, id: WidgetCatalogId) -> bool {
+        self.favorite_controls.contains(&id)
+    }
+
+    /// 切换指定控件的收藏状态。
+    pub fn toggle_favorite(&mut self, id: WidgetCatalogId) {
+        if let Some(pos) = self.favorite_controls.iter().position(|&item| item == id) {
+            self.favorite_controls.remove(pos);
+        } else {
+            self.favorite_controls.push(id);
+        }
         self.bump();
     }
 
