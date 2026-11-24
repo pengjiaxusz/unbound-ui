@@ -13,6 +13,7 @@ use raw_window_handle::{
     RawWindowHandle, Win32WindowHandle, WindowHandle, WindowsDisplayHandle,
 };
 
+use crate::floating::{FloatingWindowCapabilities, MonitorWorkArea};
 use crate::resize::Extent;
 use crate::window::{PlatformError, ScreenRect};
 
@@ -281,6 +282,57 @@ impl Window {
         let _ = visible;
     }
 
+    /// 设置窗口可见性且不抢占前台焦点。
+    pub fn set_visible_no_activate(&self, visible: bool) {
+        #[cfg(windows)]
+        win32::set_visible_no_activate(self.hwnd, visible);
+        #[cfg(not(windows))]
+        let _ = visible;
+    }
+
+    /// 运行时无闪烁切换窗口是否全局置顶。
+    pub fn set_always_on_top(&self, topmost: bool) {
+        #[cfg(windows)]
+        win32::set_always_on_top(self.hwnd, topmost);
+        #[cfg(not(windows))]
+        let _ = topmost;
+    }
+
+    /// 运行时无闪烁切换窗口鼠标穿透状态。
+    pub fn set_click_through(&self, click_through: bool) {
+        #[cfg(windows)]
+        win32::set_click_through(self.hwnd, click_through);
+        #[cfg(not(windows))]
+        let _ = click_through;
+    }
+
+    /// 运行时设置窗口外框在屏幕坐标系中的物理矩形（不激活窗口）。
+    pub fn set_outer_rect(&self, rect: ScreenRect) {
+        #[cfg(windows)]
+        win32::set_outer_rect(self.hwnd, rect);
+        #[cfg(not(windows))]
+        let _ = rect;
+    }
+
+    /// 查询当前窗口后端的浮窗能力描述。
+    #[must_use]
+    pub fn capabilities(&self) -> FloatingWindowCapabilities {
+        FloatingWindowCapabilities::win32_full()
+    }
+
+    /// 查询当前窗口所在显示器的工作区与 DPI 信息。
+    #[must_use]
+    pub fn work_area(&self) -> Option<MonitorWorkArea> {
+        #[cfg(windows)]
+        {
+            win32::work_area_for_window(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     /// 最小化或恢复窗口。
     pub fn set_minimized(&self, minimized: bool) {
         #[cfg(windows)]
@@ -410,7 +462,8 @@ pub(crate) mod win32 {
     use ::windows::core::PCWSTR;
     use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Gdi::{
-        ClientToScreen, GetDC, GetDeviceCaps, ReleaseDC, VREFRESH,
+        ClientToScreen, GetDC, GetDeviceCaps, MonitorFromWindow, ReleaseDC,
+        MONITOR_DEFAULTTONEAREST, VREFRESH,
     };
     use ::windows::Win32::UI::HiDpi::GetDpiForWindow;
     use ::windows::Win32::UI::Input::Ime::{
@@ -420,12 +473,14 @@ pub(crate) mod win32 {
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetCursorPos, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW,
-        SetCursor, SetWindowTextW, ShowWindow, HTCAPTION, IDC_ARROW, IDC_CROSS, IDC_HAND,
+        GetClientRect, GetCursorPos, GetWindowLongPtrW, IsWindowVisible, IsZoomed, LoadCursorW,
+        PostMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+        GWL_EXSTYLE, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND,
         IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-        SC_SIZE, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, WMSZ_BOTTOM,
+        SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+        SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WMSZ_BOTTOM,
         WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
-        WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
+        WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WS_EX_TRANSPARENT,
     };
 
     #[inline]
@@ -505,6 +560,74 @@ pub(crate) mod win32 {
                 if visible { SW_SHOW } else { SW_HIDE },
             );
         }
+    }
+
+    pub(crate) fn set_visible_no_activate(hwnd: isize, visible: bool) {
+        unsafe {
+            let _ = ShowWindow(
+                hwnd_from_isize(hwnd),
+                if visible { SW_SHOWNOACTIVATE } else { SW_HIDE },
+            );
+        }
+    }
+
+    pub(crate) fn set_always_on_top(hwnd: isize, topmost: bool) {
+        let insert_after = if topmost { HWND_TOPMOST } else { HWND_NOTOPMOST };
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd_from_isize(hwnd),
+                Some(insert_after),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub(crate) fn set_click_through(hwnd: isize, click_through: bool) {
+        let hwnd = hwnd_from_isize(hwnd);
+        unsafe {
+            let mut ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+            if click_through {
+                ex_style |= WS_EX_TRANSPARENT.0;
+            } else {
+                ex_style &= !WS_EX_TRANSPARENT.0;
+            }
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style as isize);
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            );
+        }
+    }
+
+    pub(crate) fn set_outer_rect(hwnd: isize, rect: ScreenRect) {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd_from_isize(hwnd),
+                None,
+                rect.x,
+                rect.y,
+                rect.width.max(1) as i32,
+                rect.height.max(1) as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub(crate) fn work_area_for_window(hwnd: isize) -> Option<MonitorWorkArea> {
+        let hmonitor = unsafe { MonitorFromWindow(hwnd_from_isize(hwnd), MONITOR_DEFAULTTONEAREST) };
+        if hmonitor.is_invalid() {
+            return None;
+        }
+        crate::floating::win32_monitors::query_hmonitor(hmonitor)
     }
 
     pub(crate) fn set_minimized(hwnd: isize, minimized: bool) {

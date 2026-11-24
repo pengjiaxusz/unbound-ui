@@ -25,6 +25,7 @@ pub mod a11y_win32;
 pub mod backend;
 pub mod clipboard;
 pub mod dialogs;
+pub mod floating;
 pub mod latency;
 pub mod linux_backend;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
@@ -65,6 +66,12 @@ pub use clipboard::{
 pub use dialogs::{
     open_file, open_file_async, open_files, pick_folder, pick_folder_async, save_file,
     save_file_async, set_mock_dialog_path, FileDialogConfig,
+};
+pub use floating::{
+    all_monitors, clamp_rect_to_work_area, place_anchor_rect_avoid, place_cursor_monitor_avoid,
+    resolve_floating_placement, restore_from_relative_anchor, solve_edge_snap, work_area_for_point,
+    EdgeSnapResult, FloatingPlacementStrategy, FloatingWindowCapabilities, FloatingWindowPolicy,
+    MonitorWorkArea, RelativeMonitorAnchor, SnapEdge, WindowRole,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use linux_backend::{
