@@ -18,7 +18,7 @@
 #include "common.glsl"
 
 layout(set = 0, binding = 0) uniform sampler2D u_atlas_r8[64];
-layout(set = 0, binding = 1) uniform sampler2D u_atlas_rgba[64];
+layout(set = 0, binding = 1) uniform sampler2D u_atlas_rgba[304];
 
 layout(location = 0) noperspective in vec2 v_local;
 layout(location = 1) noperspective in vec2 v_rel;

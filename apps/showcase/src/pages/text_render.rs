@@ -22,10 +22,18 @@ use crate::canvas::{AlignX, AlignY};
 pub const GROUP_PART_BASE: u16 = 10;
 /// 状态栏部件编号。
 pub const STATUS_BAR_PART: u16 = 20;
+/// 状态栏回退统计列悬停/点击部件编号。
+pub const STATUS_FALLBACK_CELL_PART: u16 = 21;
+/// 状态栏回退统计列完整文本提示浮层部件编号。
+pub const STATUS_FALLBACK_TOOLTIP_PART: u16 = 22;
 /// 字体家族选项起始部件编号。
 pub const FONT_FAMILY_PART_BASE: u16 = 100;
+/// 字体家族下拉框触发器部件编号。
+pub const FONT_FAMILY_TRIGGER_PART: u16 = 109;
 /// 字体字重选项起始部件编号。
 pub const FONT_WEIGHT_PART_BASE: u16 = 110;
+/// 字体字重下拉框触发器部件编号。
+pub const FONT_WEIGHT_TRIGGER_PART: u16 = 119;
 /// 字体字号选项起始部件编号。
 pub const FONT_SIZE_PART_BASE: u16 = 120;
 /// 字体斜体切换开关部件编号。
@@ -272,6 +280,10 @@ pub struct TextRenderPageState {
     pub group_expanded: [bool; 6],
     /// 状态栏回退原因详情是否展开。
     pub fallback_details_expanded: bool,
+    /// 字体族下拉框是否展开（瞬态 UI 状态，不参与持久化）。
+    pub family_dropdown_open: bool,
+    /// 字重下拉框是否展开（瞬态 UI 状态，不参与持久化）。
+    pub weight_dropdown_open: bool,
     /// 运行期文本渲染设置纯值快照。
     pub settings: TextRenderSettings,
     /// 文本渲染实际生效报告快照。
@@ -296,6 +308,8 @@ impl TextRenderPageState {
             preset: TextRenderPreset::WinuiNative,
             group_expanded: [true; 6],
             fallback_details_expanded: false,
+            family_dropdown_open: false,
+            weight_dropdown_open: false,
             settings: TextRenderSettings::default(),
             report: TextRenderReport::default(),
         }
@@ -311,6 +325,10 @@ impl TextRenderPageState {
     pub fn toggle_group(&mut self, index: usize) {
         if index < self.group_expanded.len() {
             self.group_expanded[index] = !self.group_expanded[index];
+            if index == TextConsoleGroup::Font as usize && !self.group_expanded[index] {
+                self.family_dropdown_open = false;
+                self.weight_dropdown_open = false;
+            }
             self.persist();
         }
     }
@@ -468,6 +486,8 @@ impl TextRenderPageState {
             preset: TextRenderPreset::WinuiNative,
             group_expanded: [true; 6],
             fallback_details_expanded: false,
+            family_dropdown_open: false,
+            weight_dropdown_open: false,
             settings: TextRenderSettings::default(),
             report: TextRenderReport::default(),
         };
@@ -1046,7 +1066,7 @@ pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
     );
 
     // 1. 绘制左侧六组折叠框架
-    draw_groups_panel(ctx, left_rect, state);
+    let font_dropdown_anchors = draw_groups_panel(ctx, left_rect, state);
 
     // 2. 绘制右侧文本预览区
     draw_preview_panel(ctx, right_rect, &state.settings);
@@ -1058,14 +1078,78 @@ pub fn text_render(ctx: &mut DemoCtx<'_, '_>) {
         &state.report,
         state.fallback_details_expanded,
     );
+
+    // 4. 在顶层绘制已展开的字体族 / 字重下拉列表，避免被下方分组卡片遮挡
+    if let Some((family_anchor, weight_anchor)) = font_dropdown_anchors {
+        let page_idx = super::PageId::TextRender.index() as u8;
+        if state.family_dropdown_open {
+            let selected_family = FONT_FAMILY_OPTIONS
+                .iter()
+                .position(|(_, opt)| *opt == state.settings.family.as_deref())
+                .unwrap_or(0);
+            let options: Vec<(&str, crate::target::Target)> = FONT_FAMILY_OPTIONS
+                .iter()
+                .enumerate()
+                .map(|(i, (lbl, _))| {
+                    (
+                        *lbl,
+                        crate::target::Target::Demo(page_idx, 0, FONT_FAMILY_PART_BASE + i as u16),
+                    )
+                })
+                .collect();
+            let panel = font_dropdown_panel_rect(family_anchor, options.len(), rect);
+            crate::widgets::dropdown_menu(ctx.canvas, panel, &options, selected_family);
+        } else if state.weight_dropdown_open {
+            let selected_weight = FONT_WEIGHT_OPTIONS
+                .iter()
+                .position(|(_, w)| *w == state.settings.weight)
+                .unwrap_or(0);
+            let options: Vec<(&str, crate::target::Target)> = FONT_WEIGHT_OPTIONS
+                .iter()
+                .enumerate()
+                .map(|(i, (lbl, _))| {
+                    (
+                        *lbl,
+                        crate::target::Target::Demo(page_idx, 0, FONT_WEIGHT_PART_BASE + i as u16),
+                    )
+                })
+                .collect();
+            let panel = font_dropdown_panel_rect(weight_anchor, options.len(), rect);
+            crate::widgets::dropdown_menu(ctx.canvas, panel, &options, selected_weight);
+        }
+    }
 }
 
-/// 绘制左侧六组折叠容器。
-fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+/// 计算字体组 ComboBox 展开面板的边界矩形，自动在内容区边界内防越界翻转。
+fn font_dropdown_panel_rect(anchor: Rect, count: usize, bounds: Rect) -> Rect {
+    let row_h = crate::widgets::MENU_ROW_HEIGHT;
+    let menu_w = anchor.size.x.max(150.0);
+    let menu_h = count as f32 * row_h + 8.0;
+    let x = anchor
+        .origin
+        .x
+        .max(bounds.origin.x + 4.0)
+        .min((bounds.max().x - menu_w - 4.0).max(bounds.origin.x + 4.0));
+    let below_y = anchor.max().y + 4.0;
+    let y = if below_y + menu_h <= bounds.max().y - 4.0 {
+        below_y
+    } else {
+        (anchor.origin.y - menu_h - 4.0).max(bounds.origin.y + 4.0)
+    };
+    Rect::new(x, y, menu_w, menu_h)
+}
+
+/// 绘制左侧六组折叠容器，返回展开态字体组的 `(family_rect, weight_rect)` 下拉锚点。
+fn draw_groups_panel(
+    ctx: &mut DemoCtx<'_, '_>,
+    rect: Rect,
+    state: &TextRenderPageState,
+) -> Option<(Rect, Rect)> {
     let palette = *ctx.canvas.palette;
     let header_h = 28.0;
     let item_gap = 6.0;
     let mut current_y = rect.origin.y;
+    let mut font_dropdown_anchors: Option<(Rect, Rect)> = None;
 
     // 0. 顶部预设方案切换栏
     let preset_h = 26.0;
@@ -1079,7 +1163,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
 
         let content_h = if is_expanded {
             match group {
-                TextConsoleGroup::Font => 78.0,
+                TextConsoleGroup::Font => 92.0,
                 TextConsoleGroup::Typography => 176.0,
                 TextConsoleGroup::Pixel => 58.0,
                 TextConsoleGroup::DistanceField => 58.0,
@@ -1147,7 +1231,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
                 content_h - 4.0,
             );
             if *group == TextConsoleGroup::Font {
-                draw_font_controls(ctx, content_rect, state);
+                font_dropdown_anchors = Some(draw_font_controls(ctx, content_rect, state));
             } else if *group == TextConsoleGroup::Typography {
                 draw_typography_group(ctx, content_rect, state);
             } else if *group == TextConsoleGroup::Pixel {
@@ -1217,6 +1301,7 @@ fn draw_groups_panel(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPa
 
         current_y += total_group_h + item_gap;
     }
+    font_dropdown_anchors
 }
 
 /// 绘制顶部预设方案切换栏（WinUI 原生 / 跨平台一致 / 像素风 / 自定义）。
@@ -1286,26 +1371,28 @@ fn draw_preset_bar(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPage
     crate::widgets::segmented_slots(ctx.canvas, seg_rect, &slots, selected_idx, 10.0, None);
 }
 
-/// 绘制字体组四项调节控件（家族、字重、字号、斜体）。
-fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderPageState) {
+/// 绘制字体组四项调节控件（家族、字重、字号、斜体），返回两个下拉触发器矩形供顶层绘制菜单。
+fn draw_font_controls(
+    ctx: &mut DemoCtx<'_, '_>,
+    rect: Rect,
+    state: &TextRenderPageState,
+) -> (Rect, Rect) {
     let palette = *ctx.canvas.palette;
     ctx.canvas
         .rect(rect, 4.0, palette.card_bg, palette.card_border, 0.5, 0.0);
 
     let caps = TextCapabilities::probe();
-    let family_res = resolve_feature(TextFeatureKey::FontFamily, &caps, &state.settings);
-    let weight_res = resolve_feature(TextFeatureKey::FontWeight, &caps, &state.settings);
     let size_res = resolve_feature(TextFeatureKey::FontSize, &caps, &state.settings);
     let italic_res = resolve_feature(TextFeatureKey::FontItalic, &caps, &state.settings);
 
     let pad_x = 8.0;
-    let pad_y = 4.0;
+    let pad_y = 6.0;
     let inner_w = rect.size.x - pad_x * 2.0;
     let col_gap = 8.0;
     let col_w = ((inner_w - col_gap) * 0.5).max(40.0);
 
     let locale = ctx.state.locale;
-    // Row 1: Family (left) & Weight (right)
+    // 第 1 行：字体族（左）与字重（右）采用并排 ComboBox 下拉框，避免 4 槽分段在窄宽下挤叠。
     let row1_y = rect.origin.y + pad_y;
     ctx.canvas.text(
         locale.pick("FAMILY", "字体族 (FAMILY)"),
@@ -1324,51 +1411,43 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         AlignY::Center,
     );
 
-    let family_rect = Rect::new(rect.origin.x + pad_x, row1_y + 11.0, col_w, 22.0);
-    let family_ids: Vec<u64> = (0..FONT_FAMILY_OPTIONS.len())
-        .map(|i| ctx.part(FONT_FAMILY_PART_BASE + i as u16))
-        .collect();
-    let family_labels: Vec<&str> = FONT_FAMILY_OPTIONS.iter().map(|(lbl, _)| *lbl).collect();
+    let family_rect = Rect::new(rect.origin.x + pad_x, row1_y + 12.0, col_w, 26.0);
     let selected_family = FONT_FAMILY_OPTIONS
         .iter()
         .position(|(_, opt)| *opt == state.settings.family.as_deref())
         .unwrap_or(0);
-    crate::widgets::segmented(
+    let family_display = FONT_FAMILY_OPTIONS[selected_family].0;
+    crate::widgets::select_trigger(
         ctx.canvas,
-        &family_ids,
+        ctx.part(FONT_FAMILY_TRIGGER_PART),
         family_rect,
-        &family_labels,
-        selected_family,
-        family_res.disabled,
-        None,
+        family_display,
+        "Font family selector",
+        state.family_dropdown_open,
     );
 
     let weight_rect = Rect::new(
         rect.origin.x + pad_x + col_w + col_gap,
-        row1_y + 11.0,
+        row1_y + 12.0,
         col_w,
-        22.0,
+        26.0,
     );
-    let weight_ids: Vec<u64> = (0..FONT_WEIGHT_OPTIONS.len())
-        .map(|i| ctx.part(FONT_WEIGHT_PART_BASE + i as u16))
-        .collect();
-    let weight_labels: Vec<&str> = FONT_WEIGHT_OPTIONS.iter().map(|(lbl, _)| *lbl).collect();
     let selected_weight = FONT_WEIGHT_OPTIONS
         .iter()
         .position(|(_, w)| *w == state.settings.weight)
         .unwrap_or(0);
-    crate::widgets::segmented(
+    let weight_display = FONT_WEIGHT_OPTIONS[selected_weight].0;
+    crate::widgets::select_trigger(
         ctx.canvas,
-        &weight_ids,
+        ctx.part(FONT_WEIGHT_TRIGGER_PART),
         weight_rect,
-        &weight_labels,
-        selected_weight,
-        weight_res.disabled,
-        None,
+        weight_display,
+        "Font weight selector",
+        state.weight_dropdown_open,
     );
 
-    // Row 2: Size (left) & Italic (right)
-    let row2_y = row1_y + 37.0;
+    // 第 2 行：字号（左）与斜体开关（右）
+    let row2_y = row1_y + 42.0;
     ctx.canvas.text(
         locale.pick("SIZE", "字号 (SIZE)"),
         Rect::new(rect.origin.x + pad_x, row2_y, col_w, 10.0),
@@ -1378,7 +1457,7 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         AlignY::Center,
     );
 
-    let size_rect = Rect::new(rect.origin.x + pad_x, row2_y + 11.0, col_w, 22.0);
+    let size_rect = Rect::new(rect.origin.x + pad_x, row2_y + 12.0, col_w, 24.0);
     let size_ids: Vec<u64> = (0..FONT_SIZE_OPTIONS.len())
         .map(|i| ctx.part(FONT_SIZE_PART_BASE + i as u16))
         .collect();
@@ -1399,9 +1478,9 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
 
     let italic_rect = Rect::new(
         rect.origin.x + pad_x + col_w + col_gap,
-        row2_y + 11.0,
+        row2_y + 12.0,
         col_w,
-        22.0,
+        24.0,
     );
     let italic_node = ctx.part(FONT_ITALIC_PART);
     crate::widgets::toggle_switch(
@@ -1412,6 +1491,8 @@ fn draw_font_controls(ctx: &mut DemoCtx<'_, '_>, rect: Rect, state: &TextRenderP
         state.settings.italic,
         italic_res.disabled,
     );
+
+    (family_rect, weight_rect)
 }
 
 /// 绘制像素与相位组的内容：光栅器后端（DirectWrite / Cosmic）与亚像素相位（8 / 4 / 1）。
@@ -2123,11 +2204,25 @@ fn draw_status_bar(
     ];
 
     let col_w = (rect.size.x - 16.0) / 4.0;
+    let mut fallback_cell = Rect::new(
+        rect.origin.x + 8.0 + 3.0 * col_w,
+        rect.origin.y + 4.0,
+        (col_w - 8.0).max(1.0),
+        rect.size.y - 8.0,
+    );
     for (i, (title, value)) in items.iter().enumerate() {
         let x = rect.origin.x + 8.0 + i as f32 * col_w;
-        let cell = Rect::new(x, rect.origin.y + 4.0, col_w - 8.0, rect.size.y - 8.0);
+        let cell = Rect::new(
+            x,
+            rect.origin.y + 4.0,
+            (col_w - 8.0).max(1.0),
+            rect.size.y - 8.0,
+        );
+        if i == 3 {
+            fallback_cell = cell;
+        }
 
-        ctx.canvas.text(
+        ctx.canvas.text_elided(
             title,
             Rect::new(cell.origin.x, cell.origin.y, cell.size.x, 12.0),
             8.5,
@@ -2135,7 +2230,7 @@ fn draw_status_bar(
             AlignX::Start,
             AlignY::Center,
         );
-        ctx.canvas.text(
+        ctx.canvas.text_elided(
             value,
             Rect::new(
                 cell.origin.x,
@@ -2168,6 +2263,28 @@ fn draw_status_bar(
         false,
         fallback_expanded,
     );
+
+    // 为 FALLBACKS 列注册独立悬停热区，悬停时通过标准 Tooltip 显示完整回退文本。
+    let fallback_node = ctx.part(STATUS_FALLBACK_CELL_PART);
+    ctx.canvas.control(
+        fallback_node,
+        fallback_cell,
+        Role::Status,
+        &fallback_text,
+        unbound_input::CursorKind::Pointer,
+        false,
+        fallback_expanded,
+    );
+    if ctx.canvas.visual(fallback_node, false).is_hovered() {
+        ctx.canvas.emit_tooltip_plain(
+            ctx.part(STATUS_FALLBACK_TOOLTIP_PART),
+            fallback_node,
+            fallback_cell,
+            ctx.rect,
+            &fallback_text,
+            unbound_widgets::overlay::Placement::Top,
+        );
+    }
 
     // 若展开回退详情，在状态栏上方绘制诊断横幅
     if fallback_expanded {

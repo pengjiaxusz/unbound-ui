@@ -923,6 +923,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(nav_item_id);
     }
 
@@ -946,6 +948,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(item_id);
     }
 
@@ -964,6 +968,8 @@ impl GalleryApp {
         self.state.demo.dropdown_open = false;
         self.state.lang_dropdown_open = false;
         self.state.zoom_dropdown_open = false;
+        self.state.text_render.family_dropdown_open = false;
+        self.state.text_render.weight_dropdown_open = false;
         self.pending_focus = Some(item_id);
     }
 
@@ -1635,6 +1641,37 @@ impl GalleryApp {
         {
             self.state.bump();
         }
+        if self.state.active_page == PageId::Components {
+            match self.state.active_component {
+                Some(WidgetCatalogId::CalendarView) => {
+                    if let Some(rect) = self.state.sandbox.calendar_stage_rect.get() {
+                        let desc = unbound_widgets::DatePickerDesc::new(rect);
+                        if self
+                            .state
+                            .sandbox
+                            .calendar_view
+                            .handle_hover(&desc, position)
+                        {
+                            self.state.bump();
+                        }
+                    }
+                }
+                Some(WidgetCatalogId::DateRangePicker) => {
+                    if let Some(rect) = self.state.sandbox.date_range_stage_rect.get() {
+                        let desc = unbound_widgets::DatePickerDesc::new(rect);
+                        if self
+                            .state
+                            .sandbox
+                            .date_range_picker
+                            .handle_hover(&desc, position)
+                        {
+                            self.state.bump();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
         if self.nav_view.scrollbar_drag.is_some() {
             if self
@@ -1787,6 +1824,31 @@ impl GalleryApp {
             self.state.zoom_dropdown_open = false;
             self.state.bump();
         }
+        // 点击文本渲染页字体族或字重下拉菜单之外的区域时自动收起浮层。
+        if self.state.text_render.family_dropdown_open
+            || self.state.text_render.weight_dropdown_open
+        {
+            let keep_open = matches!(
+                target.and_then(target::decode),
+                Some(Target::Demo(page, 0, part))
+                    if page == PageId::TextRender.index() as u8
+                        && (part == pages::text_render::FONT_FAMILY_TRIGGER_PART
+                            || part == pages::text_render::FONT_WEIGHT_TRIGGER_PART
+                            || (pages::text_render::FONT_FAMILY_PART_BASE
+                                ..pages::text_render::FONT_FAMILY_PART_BASE
+                                    + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
+                                .contains(&part)
+                            || (pages::text_render::FONT_WEIGHT_PART_BASE
+                                ..pages::text_render::FONT_WEIGHT_PART_BASE
+                                    + pages::text_render::FONT_WEIGHT_OPTIONS.len() as u16)
+                                .contains(&part))
+            );
+            if !keep_open {
+                self.state.text_render.family_dropdown_open = false;
+                self.state.text_render.weight_dropdown_open = false;
+                self.state.bump();
+            }
+        }
         // 点击编辑器之外的区域时释放编辑器焦点：选区随焦点一起折叠，
         // 否则旧选区会在后续悬停时继续显示。上下文菜单项属于编辑器本身。
         let editor_related = target.and_then(target::decode).is_some_and(|item| {
@@ -1898,6 +1960,31 @@ impl GalleryApp {
         }
         if !self.layout.content.contains_point(point) {
             return;
+        }
+        if self.state.active_page == PageId::Components {
+            match self.state.active_component {
+                Some(WidgetCatalogId::CalendarView) => {
+                    if let Some(rect) = self.state.sandbox.calendar_stage_rect.get() {
+                        if rect.contains_point(point) {
+                            if self.state.sandbox.calendar_view.handle_wheel(delta_y) {
+                                self.state.bump();
+                            }
+                            return;
+                        }
+                    }
+                }
+                Some(WidgetCatalogId::DateRangePicker) => {
+                    if let Some(rect) = self.state.sandbox.date_range_stage_rect.get() {
+                        if rect.contains_point(point) {
+                            if self.state.sandbox.date_range_picker.handle_wheel(delta_y) {
+                                self.state.bump();
+                            }
+                            return;
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         if self.state.active_page == PageId::Parity {
             if let Some(pane) = self.state.parity_inspector.list_pane_rect.get() {
@@ -2206,6 +2293,72 @@ impl GalleryApp {
             }
             return;
         }
+        if self.state.active_page == PageId::Components && !modifiers.control {
+            let chord = match key {
+                PlatformKey::Named(name) => match name.as_str() {
+                    "ArrowLeft" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowLeft"),
+                    )),
+                    "ArrowRight" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowRight"),
+                    )),
+                    "ArrowUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "ArrowUp",
+                    ))),
+                    "ArrowDown" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("ArrowDown"),
+                    )),
+                    "PageUp" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "PageUp",
+                    ))),
+                    "PageDown" => Some(unbound_input::KeyChord::new(
+                        unbound_input::KeyName::Named("PageDown"),
+                    )),
+                    "Home" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Home",
+                    ))),
+                    "End" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "End",
+                    ))),
+                    "Enter" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Enter",
+                    ))),
+                    "Escape" => Some(unbound_input::KeyChord::new(unbound_input::KeyName::Named(
+                        "Escape",
+                    ))),
+                    _ => None,
+                },
+                PlatformKey::Character(text) if text == " " => Some(unbound_input::KeyChord::new(
+                    unbound_input::KeyName::Named("Space"),
+                )),
+                _ => None,
+            };
+            if let Some(chord) = chord {
+                let handled = match self.state.active_component {
+                    Some(WidgetCatalogId::CalendarView) => {
+                        self.state.sandbox.calendar_view.handle_key(&chord)
+                    }
+                    Some(WidgetCatalogId::DateRangePicker) => {
+                        self.state.sandbox.date_range_picker.handle_key(&chord)
+                    }
+                    _ => false,
+                };
+                if handled {
+                    if self.state.active_component == Some(WidgetCatalogId::CalendarView) {
+                        let dm = match self.state.sandbox.calendar_view.display_mode {
+                            unbound_widgets::CalendarDisplayMode::Month => 0.0,
+                            unbound_widgets::CalendarDisplayMode::Year => 1.0,
+                            unbound_widgets::CalendarDisplayMode::Decade => 2.0,
+                        };
+                        let card =
+                            pages::components::component_card_index(WidgetCatalogId::CalendarView);
+                        self.state.set_knob(PageId::Components, card, 1, dm);
+                    }
+                    self.state.bump();
+                    return;
+                }
+            }
+        }
         if self.state.active_page == PageId::Parity && !modifiers.control {
             match key {
                 PlatformKey::Named(name) if name == "ArrowDown" => {
@@ -2296,6 +2449,8 @@ impl GalleryApp {
                 self.state.demo.dropdown_open = false;
                 self.state.lang_dropdown_open = false;
                 self.state.zoom_dropdown_open = false;
+                self.state.text_render.family_dropdown_open = false;
+                self.state.text_render.weight_dropdown_open = false;
                 self.editor_mut(EditorId::Search)
                     .edit
                     .set_text(String::new());
@@ -2631,12 +2786,28 @@ impl GalleryApp {
                         let current = self
                             .state
                             .knob(page_id, card as usize, knob as usize, &spec);
-                        self.state.set_knob(
-                            page_id,
-                            card as usize,
-                            knob as usize,
-                            if current > 0.5 { 0.0 } else { 1.0 },
-                        );
+                        let next_val = if current > 0.5 { 0.0 } else { 1.0 };
+                        self.state
+                            .set_knob(page_id, card as usize, knob as usize, next_val);
+                        if page_id == PageId::Components
+                            && card as usize
+                                == pages::components::component_card_index(
+                                    WidgetCatalogId::CalendarView,
+                                )
+                        {
+                            match knob {
+                                3 => {
+                                    self.state.sandbox.calendar_view.is_today_highlighted =
+                                        next_val > 0.5;
+                                }
+                                4 => {
+                                    self.state
+                                        .sandbox
+                                        .set_calendar_blackouts_enabled(next_val > 0.5);
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -2659,6 +2830,37 @@ impl GalleryApp {
                         Vec2::new(bezier.x1, bezier.y1),
                         Vec2::new(bezier.x2, bezier.y2),
                     );
+                }
+                if PageId::from_index(page as usize) == PageId::Components
+                    && card as usize
+                        == pages::components::component_card_index(WidgetCatalogId::CalendarView)
+                {
+                    match knob {
+                        0 => {
+                            let mode = match option {
+                                0 => unbound_widgets::CalendarSelectionMode::None,
+                                2 => unbound_widgets::CalendarSelectionMode::Multiple,
+                                3 => unbound_widgets::CalendarSelectionMode::Range,
+                                _ => unbound_widgets::CalendarSelectionMode::Single,
+                            };
+                            self.state.sandbox.calendar_view.set_mode(mode);
+                        }
+                        1 => {
+                            self.state.sandbox.calendar_view.display_mode = match option {
+                                1 => unbound_widgets::CalendarDisplayMode::Year,
+                                2 => unbound_widgets::CalendarDisplayMode::Decade,
+                                _ => unbound_widgets::CalendarDisplayMode::Month,
+                            };
+                        }
+                        2 => {
+                            let first_day = if option == 1 { 1 } else { 0 };
+                            self.state
+                                .sandbox
+                                .calendar_view
+                                .set_first_day_of_week(first_day);
+                        }
+                        _ => {}
+                    }
                 }
             }
             Target::Code(page, card) => {
@@ -3003,6 +3205,15 @@ impl GalleryApp {
                             &mut self.state.sandbox,
                             Some(position),
                         ) {
+                            if id == WidgetCatalogId::CalendarView {
+                                let dm = match self.state.sandbox.calendar_view.display_mode {
+                                    unbound_widgets::CalendarDisplayMode::Month => 0.0,
+                                    unbound_widgets::CalendarDisplayMode::Year => 1.0,
+                                    unbound_widgets::CalendarDisplayMode::Decade => 2.0,
+                                };
+                                self.state
+                                    .set_knob(PageId::Components, card as usize, 1, dm);
+                            }
                             self.state.bump();
                         }
                     }
@@ -3065,7 +3276,9 @@ impl GalleryApp {
                         let group_index = (part - pages::text_render::GROUP_PART_BASE) as usize;
                         self.state.text_render.toggle_group(group_index);
                         self.state.bump();
-                    } else if part == pages::text_render::STATUS_BAR_PART {
+                    } else if part == pages::text_render::STATUS_BAR_PART
+                        || part == pages::text_render::STATUS_FALLBACK_CELL_PART
+                    {
                         self.state.text_render.toggle_fallback_details();
                         self.state.bump();
                     } else if part == pages::text_render::PART_PRESET_WINUI {
@@ -3140,6 +3353,16 @@ impl GalleryApp {
                             self.state.text_render.report = self.labels.cache.report();
                             self.state.bump();
                         }
+                    } else if part == pages::text_render::FONT_FAMILY_TRIGGER_PART {
+                        self.state.text_render.family_dropdown_open =
+                            !self.state.text_render.family_dropdown_open;
+                        self.state.text_render.weight_dropdown_open = false;
+                        self.state.bump();
+                    } else if part == pages::text_render::FONT_WEIGHT_TRIGGER_PART {
+                        self.state.text_render.weight_dropdown_open =
+                            !self.state.text_render.weight_dropdown_open;
+                        self.state.text_render.family_dropdown_open = false;
+                        self.state.bump();
                     } else if (pages::text_render::FONT_FAMILY_PART_BASE
                         ..pages::text_render::FONT_FAMILY_PART_BASE
                             + pages::text_render::FONT_FAMILY_OPTIONS.len() as u16)
@@ -3148,6 +3371,7 @@ impl GalleryApp {
                         let index = (part - pages::text_render::FONT_FAMILY_PART_BASE) as usize;
                         let (_, fam) = pages::text_render::FONT_FAMILY_OPTIONS[index];
                         self.state.text_render.set_family(fam.map(str::to_string));
+                        self.state.text_render.family_dropdown_open = false;
                         self.state.bump();
                     } else if (pages::text_render::FONT_WEIGHT_PART_BASE
                         ..pages::text_render::FONT_WEIGHT_PART_BASE
@@ -3157,6 +3381,7 @@ impl GalleryApp {
                         let index = (part - pages::text_render::FONT_WEIGHT_PART_BASE) as usize;
                         let (_, weight) = pages::text_render::FONT_WEIGHT_OPTIONS[index];
                         self.state.text_render.set_weight(weight);
+                        self.state.text_render.weight_dropdown_open = false;
                         self.state.bump();
                     } else if (pages::text_render::FONT_SIZE_PART_BASE
                         ..pages::text_render::FONT_SIZE_PART_BASE
@@ -4865,6 +5090,7 @@ fn draw_navigation_view_pane(
     let pane_out = WidgetOutput {
         primitives: nav_output.primitives[backdrop_count..].to_vec(),
         payloads: nav_output.payloads.clone(),
+        clips: nav_output.clips.clone(),
         hit: None,
         a11y: None,
         focusable: false,

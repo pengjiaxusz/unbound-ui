@@ -58,6 +58,7 @@ use unbound_world::{NodeId, UiWorld};
 pub mod appearance;
 pub mod assets;
 pub mod backdrop;
+pub mod bc7_assets;
 pub mod floating_host;
 pub mod form;
 pub mod guest_bridge;
@@ -87,6 +88,7 @@ pub use backdrop::{
     fallback_reason_zh, is_mica_ready_event, material_name_zh, plan_summary_zh, MicaBackdrop,
     WindowBackdropController, MICA_READY_EVENT_ID,
 };
+pub use bc7_assets::{Bc7GpuOp, DEFAULT_BC7_VRAM_BUDGET_BYTES};
 pub use floating_host::{effective_policy, FloatingHost, FloatingHostState, FloatingWindowSpec};
 pub use form::{FormBindingStore, FormMutator, WidgetValue};
 pub use guest_bridge::GuestAppAdapter;
@@ -94,7 +96,8 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    run_multi_window, MultiWindowCoordinator, MultiWindowFactory, WindowContext,
+    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute, MultiWindowConfig,
+    MultiWindowCoordinator, MultiWindowFactory, WindowContext, WindowCreatedHook,
 };
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -108,6 +111,11 @@ pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use theme_driver::{
     make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
 };
+pub use unbound_asset::{
+    AtlasPageId, CompressedPixelFormat, CompressedTextureError, CompressedTexturePayload,
+    UploadPacingBudget,
+};
+pub use unbound_gpu::device::{CompressedTextureBackend, CompressedTextureCapabilities};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
@@ -723,6 +731,8 @@ pub struct AppContext {
     pub accent: unbound_theme::AccentBrand,
     /// 可选操作系统主题强调色覆盖（`None` 时在默认 Win11 蓝色预设下自动读取平台系统强调色）。
     pub system_accent: Option<unbound_math::Color>,
+    /// 全局动效治理策略（默认同步平台 `prefers_reduced_motion()`，支持宿主与无头测试覆写）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 框架级主题过渡配置（默认 240ms ease-out，设为 `0` 关闭过渡）。
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒，由运行器逐帧同步，供自绘后景叠化继承）。
@@ -764,6 +774,8 @@ pub struct AppContext {
     pub request_focus: Option<(u64, FocusCause)>,
     /// 请求运行时在本次归约后失焦。
     pub request_blur: bool,
+    /// 请求运行时在本次归约后清除当前指针捕获/拖拽状态。
+    request_cancel_drag: bool,
     /// 局部状态池，与渲染它的视图共享。
     widget_state: Rc<RefCell<WidgetStateStore>>,
     /// 本次归约期间请求的定时器，由运行时排空。
@@ -823,6 +835,10 @@ impl AppContext {
             preset: unbound_theme::ProductPreset::Win11,
             accent: unbound_theme::AccentBrand::Blue,
             system_accent: None,
+            motion_policy: unbound_anim::MotionPolicy::new(
+                unbound_platform::prefers_reduced_motion(),
+                1.0,
+            ),
             theme_transition: unbound_theme::ThemeTransitionConfig::default(),
             theme_transition_remaining_secs: 0.0,
             window_maximized: false,
@@ -842,6 +858,7 @@ impl AppContext {
             time: 0.0,
             request_focus: None,
             request_blur: false,
+            request_cancel_drag: false,
             widget_state: Rc::new(RefCell::new(WidgetStateStore::new())),
             timer_requests: Vec::new(),
             timer_cancels: Vec::new(),
@@ -1293,6 +1310,35 @@ impl AppContext {
     /// 对齐 `unbound_theme::ZoomLayers::ui_scale` 与 `Showcase::effective_scale`：
     /// 布局在逻辑单位（`physical_viewport / effective_scale`）下求解，
     /// 字形光栅化与 GPU 相机再按 `effective_scale` 映射回物理像素。
+    /// 返回当前统一治理的全局 [`unbound_anim::MotionPolicy`]。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.motion_policy
+    }
+
+    /// 覆写全局 [`unbound_anim::MotionPolicy`]（自动钳制 `speed_scale` 至合法范围）。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        self.motion_policy =
+            unbound_anim::MotionPolicy::new(policy.reduced_motion, policy.speed_scale);
+    }
+
+    /// 返回当前是否开启减弱动画。
+    #[must_use]
+    pub const fn reduced_motion(&self) -> bool {
+        self.motion_policy.reduced_motion
+    }
+
+    /// 显式覆写减弱动画开关（供无头测试与宿主运行期同步）。
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        self.motion_policy.reduced_motion = reduced_motion;
+    }
+
+    /// 显式覆写全局动画速率倍率（钳制至 `0.05..=2.0`）。
+    pub fn set_motion_speed_scale(&mut self, speed_scale: f32) {
+        self.motion_policy =
+            unbound_anim::MotionPolicy::new(self.motion_policy.reduced_motion, speed_scale);
+    }
+
     #[must_use]
     pub fn effective_scale(&self) -> f32 {
         let os = if self.os_scale.is_finite() && self.os_scale > 0.0 {
@@ -1453,6 +1499,64 @@ impl AppContext {
             .push(WindowCommand::CloseWindow(id));
     }
 
+    /// 上报输入法（IME）候选框锚点区域（物理像素坐标）。
+    pub fn set_ime_cursor_area(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.pending_window_commands
+            .push(WindowCommand::SetImeCursorArea {
+                x,
+                y,
+                width,
+                height,
+            });
+    }
+
+    /// 设置当前原生窗口可见性。
+    pub fn set_window_visible(&mut self, visible: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::SetVisible(visible));
+    }
+
+    /// 恢复隐藏或最小化的窗口并激活到前台。
+    pub fn activate_window_foreground(&mut self) {
+        self.pending_window_commands
+            .push(WindowCommand::ActivateForeground);
+    }
+
+    /// 同步设置当前原生窗口外框位置与客户区尺寸（物理像素）。
+    pub fn set_window_bounds(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.pending_window_commands
+            .push(WindowCommand::SetOuterPosition { x, y });
+        self.pending_window_commands
+            .push(WindowCommand::SetInnerSize { width, height });
+    }
+
+    /// 设置当前原生窗口的最大化状态。
+    pub fn set_window_maximized(&mut self, maximized: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::SetMaximized(maximized));
+    }
+
+    /// 更新当前窗口的任务栏进度条状态与进度值。
+    pub fn set_taskbar_progress(
+        &mut self,
+        completed: u64,
+        total: u64,
+        state: unbound_platform::TaskbarProgressState,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SetTaskbarProgress {
+                completed,
+                total,
+                state,
+            });
+    }
+
+    /// 清除当前活跃的拖拽与指针捕获状态，避免释放事件丢失后粘滞。
+    pub fn cancel_drag(&mut self) {
+        self.pressed = None;
+        self.request_cancel_drag = true;
+    }
+
     /// 请求多窗口协调器按给定配置与可选定位策略打开幽灵窗或悬浮浮岛。
     pub fn open_floating_window(
         &mut self,
@@ -1542,6 +1646,8 @@ pub struct ViewContext {
     pub viewport: Vec2,
     /// 当前激活主题。
     pub theme: ThemeKind,
+    /// 全局动效治理策略（与 [`AppContext::motion_policy`] 同步）。
+    pub motion_policy: unbound_anim::MotionPolicy,
     /// 框架级主题过渡配置（与 [`AppContext::theme_transition`] 同步）。
     pub theme_transition: unbound_theme::ThemeTransitionConfig,
     /// 当前进行中的前景主题过渡剩余时长（秒），供自绘后景叠化继承。
@@ -2058,6 +2164,72 @@ impl<'a> ViewBuilder<'a> {
             output.focusable = false;
         }
         self.collector.push(key, output);
+    }
+
+    /// 挂载非交互停靠预览叠加层（ADR 0037）：
+    ///
+    /// 处于顶层视觉反馈层（`PORTAL_Z_BASE + 400`），严格不参与焦点环、
+    /// 不注册命中区域、不触发轻关闭也不拦截拖拽指针流。
+    pub fn docking_overlay(
+        &mut self,
+        key: u64,
+        state: &unbound_widgets::DockOverlayState,
+        tokens: unbound_widgets::DockOverlayTokens,
+    ) {
+        self.docking_overlay_with_glyphs(key, state, tokens, &[]);
+    }
+
+    /// 挂载带预设字形串的非交互停靠预览叠加层。
+    pub fn docking_overlay_with_glyphs(
+        &mut self,
+        key: u64,
+        state: &unbound_widgets::DockOverlayState,
+        tokens: unbound_widgets::DockOverlayTokens,
+        pill_glyphs: &[unbound_text::GlyphQuad],
+    ) {
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        let overlay_z = (PORTAL_Z_BASE as u16).saturating_add(400);
+        let bounds = Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y);
+        let mut output =
+            unbound_widgets::emit_docking_overlay(state, bounds, tokens, pill_glyphs, overlay_z);
+        // 强制保证纯视觉穿透：零命中、零焦点、零语义抢占。
+        output.hit = None;
+        output.sub_hits.clear();
+        output.focusable = false;
+        output.a11y = None;
+        if !output.primitives.is_empty() {
+            self.collector.push(effective_key, output);
+        }
+    }
+
+    /// 挂载非交互外部拖拽代理卡片（用于 `TearOut` 或跨窗拖拽跟随反馈）。
+    pub fn drag_proxy(
+        &mut self,
+        key: u64,
+        proxy: &unbound_widgets::DockDragProxy,
+        tokens: unbound_widgets::DockOverlayTokens,
+        label_glyphs: &[unbound_text::GlyphQuad],
+    ) {
+        let effective_key = if !self.key_scope.is_root() && key != 0 {
+            self.key_scope.key(key)
+        } else {
+            key
+        };
+        let proxy_z = (PORTAL_Z_BASE as u16).saturating_add(420);
+        let bounds = Rect::new(0.0, 0.0, self.ctx.viewport.x, self.ctx.viewport.y);
+        let mut output =
+            unbound_widgets::emit_drag_proxy(proxy, bounds, tokens, label_glyphs, proxy_z);
+        output.hit = None;
+        output.sub_hits.clear();
+        output.focusable = false;
+        output.a11y = None;
+        if !output.primitives.is_empty() {
+            self.collector.push(effective_key, output);
+        }
     }
 
     /// 声明某个控件的语义。
@@ -4650,6 +4822,29 @@ pub enum WindowCommand {
     OpenWindow(unbound_platform::WindowConfig),
     /// 请求多窗口协调器关闭指定标识的窗口。
     CloseWindow(unbound_platform::WindowId),
+    /// 更新原生窗口输入法（IME）候选框锚点区域（客户区物理像素）。
+    SetImeCursorArea {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
+    /// 设置当前原生窗口可见性。
+    SetVisible(bool),
+    /// 恢复当前窗口并激活置顶到前台。
+    ActivateForeground,
+    /// 设置当前原生窗口外框左上角屏幕物理坐标。
+    SetOuterPosition { x: i32, y: i32 },
+    /// 设置当前原生窗口客户区物理像素尺寸。
+    SetInnerSize { width: u32, height: u32 },
+    /// 设置当前原生窗口最大化或还原状态。
+    SetMaximized(bool),
+    /// 更新当前原生窗口任务栏进度指示器。
+    SetTaskbarProgress {
+        completed: u64,
+        total: u64,
+        state: unbound_platform::TaskbarProgressState,
+    },
     /// 请求多窗口协调器打开幽灵窗或悬浮浮岛，并可选附带工作区避让/锚定策略。
     OpenFloatingWindow {
         /// 浮窗配置（含角色与初始策略）。
@@ -4856,6 +5051,20 @@ pub struct FrameReport {
     pub viewport_resize_count: u32,
     /// 本帧收集到的 3D 视口交互手势事件列表。
     pub viewport_gesture_events: Vec<unbound_widgets::Viewport3DGestureEvent>,
+    /// 当前活跃的 BC7 动态多页图集页数量。
+    pub bc7_active_pages: usize,
+    /// 当前已驻留 BC7 压缩资产占用的真实显存字节数（1 B/px）。
+    pub bc7_vram_bytes: u64,
+    /// 本帧按上传节拍出队上传的 BC7 纹理数量。
+    pub bc7_uploads_this_frame: usize,
+    /// 当前仍在上传队列中等待后续帧排空的 BC7 纹理数量。
+    pub bc7_pending_uploads: usize,
+    /// 累计因显存预算超限触发的 BC7 离屏 LRU 驱逐次数。
+    pub bc7_eviction_count: u64,
+    /// 当前是否处于非原生 BC7 透明降级模式。
+    pub bc7_fallback_active: bool,
+    /// 本帧待窗口运行器执行的 BC7 图集与独立纹理 GPU 操作队列。
+    pub bc7_ops: Vec<Bc7GpuOp>,
 }
 
 /// 单帧已挂载上下文菜单的点击反解条目。
@@ -5537,6 +5746,29 @@ impl<A: Application> AppRuntime<A> {
     /// 窗口 host 借此在每帧构建视图前同步窗口最大化状态等外部输入。
     pub fn context_mut(&mut self) -> &mut AppContext {
         &mut self.ctx
+    }
+
+    /// 返回运行时当前生效的全局 [`unbound_anim::MotionPolicy`]。
+    #[must_use]
+    pub const fn motion_policy(&self) -> unbound_anim::MotionPolicy {
+        self.ctx.motion_policy
+    }
+
+    /// 覆写运行时全局 [`unbound_anim::MotionPolicy`] 并在变化时标记场景重建。
+    pub fn set_motion_policy(&mut self, policy: unbound_anim::MotionPolicy) {
+        let clamped = unbound_anim::MotionPolicy::new(policy.reduced_motion, policy.speed_scale);
+        if self.ctx.motion_policy != clamped {
+            self.ctx.motion_policy = clamped;
+            self.force_rebuild = true;
+            self.dirty |= DirtyFlags::PAINT;
+        }
+    }
+
+    /// 显式覆写运行时减弱动画开关（供无头测试与宿主统一透传）。
+    pub fn set_reduced_motion(&mut self, reduced_motion: bool) {
+        let mut policy = self.ctx.motion_policy;
+        policy.reduced_motion = reduced_motion;
+        self.set_motion_policy(policy);
     }
 
     /// 设置指定下拉选择框的展开/收起状态。
@@ -6365,6 +6597,9 @@ impl<A: Application> AppRuntime<A> {
             let viewport_pass_dispatches =
                 core::mem::take(&mut self.viewport_3d_pending_dispatches);
             let viewport_gesture_events = core::mem::take(&mut self.viewport_3d_pending_gestures);
+            if self.asset_hub.finish_bc7_frame_lru() {
+                self.dirty = self.dirty.merge(DirtyFlags::PAINT);
+            }
             return FrameReport {
                 diff: SceneDiff::Identical,
                 dirty,
@@ -6379,6 +6614,13 @@ impl<A: Application> AppRuntime<A> {
                 viewport_pass_dispatches,
                 viewport_resize_count,
                 viewport_gesture_events,
+                bc7_active_pages: self.asset_hub.bc7_active_pages(),
+                bc7_vram_bytes: self.asset_hub.bc7_vram_bytes(),
+                bc7_uploads_this_frame: self.asset_hub.bc7_uploads_this_frame(),
+                bc7_pending_uploads: self.asset_hub.bc7_pending_uploads(),
+                bc7_eviction_count: self.asset_hub.bc7_eviction_count(),
+                bc7_fallback_active: self.asset_hub.bc7_fallback_active(),
+                bc7_ops: self.asset_hub.take_bc7_ops(),
             };
         }
 
@@ -6388,6 +6630,7 @@ impl<A: Application> AppRuntime<A> {
         // 读取的仍是上一帧发布的顺序表，语义不受影响。
         self.sync_focus_context();
 
+        self.asset_hub.begin_bc7_view_pass();
         self.collector.reset(ROOT);
         self.pending.clear();
         self.semantic_intents.clear();
@@ -6411,6 +6654,7 @@ impl<A: Application> AppRuntime<A> {
         let view_ctx = ViewContext {
             viewport: self.ctx.viewport,
             theme: self.ctx.theme,
+            motion_policy: self.ctx.motion_policy,
             theme_transition: self.ctx.theme_transition,
             theme_transition_remaining_secs: self.ctx.theme_transition_remaining_secs,
             hovered: self.router.hover(),
@@ -6627,6 +6871,9 @@ impl<A: Application> AppRuntime<A> {
         let viewport_pass_dispatches = core::mem::take(&mut self.viewport_3d_pending_dispatches);
         let viewport_resize_count = core::mem::take(&mut self.viewport_3d_frame_resize_count);
         let viewport_gesture_events = core::mem::take(&mut self.viewport_3d_pending_gestures);
+        if self.asset_hub.finish_bc7_frame_lru() {
+            self.dirty = self.dirty.merge(DirtyFlags::PAINT);
+        }
 
         FrameReport {
             diff,
@@ -6642,6 +6889,13 @@ impl<A: Application> AppRuntime<A> {
             viewport_pass_dispatches,
             viewport_resize_count,
             viewport_gesture_events,
+            bc7_active_pages: self.asset_hub.bc7_active_pages(),
+            bc7_vram_bytes: self.asset_hub.bc7_vram_bytes(),
+            bc7_uploads_this_frame: self.asset_hub.bc7_uploads_this_frame(),
+            bc7_pending_uploads: self.asset_hub.bc7_pending_uploads(),
+            bc7_eviction_count: self.asset_hub.bc7_eviction_count(),
+            bc7_fallback_active: self.asset_hub.bc7_fallback_active(),
+            bc7_ops: self.asset_hub.take_bc7_ops(),
         }
     }
 
@@ -9539,6 +9793,10 @@ impl<A: Application> AppRuntime<A> {
         if core::mem::take(&mut self.ctx.request_blur) {
             self.focus.blur();
         }
+        if core::mem::take(&mut self.ctx.request_cancel_drag) {
+            let _ = self.router.cancel();
+            self.sync_router_context();
+        }
         self.sync_focus_context();
         self.collect_timer_requests();
         self.mark(outcome.dirty);
@@ -11395,5 +11653,91 @@ mod tests {
             "bottom bar must stay within 300px viewport, got {:?}",
             status_rect
         );
+    }
+
+    #[test]
+    fn app_context_window_hooks_enqueue_commands_and_cancel_drag() {
+        struct HookTestApp;
+        impl Application for HookTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::Custom { id: 1, .. } => {
+                        ctx.set_ime_cursor_area(12, 34, 2, 20);
+                        ctx.set_window_visible(false);
+                        ctx.activate_window_foreground();
+                        ctx.set_window_bounds(100, 200, 1280, 720);
+                        ctx.set_window_maximized(true);
+                        ctx.set_taskbar_progress(
+                            40,
+                            100,
+                            unbound_platform::TaskbarProgressState::Normal,
+                        );
+                    }
+                    AppEvent::Custom { id: 2, .. } => {
+                        ctx.cancel_drag();
+                    }
+                    _ => {}
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.button(
+                    10,
+                    ButtonDesc::new(Rect::new(10.0, 10.0, 120.0, 36.0), "DragTarget"),
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(HookTestApp, Vec2::new(400.0, 300.0));
+        let _ = rt.frame(0.0);
+
+        // 验证窗口钩子命令按序入队并可被运行器完整排空。
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 1,
+            payload: String::new(),
+        });
+        let cmds = rt.drain_window_commands();
+        assert_eq!(
+            cmds,
+            vec![
+                WindowCommand::SetImeCursorArea {
+                    x: 12,
+                    y: 34,
+                    width: 2,
+                    height: 20,
+                },
+                WindowCommand::SetVisible(false),
+                WindowCommand::ActivateForeground,
+                WindowCommand::SetOuterPosition { x: 100, y: 200 },
+                WindowCommand::SetInnerSize {
+                    width: 1280,
+                    height: 720,
+                },
+                WindowCommand::SetMaximized(true),
+                WindowCommand::SetTaskbarProgress {
+                    completed: 40,
+                    total: 100,
+                    state: unbound_platform::TaskbarProgressState::Normal,
+                },
+            ]
+        );
+        assert!(rt.drain_window_commands().is_empty());
+
+        // 按下按钮建立指针捕获，再经 AppContext::cancel_drag 清除捕获状态。
+        let _ = rt.pointer_down(Vec2::new(30.0, 24.0), PointerButton::Left);
+        assert_eq!(rt.context().pressed, Some(10));
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 2,
+            payload: String::new(),
+        });
+        assert_eq!(rt.context().pressed, None);
+        assert_eq!(rt.router().pointer().pressed(), None);
     }
 }

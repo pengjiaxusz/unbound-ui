@@ -21,6 +21,8 @@ pub enum TaskStatus {
     /// 运行中。
     #[default]
     Running,
+    /// 告警（存在非致命异常或部分完成警告）。
+    Warning,
     /// 已完成。
     Completed,
     /// 执行失败。
@@ -33,7 +35,22 @@ impl TaskStatus {
     /// 是否属于终态（可被一键清除）。
     #[must_use]
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Warning | Self::Completed | Self::Failed | Self::Cancelled
+        )
+    }
+
+    /// 返回状态对应的纯英文展示标签。
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Running => "Running",
+            Self::Warning => "Warning",
+            Self::Completed => "Completed",
+            Self::Failed => "Failed",
+            Self::Cancelled => "Cancelled",
+        }
     }
 }
 
@@ -131,6 +148,17 @@ impl TaskHudState {
         true
     }
 
+    /// 将指定任务标记为告警并附带说明。
+    pub fn mark_warning(&mut self, id: u64, reason: impl Into<String>) -> bool {
+        let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        task.status = TaskStatus::Warning;
+        task.cancellable = false;
+        task.message = Some(reason.into());
+        true
+    }
+
     /// 将指定任务标记为失败并附带原因说明。
     pub fn mark_failed(&mut self, id: u64, reason: impl Into<String>) -> bool {
         let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) else {
@@ -196,8 +224,19 @@ impl TaskHudState {
     #[must_use]
     pub fn summary_text(&self) -> String {
         let active = self.active_count();
+        let warnings = self
+            .tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Warning)
+            .count();
         if self.tasks.is_empty() {
             "No active tasks".to_owned()
+        } else if active == 0 && warnings > 0 {
+            if warnings == 1 {
+                "1 task finished with warning".to_owned()
+            } else {
+                format!("{warnings} tasks finished with warnings")
+            }
         } else if active == 0 {
             format!("{} tasks finished", self.tasks.len())
         } else if active == 1 {
@@ -308,6 +347,7 @@ pub fn emit_task_hud(
         );
         let fill_tok = match task.status {
             TaskStatus::Running => Token::PRIMARY,
+            TaskStatus::Warning => Token::WARNING,
             TaskStatus::Completed => Token::SUCCESS,
             TaskStatus::Failed => Token::ERROR,
             TaskStatus::Cancelled => Token::TEXT_DISABLED,
@@ -429,5 +469,25 @@ mod tests {
         frame.close();
         frame.close();
         assert!(Harness::assert_clean(&frame.build()).is_clean());
+    }
+
+    #[test]
+    fn task_hud_warning_status_renders_warning_token_and_summary() {
+        let mut st = TaskHudState::new();
+        st.upsert_task(TaskActivityItem::new(7, "Verify Assets", 0.75));
+        assert!(st.mark_warning(7, "2 optional files skipped"));
+        assert_eq!(st.tasks[0].status, TaskStatus::Warning);
+        assert!(st.tasks[0].status.is_terminal());
+        assert_eq!(st.tasks[0].status.label(), "Warning");
+        assert_eq!(st.summary_text(), "1 task finished with warning");
+
+        let desc = st.to_desc(Rect::new(20.0, 20.0, 280.0, 64.0));
+        let out = emit_task_hud(9, &desc, ControlState::default(), &[]);
+        // 1 个外框 + 1 个任务项的 3 个图元（轨道、告警填充、取消按钮）+ 1 个焦点环 = 5 个图元。
+        assert_eq!(out.primitives.len(), 5);
+        assert_eq!(
+            out.primitives[2].fill_token_or_uv,
+            u32::from(Token::WARNING.raw())
+        );
     }
 }

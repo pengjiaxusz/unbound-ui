@@ -9,7 +9,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::theme_driver::{make_theme_snapshot_key, ThemeSnapshotKey, ThemeTransitionDriver};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use unbound_asset::{
+    decode_bc7_to_rgba8_fallback, AssetId, AtlasPageId, CompressedTexturePayload,
+    BC7_ATLAS_PAGE_SIZE,
+};
 use unbound_gpu::atlas::AtlasSet;
 use unbound_gpu::debug::is_device_lost;
 use unbound_gpu::device::{Gpu, GpuConfig};
@@ -35,7 +39,7 @@ use unbound_theme::ThemeSet;
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::floating_host::FloatingHost;
 use crate::{
-    AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
+    AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
     Modifiers as AppModifiers, ThemeKind, WindowCommand,
 };
 
@@ -198,6 +202,8 @@ pub struct WindowContext<A: Application> {
     theme_driver: ThemeTransitionDriver,
     appearance: WindowAppearance,
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
+    bc7_fallback_pages: FxHashMap<AtlasPageId, (u32, Vec<u8>)>,
+    bc7_fallback_standalone: FxHashMap<AssetId, u32>,
     popup_host: PopupHostRegistry,
     screen_origin: (i32, i32),
     was_suspended: bool,
@@ -249,11 +255,68 @@ impl<A: Application> WindowContext<A> {
             theme_driver,
             appearance: WindowAppearance::new(),
             external_gpu_slots: FxHashMap::default(),
+            bc7_fallback_pages: FxHashMap::default(),
+            bc7_fallback_standalone: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
             screen_origin: (0, 0),
             was_suspended: false,
             viewport_pass_factories: Vec::new(),
         }
+    }
+
+    /// 返回窗口客户区左上角在屏幕物理坐标系中的原点。
+    #[must_use]
+    pub const fn screen_origin(&self) -> (i32, i32) {
+        self.screen_origin
+    }
+
+    /// 设置窗口客户区左上角在屏幕物理坐标系中的原点（供无头多窗与原生窗口移动事件同步）。
+    pub fn set_screen_origin(&mut self, origin: (i32, i32)) {
+        self.screen_origin = origin;
+    }
+
+    /// 设置窗口操作系统 DPI 缩放比例并同步至内部 [`AppRuntime`]。
+    pub fn set_os_scale(&mut self, os_scale: f32) {
+        let clamped = if os_scale.is_finite() && os_scale > 0.0 {
+            os_scale
+        } else {
+            1.0
+        };
+        self.os_scale = clamped;
+        self.runtime.context_mut().set_os_scale(clamped);
+    }
+
+    /// 计算窗口客户区在屏幕物理坐标系中的包围矩形。
+    #[must_use]
+    pub fn screen_bounds_physical(&self) -> unbound_math::Rect {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        let vp = self.runtime.context().viewport;
+        unbound_math::Rect::new(
+            self.screen_origin.0 as f32,
+            self.screen_origin.1 as f32,
+            vp.x * scale,
+            vp.y * scale,
+        )
+    }
+
+    /// 将本窗口局部逻辑坐标映射为屏幕物理坐标。
+    #[must_use]
+    pub fn local_to_screen_physical(&self, local_logical: Vec2) -> Vec2 {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        Vec2::new(
+            self.screen_origin.0 as f32 + local_logical.x * scale,
+            self.screen_origin.1 as f32 + local_logical.y * scale,
+        )
+    }
+
+    /// 将屏幕物理坐标映射为本窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_local(&self, screen_physical: Vec2) -> Vec2 {
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        Vec2::new(
+            (screen_physical.x - self.screen_origin.0 as f32) / scale,
+            (screen_physical.y - self.screen_origin.1 as f32) / scale,
+        )
     }
 
     /// 访问当前窗口渲染器持有的共享 [`Gpu`] 引用计数句柄（若已初始化）。
@@ -391,7 +454,7 @@ impl<A: Application> WindowContext<A> {
     }
 
     fn sync_theme_at(&mut self, window: &NativeWindow, now_secs: f64, shared_trigger_secs: f64) {
-        let reduced_motion = unbound_platform::prefers_reduced_motion();
+        let reduced_motion = self.runtime.motion_policy().reduced_motion;
         let needs_upload = self.sync_theme_state_at(now_secs, shared_trigger_secs, reduced_motion);
         if !needs_upload {
             return;
@@ -596,13 +659,242 @@ impl<A: Application> WindowContext<A> {
         }
     }
 
+    fn process_bc7_ops(&mut self, ops: Vec<Bc7GpuOp>, window: &NativeWindow) {
+        if ops.is_empty() {
+            return;
+        }
+        let Some(renderer) = &mut self.renderer else {
+            return;
+        };
+        let supports_bc7 = renderer.compressed_texture_capabilities().supports_bc7;
+        let mut needs_redraw = false;
+        let mut dirty_fallback_pages: FxHashSet<AtlasPageId> = FxHashSet::default();
+
+        for op in ops {
+            match op {
+                Bc7GpuOp::CreateAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        match renderer.create_bc7_atlas_page(page_id.0) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create BC7 atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        let page_bytes =
+                            (BC7_ATLAS_PAGE_SIZE as usize) * (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                        let canvas = vec![0u8; page_bytes];
+                        let desc = ManagedExternalTextureDesc::new(
+                            BC7_ATLAS_PAGE_SIZE,
+                            BC7_ATLAS_PAGE_SIZE,
+                            false,
+                        );
+                        match renderer.upload_external_rgba8(desc, &canvas) {
+                            Ok(slot) => {
+                                self.bc7_fallback_pages.insert(page_id, (slot, canvas));
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not create RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_page_slot(page_id, Err(format!("{error:?}")));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadAtlasRegion {
+                    page_id,
+                    x,
+                    y,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer
+                            .stage_bc7_atlas_subregion(page_id.0, x, y, width, height, &bytes)
+                        {
+                            eprintln!(
+                                "[unbound-app] Could not stage BC7 atlas region on {page_id:?} ({x}, {y}, {width}x{height}): {error:?}"
+                            );
+                        } else {
+                            needs_redraw = true;
+                        }
+                    } else if let Some((_, canvas)) = self.bc7_fallback_pages.get_mut(&page_id) {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let page_stride = (BC7_ATLAS_PAGE_SIZE as usize) * 4;
+                                let row_bytes = (width as usize) * 4;
+                                for row in 0..(height as usize) {
+                                    let dst_offset =
+                                        ((y as usize) + row) * page_stride + (x as usize) * 4;
+                                    let src_offset = row * row_bytes;
+                                    if dst_offset + row_bytes <= canvas.len()
+                                        && src_offset + row_bytes <= rgba.len()
+                                    {
+                                        canvas[dst_offset..dst_offset + row_bytes].copy_from_slice(
+                                            &rgba[src_offset..src_offset + row_bytes],
+                                        );
+                                    }
+                                }
+                                dirty_fallback_pages.insert(page_id);
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid BC7 payload for RGBA8 fallback page {page_id:?}: {error}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyAtlasPage { page_id } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_bc7_atlas_page(page_id.0) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy BC7 atlas page {page_id:?}: {error:?}"
+                            );
+                        }
+                    } else if let Some((slot, _)) = self.bc7_fallback_pages.remove(&page_id) {
+                        dirty_fallback_pages.remove(&page_id);
+                        if let Err(error) = renderer.destroy_external_texture(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy RGBA8 fallback atlas page {page_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+                Bc7GpuOp::UploadStandalone {
+                    asset_id,
+                    width,
+                    height,
+                    bytes,
+                } => {
+                    if supports_bc7 {
+                        match renderer.upload_external_bc7(width, height, &bytes) {
+                            Ok(slot) => {
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                needs_redraw = true;
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Could not upload standalone BC7 texture {asset_id:?} ({width}x{height}): {error:?}"
+                                );
+                                self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                    asset_id,
+                                    Err(format!("{error:?}")),
+                                );
+                                needs_redraw = true;
+                            }
+                        }
+                    } else {
+                        match CompressedTexturePayload::bc7_unorm(width, height, bytes) {
+                            Ok(payload) => {
+                                let rgba = decode_bc7_to_rgba8_fallback(&payload);
+                                let desc = ManagedExternalTextureDesc::new(width, height, false);
+                                match renderer.upload_external_rgba8(desc, &rgba) {
+                                    Ok(slot) => {
+                                        self.bc7_fallback_standalone.insert(asset_id, slot);
+                                        self.runtime
+                                            .asset_hub_mut()
+                                            .commit_bc7_standalone_slot(asset_id, Ok(slot));
+                                        needs_redraw = true;
+                                    }
+                                    Err(error) => {
+                                        eprintln!(
+                                            "[unbound-app] Could not upload standalone RGBA8 fallback texture {asset_id:?}: {error:?}"
+                                        );
+                                        self.runtime.asset_hub_mut().commit_bc7_standalone_slot(
+                                            asset_id,
+                                            Err(format!("{error:?}")),
+                                        );
+                                        needs_redraw = true;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!(
+                                    "[unbound-app] Invalid standalone BC7 payload for {asset_id:?}: {error}"
+                                );
+                                self.runtime
+                                    .asset_hub_mut()
+                                    .commit_bc7_standalone_slot(asset_id, Err(error.to_string()));
+                                needs_redraw = true;
+                            }
+                        }
+                    }
+                }
+                Bc7GpuOp::DestroyStandalone { asset_id, slot } => {
+                    if supports_bc7 {
+                        if let Err(error) = renderer.destroy_external_bc7(slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone BC7 texture {asset_id:?} (slot {slot}): {error:?}"
+                            );
+                        }
+                    } else {
+                        let target_slot = self
+                            .bc7_fallback_standalone
+                            .remove(&asset_id)
+                            .unwrap_or(slot);
+                        if let Err(error) = renderer.destroy_external_texture(target_slot) {
+                            eprintln!(
+                                "[unbound-app] Could not destroy standalone RGBA8 fallback texture {asset_id:?} (slot {target_slot}): {error:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        for page_id in dirty_fallback_pages {
+            if let Some((slot, canvas)) = self.bc7_fallback_pages.get(&page_id) {
+                if let Err(error) = renderer.update_external_rgba8(*slot, canvas) {
+                    eprintln!(
+                        "[unbound-app] Could not update RGBA8 fallback atlas page {page_id:?}: {error:?}"
+                    );
+                } else {
+                    needs_redraw = true;
+                }
+            }
+        }
+
+        if needs_redraw {
+            self.runtime.invalidate();
+            window.request_redraw();
+        }
+    }
+
     /// 严格按“先停用交换链与表面、再释放窗口级 `Renderer`”的顺序回收本窗口 GPU 资源。
     pub fn destroy_vulkan(&mut self) {
         self.external_gpu_slots.clear();
+        self.bc7_fallback_pages.clear();
+        self.bc7_fallback_standalone.clear();
         self.runtime
             .asset_hub_mut()
             .invalidate_all_external_textures();
         self.runtime.invalidate_all_viewport_3d_slots();
+        self.runtime.asset_hub_mut().invalidate_all_bc7_pages();
+        self.runtime.asset_hub_mut().set_bc7_gpu_backed(false);
         let renderer = self.renderer.take();
         let swapchain = self.swapchain.take();
         let surface = self.surface.take();
@@ -625,6 +917,39 @@ impl<A: Application> Drop for WindowContext<A> {
     }
 }
 
+/// 原生窗口创建完成时的可选宿主回调钩子（例如挂载系统托盘）。
+pub type WindowCreatedHook = Box<dyn FnMut(WindowId, &NativeWindow) + 'static>;
+
+/// 多窗口运行器配置。
+#[derive(Default)]
+pub struct MultiWindowConfig {
+    /// 主窗口初始配置。
+    pub primary_config: WindowConfig,
+    /// 每个主/辅助原生窗口创建完成后的可选回调钩子。
+    pub on_window_created: Option<WindowCreatedHook>,
+}
+
+impl MultiWindowConfig {
+    /// 基于主窗口配置构造默认多窗口配置。
+    #[must_use]
+    pub fn new(primary_config: WindowConfig) -> Self {
+        Self {
+            primary_config,
+            on_window_created: None,
+        }
+    }
+
+    /// 绑定窗口创建完成回调钩子。
+    #[must_use]
+    pub fn with_on_window_created(
+        mut self,
+        hook: impl FnMut(WindowId, &NativeWindow) + 'static,
+    ) -> Self {
+        self.on_window_created = Some(Box::new(hook));
+        self
+    }
+}
+
 /// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
 #[derive(Clone, Copy, Debug, Default)]
 struct FloatingLiveSync {
@@ -632,6 +957,25 @@ struct FloatingLiveSync {
     topmost: Option<bool>,
     click_through: Option<bool>,
     outer_rect: Option<ScreenRect>,
+}
+
+/// 跨窗拖拽单帧坐标映射与停靠目标仲裁结果。
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossWindowDragRoute {
+    /// 发起拖拽的源窗口标识。
+    pub source_window: WindowId,
+    /// 指针在桌面屏幕物理坐标系中的位置。
+    pub screen_physical: Vec2,
+    /// 命中的目标窗口标识（`None` 表示位于窗外自由空间 `TearOut`）。
+    pub target_window: Option<WindowId>,
+    /// 命中目标窗口内的局部逻辑坐标（`TearOut` 时为 `None`）。
+    pub target_local_logical: Option<Vec2>,
+    /// 当前是否处于窗外自由空间（`TearOut`）。
+    pub tear_out: bool,
+    /// 当前可见的宿主停靠预览目标（未满整窗 500ms 驻留防抖或 `TearOut` 时为 `None`）。
+    pub target: Option<unbound_widgets::DockDropTarget>,
+    /// 外部拖拽代理描述（含 `detached` 状态与语义提示）。
+    pub proxy: Option<unbound_widgets::DockDragProxy>,
 }
 
 /// 多窗口共享 `VkDevice` 与共享基础图集的运行时协调器。
@@ -651,6 +995,7 @@ pub struct MultiWindowCoordinator<A: Application> {
     pending_floating_live_syncs: FxHashMap<WindowId, FloatingLiveSync>,
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
+    on_window_created: Option<WindowCreatedHook>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
     /// 多窗口共享主题过渡单调时钟基准。
     theme_clock_epoch: Instant,
@@ -681,10 +1026,21 @@ impl<A: Application> MultiWindowCoordinator<A> {
             pending_floating_live_syncs: FxHashMap::default(),
             primary_config,
             factory: Box::new(factory),
+            on_window_created: None,
             waker: None,
             theme_clock_epoch: Instant::now(),
             shared_theme_trigger: None,
         }
+    }
+
+    /// 绑定每个原生窗口创建完成后的回调钩子（例如挂载系统托盘）。
+    #[must_use]
+    pub fn with_on_window_created(
+        mut self,
+        hook: impl FnMut(WindowId, &NativeWindow) + 'static,
+    ) -> Self {
+        self.on_window_created = Some(Box::new(hook));
+        self
     }
 
     /// 借用多窗口注册表。
@@ -967,6 +1323,134 @@ impl<A: Application> MultiWindowCoordinator<A> {
         self.headless_work_areas = areas;
     }
 
+    /// 配置指定窗口的屏幕物理坐标原点（供无头多窗测试与原生窗口移动事件同步）。
+    pub fn set_window_screen_origin(&mut self, id: WindowId, origin: (i32, i32)) -> bool {
+        let Some(ctx) = self.registry.get_mut(id) else {
+            return false;
+        };
+        ctx.set_screen_origin(origin);
+        true
+    }
+
+    /// 配置指定窗口的操作系统 DPI 缩放比例。
+    pub fn set_window_os_scale(&mut self, id: WindowId, os_scale: f32) -> bool {
+        let Some(ctx) = self.registry.get_mut(id) else {
+            return false;
+        };
+        ctx.set_os_scale(os_scale);
+        true
+    }
+
+    /// 将统一的 [`unbound_anim::MotionPolicy`] 透传至全部已注册窗口运行时。
+    pub fn set_motion_policy_all(&mut self, policy: unbound_anim::MotionPolicy) {
+        for slot in self.registry.iter_mut() {
+            slot.context.runtime.set_motion_policy(policy);
+        }
+    }
+
+    /// 将源窗口局部逻辑坐标映射为屏幕物理坐标。
+    #[must_use]
+    pub fn local_to_screen_physical(
+        &self,
+        source_id: WindowId,
+        local_logical: Vec2,
+    ) -> Option<Vec2> {
+        self.registry
+            .get(source_id)
+            .map(|ctx| ctx.local_to_screen_physical(local_logical))
+    }
+
+    /// 将屏幕物理坐标映射为目标窗口局部逻辑坐标。
+    #[must_use]
+    pub fn screen_physical_to_window_local(
+        &self,
+        target_id: WindowId,
+        screen_physical: Vec2,
+    ) -> Option<Vec2> {
+        self.registry
+            .get(target_id)
+            .map(|ctx| ctx.screen_physical_to_local(screen_physical))
+    }
+
+    /// 在全部已注册窗口中按屏幕物理坐标命中目标窗口，并返回 `(target_window, target_local_logical)`。
+    #[must_use]
+    pub fn hit_test_screen_window(&self, screen_physical: Vec2) -> Option<(WindowId, Vec2)> {
+        for slot in self.registry.iter() {
+            if slot
+                .context
+                .screen_bounds_physical()
+                .contains_point(screen_physical)
+            {
+                return Some((
+                    slot.id,
+                    slot.context.screen_physical_to_local(screen_physical),
+                ));
+            }
+        }
+        None
+    }
+
+    /// 执行单帧跨窗拖拽坐标映射与候选路由：
+    /// `source_local_logical` → 屏幕物理坐标 → 命中目标 `WindowId` → 目标窗局部逻辑坐标，
+    /// 并驱动 [`unbound_widgets::DockOverlayState`] 与 `TearOut` 拖拽代理协同。
+    pub fn route_cross_window_drag(
+        &self,
+        source_id: WindowId,
+        source_local_logical: Vec2,
+        overlay: &mut unbound_widgets::DockOverlayState,
+        window_panes: &[(WindowId, Vec<unbound_widgets::DockCandidatePane>)],
+        dt: f32,
+        proxy_title: &str,
+    ) -> Option<CrossWindowDragRoute> {
+        let screen_physical = self.local_to_screen_physical(source_id, source_local_logical)?;
+        let hit = self.hit_test_screen_window(screen_physical);
+
+        if let Some((target_id, target_local)) = hit {
+            let target_ctx = self.registry.get(target_id)?;
+            let policy = target_ctx.runtime.motion_policy();
+            let vp = target_ctx.runtime.context().viewport;
+            let panes = window_panes
+                .iter()
+                .find(|(id, _)| *id == target_id)
+                .map(|(_, p)| p.clone())
+                .unwrap_or_default();
+            let candidate = unbound_widgets::DockCandidateWindow::new(
+                target_id.0,
+                unbound_math::Rect::new(0.0, 0.0, vp.x, vp.y),
+                panes,
+            );
+            overlay.update(target_local, &[candidate], dt, policy);
+            let target = overlay.visible_target().cloned();
+            let proxy = overlay.drag_proxy(proxy_title, None);
+            Some(CrossWindowDragRoute {
+                source_window: source_id,
+                screen_physical,
+                target_window: Some(target_id),
+                target_local_logical: Some(target_local),
+                tear_out: overlay.is_tear_out(),
+                target,
+                proxy,
+            })
+        } else {
+            let policy = self
+                .registry
+                .get(source_id)
+                .map(|ctx| ctx.runtime.motion_policy())
+                .unwrap_or_default();
+            overlay.update(screen_physical, &[], dt, policy);
+            let proxy = overlay.drag_proxy(proxy_title, Some("Tear Out".to_owned()));
+            Some(CrossWindowDragRoute {
+                source_window: source_id,
+                screen_physical,
+                target_window: None,
+                target_local_logical: None,
+                tear_out: true,
+                target: None,
+                proxy,
+            })
+        }
+    }
+
     /// 按严格回收顺序关闭并移除指定窗口；若无任何 `Standard` 窗口存活则级联关闭全部浮窗并释放共享 GPU。
     pub fn close_window(&mut self, id: WindowId) -> bool {
         let _ = self.floating_host.unregister(id);
@@ -1189,7 +1673,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 WindowCommand::StartDrag
                 | WindowCommand::Minimize
                 | WindowCommand::ToggleMaximize
-                | WindowCommand::BeginExternalFileDrag(_) => {}
+                | WindowCommand::BeginExternalFileDrag(_)
+                | WindowCommand::SetImeCursorArea { .. }
+                | WindowCommand::SetVisible(_)
+                | WindowCommand::ActivateForeground
+                | WindowCommand::SetOuterPosition { .. }
+                | WindowCommand::SetInnerSize { .. }
+                | WindowCommand::SetMaximized(_)
+                | WindowCommand::SetTaskbarProgress { .. } => {}
             }
         }
         for target in &to_close {
@@ -1200,7 +1691,21 @@ impl<A: Application> MultiWindowCoordinator<A> {
         to_close
     }
 
+    /// 在共享设备丢失或释放时，同步失效所有已注册窗口的 BC7 图集与降级缓存并标记重绘。
+    fn invalidate_all_windows_bc7(&mut self) {
+        for slot in self.registry.iter_mut() {
+            slot.context.bc7_fallback_pages.clear();
+            slot.context.bc7_fallback_standalone.clear();
+            slot.context
+                .runtime
+                .asset_hub_mut()
+                .invalidate_all_bc7_pages();
+            slot.context.runtime.invalidate();
+        }
+    }
+
     fn release_shared_gpu(&mut self) {
+        self.invalidate_all_windows_bc7();
         if let Some(atlases) = self.shared_atlases.take() {
             if let Some(gpu) = &self.shared_gpu {
                 gpu.wait_idle();
@@ -1357,6 +1862,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
             Vec2::new(chain_w.max(1) as f32, chain_h.max(1) as f32),
             os_scale,
         );
+        let bc7_caps = renderer.compressed_texture_capabilities();
+        ctx.runtime.asset_hub_mut().set_bc7_capabilities(bc7_caps);
+        ctx.runtime.asset_hub_mut().set_bc7_gpu_backed(true);
         ctx.swapchain = Some(swapchain);
         ctx.surface = Some(surface);
         ctx.renderer = Some(renderer);
@@ -1409,6 +1917,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
             }
         } else if visible && self.focused_window_id.is_none() {
             self.focused_window_id = Some(id);
+        }
+        if let Some(hook) = self.on_window_created.as_mut() {
+            hook(id, window);
         }
     }
 
@@ -1466,6 +1977,48 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             close_self = true;
                         } else {
                             close_targets.push(target);
+                        }
+                    }
+                    WindowCommand::SetImeCursorArea {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        window.set_ime_cursor_area(
+                            unbound_platform::PhysicalPosition::new(x, y),
+                            unbound_platform::PhysicalSize::new(width, height),
+                        );
+                    }
+                    WindowCommand::SetVisible(visible) => {
+                        window.set_visible(visible);
+                    }
+                    WindowCommand::ActivateForeground => {
+                        window.activate_foreground();
+                    }
+                    WindowCommand::SetOuterPosition { x, y } => {
+                        window.set_outer_position(x, y);
+                    }
+                    WindowCommand::SetInnerSize { width, height } => {
+                        window.set_inner_size(width, height);
+                    }
+                    WindowCommand::SetMaximized(maximized) => {
+                        window.set_maximized(maximized);
+                    }
+                    WindowCommand::SetTaskbarProgress {
+                        completed,
+                        total,
+                        state: progress_state,
+                    } => {
+                        if let Some(raw_window_handle::RawWindowHandle::Win32(handle)) =
+                            unbound_platform::backend::raw_window_handle(window)
+                        {
+                            unbound_platform::set_taskbar_progress(
+                                handle.hwnd.get(),
+                                completed,
+                                total,
+                                progress_state,
+                            );
                         }
                     }
                     other @ (WindowCommand::UpdateFloatingPolicy { .. }
@@ -2062,7 +2615,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         ctx.sync_appearance(window);
         ctx.process_external_texture_ops(report.external_texture_ops, window);
         ctx.sync_viewports_3d(&report.viewports_3d, window);
+        ctx.process_bc7_ops(report.bc7_ops, window);
 
+        let mut device_lost = false;
         if let (Some(renderer), Some(atlases)) = (&mut ctx.renderer, &shared_atlases) {
             if !report.atlas_uploads.is_empty() {
                 if let Err(error) = atlases.upload_batch(&renderer.gpu, &report.atlas_uploads) {
@@ -2115,29 +2670,42 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                                 eprintln!(
                                     "[unbound-app] Shared GPU device lost during render on {id:?}"
                                 );
-                                return Flow::Continue;
+                                device_lost = true;
+                            } else {
+                                eprintln!("[unbound-app] multi-window render failed: {err:?}");
                             }
-                            eprintln!("[unbound-app] multi-window render failed: {err:?}");
                         } else {
                             ctx.frame_dropped = false;
                         }
-                        match swapchain.present_outcome(
-                            &renderer.gpu,
-                            image.index,
-                            image.render_finished,
-                        ) {
-                            Ok(PresentOutcome::Optimal) => {}
-                            Ok(PresentOutcome::Recreate) => {
-                                ctx.swapchain_dirty = true;
-                                state.resize.mark_out_of_date(unbound_platform::Extent::new(
-                                    actual_w, actual_h,
-                                ));
+                        if !device_lost {
+                            match swapchain.present_outcome(
+                                &renderer.gpu,
+                                image.index,
+                                image.render_finished,
+                            ) {
+                                Ok(PresentOutcome::Optimal) => {}
+                                Ok(PresentOutcome::Recreate) => {
+                                    ctx.swapchain_dirty = true;
+                                    state.resize.mark_out_of_date(unbound_platform::Extent::new(
+                                        actual_w, actual_h,
+                                    ));
+                                }
+                                Err(ref err) => {
+                                    if is_device_lost(err) {
+                                        eprintln!(
+                                            "[unbound-app] Shared GPU device lost during present on {id:?}"
+                                        );
+                                        ctx.frame_dropped = true;
+                                        device_lost = true;
+                                    } else {
+                                        ctx.swapchain_dirty = true;
+                                    }
+                                }
                             }
-                            Err(_) => {
-                                ctx.swapchain_dirty = true;
+                            if !device_lost {
+                                ctx.pacer.on_present(Instant::now());
                             }
                         }
-                        ctx.pacer.on_present(Instant::now());
                     }
                     Ok(AcquireOutcome::OutOfDate) => {
                         ctx.swapchain_dirty = true;
@@ -2146,11 +2714,21 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                             .resize
                             .mark_out_of_date(unbound_platform::Extent::new(width, height));
                     }
+                    Err(ref err) if is_device_lost(err) => {
+                        eprintln!("[unbound-app] Shared GPU device lost during acquire on {id:?}");
+                        ctx.frame_dropped = true;
+                        device_lost = true;
+                    }
                     _ => {
                         ctx.frame_dropped = true;
                     }
                 }
             }
+        }
+
+        if device_lost {
+            self.invalidate_all_windows_bc7();
+            return Flow::Continue;
         }
 
         let keep_animating =
@@ -2171,16 +2749,30 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 ///
 /// # Errors
 /// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
-pub fn run_multi_window<A, F>(
-    mut primary_config: WindowConfig,
+pub fn run_multi_window<A, F>(primary_config: WindowConfig, factory: F) -> Result<(), PlatformError>
+where
+    A: Application + 'static,
+    F: MultiWindowFactory<A> + 'static,
+{
+    run_multi_window_with_config(MultiWindowConfig::new(primary_config), factory)
+}
+
+/// 使用 [`MultiWindowConfig`] 启动多窗口共享设备应用（支持 `on_window_created` 钩子）。
+///
+/// # Errors
+/// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
+pub fn run_multi_window_with_config<A, F>(
+    mut config: MultiWindowConfig,
     factory: F,
 ) -> Result<(), PlatformError>
 where
     A: Application + 'static,
     F: MultiWindowFactory<A> + 'static,
 {
-    primary_config.decorations = false;
-    let coordinator = MultiWindowCoordinator::new(primary_config.clone(), factory);
+    config.primary_config.decorations = false;
+    let primary_config = config.primary_config.clone();
+    let mut coordinator = MultiWindowCoordinator::new(primary_config.clone(), factory);
+    coordinator.on_window_created = config.on_window_created;
     PlatformWindow::new(&primary_config)?.run(coordinator)
 }
 
@@ -2715,5 +3307,193 @@ mod tests {
         assert!(!wayland.always_on_top);
         assert!(!wayland.no_activate);
         assert!(wayland.click_through);
+    }
+
+    #[test]
+    fn cross_window_drag_maps_coordinates_routes_target_and_handles_tear_out() {
+        struct EmptyApp;
+        impl Application for EmptyApp {
+            type State = ();
+            fn init(&mut self, _ctx: &mut crate::AppContext) {}
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+            fn view(&mut self, _state: &Self::State, _view: &mut crate::ViewBuilder<'_>) {}
+        }
+
+        let primary_cfg = WindowConfig {
+            title: "Primary".to_owned(),
+            width: 400,
+            height: 300,
+            ..WindowConfig::default()
+        };
+        let secondary_cfg = WindowConfig {
+            title: "Secondary".to_owned(),
+            width: 400,
+            height: 300,
+            ..WindowConfig::default()
+        };
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |_: WindowId, _: &WindowConfig| {
+                EmptyApp
+            });
+
+        let win_a = WindowId(1);
+        let win_b = WindowId(2);
+        coord.register_headless_window(win_a, primary_cfg);
+        coord.register_headless_window(win_b, secondary_cfg);
+
+        // 窗口 A 位于 (0, 0) 1x 缩放；窗口 B 位于 (500, 100) 2x 缩放。
+        assert!(coord.set_window_screen_origin(win_a, (0, 0)));
+        assert!(coord.set_window_screen_origin(win_b, (500, 100)));
+        assert!(coord.set_window_os_scale(win_b, 2.0));
+
+        // 统一透传减弱动画策略到全部窗口。
+        coord.set_motion_policy_all(unbound_anim::MotionPolicy::reduced());
+        assert!(
+            coord
+                .registry()
+                .get(win_a)
+                .unwrap()
+                .runtime
+                .motion_policy()
+                .reduced_motion
+        );
+        assert!(
+            coord
+                .registry()
+                .get(win_b)
+                .unwrap()
+                .runtime
+                .motion_policy()
+                .reduced_motion
+        );
+
+        let pane_b = unbound_widgets::DockCandidatePane::new(
+            20,
+            unbound_math::Rect::new(0.0, 0.0, 200.0, 150.0),
+        );
+        let window_panes = vec![(win_b, vec![pane_b])];
+
+        let mut overlay = unbound_widgets::DockOverlayState::new();
+        overlay.begin_drag(
+            unbound_widgets::DockDragSource::Tab {
+                window_id: win_a.0,
+                pane_id: 10,
+                tab_id: 1,
+            },
+            Vec2::new(50.0, 50.0),
+        );
+
+        // 从窗口 A 拖到相对 A 的 (700, 250) -> 屏幕物理 (700, 250) -> 落在窗口 B 内 (100, 75) 逻辑坐标。
+        let route = coord
+            .route_cross_window_drag(
+                win_a,
+                Vec2::new(700.0, 250.0),
+                &mut overlay,
+                &window_panes,
+                1.0 / 120.0,
+                "Inspector",
+            )
+            .expect("route");
+        assert_eq!(route.target_window, Some(win_b));
+        assert_eq!(route.target_local_logical, Some(Vec2::new(100.0, 75.0)));
+        assert!(!route.tear_out);
+        assert!(route.target.is_some());
+        assert_eq!(
+            route.target.as_ref().unwrap().kind,
+            unbound_widgets::DockDropKind::Center
+        );
+        // 减弱动画模式下单步即刻收敛到 1.0，零中间帧闪烁。
+        assert_eq!(overlay.preview_opacity(), 1.0);
+        assert!(!route.proxy.as_ref().unwrap().detached);
+
+        // 拖到两窗之外的自由空间 (450, 50) -> 进入 TearOut，无宿主预览框，代理标记 detached。
+        let tear = coord
+            .route_cross_window_drag(
+                win_a,
+                Vec2::new(450.0, 50.0),
+                &mut overlay,
+                &window_panes,
+                1.0 / 120.0,
+                "Inspector",
+            )
+            .expect("tear out route");
+        assert_eq!(tear.target_window, None);
+        assert!(tear.tear_out);
+        assert!(tear.target.is_none());
+        assert!(tear.proxy.as_ref().unwrap().detached);
+    }
+
+    #[test]
+    fn view_builder_docking_overlay_is_non_interactive_and_preserves_focus() {
+        struct OverlayTestApp {
+            overlay: unbound_widgets::DockOverlayState,
+        }
+        impl Application for OverlayTestApp {
+            type State = bool;
+
+            fn init(&mut self, _ctx: &mut crate::AppContext) -> Self::State {
+                true
+            }
+
+            fn reduce(
+                &mut self,
+                _state: &mut Self::State,
+                _event: crate::AppEvent,
+                _ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                crate::EventOutcome::default()
+            }
+
+            fn view(&mut self, _state: &Self::State, ui: &mut crate::ViewBuilder<'_>) {
+                // 确认 ViewContext 已透传 AppContext 的 MotionPolicy。
+                assert!(ui.ctx.motion_policy.reduced_motion);
+                ui.docking_overlay(
+                    9001,
+                    &self.overlay,
+                    unbound_widgets::DockOverlayTokens::standard(),
+                );
+            }
+        }
+
+        let win = unbound_widgets::DockCandidateWindow::new(
+            1,
+            unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            vec![unbound_widgets::DockCandidatePane::new(
+                10,
+                unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            )],
+        );
+        let mut overlay = unbound_widgets::DockOverlayState::new();
+        overlay.begin_drag(
+            unbound_widgets::DockDragSource::Tab {
+                window_id: 2,
+                pane_id: 99,
+                tab_id: 5,
+            },
+            Vec2::new(200.0, 150.0),
+        );
+        overlay.update(
+            Vec2::new(200.0, 150.0),
+            &[win],
+            1.0 / 120.0,
+            unbound_anim::MotionPolicy::reduced(),
+        );
+
+        let mut rt = AppRuntime::new(OverlayTestApp { overlay }, Vec2::new(400.0, 300.0));
+        rt.set_reduced_motion(true);
+        let _ = rt.frame(1.0 / 60.0);
+
+        // 停靠预览已发射图元，但不抢占焦点、不加入覆盖层轻关闭栈、且点击命中为空。
+        assert!(!rt.scene().primitives.is_empty());
+        assert_eq!(rt.focus().focused(), None);
+        assert!(rt.scene().regions.is_empty());
+        assert!(rt.overlays().stack().is_empty());
     }
 }

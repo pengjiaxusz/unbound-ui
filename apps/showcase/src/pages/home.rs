@@ -507,6 +507,15 @@ fn draw_quick_access_header(canvas: &mut Canvas<'_>, state: &GalleryState, rect:
 fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, zh: bool) {
     let palette = *canvas.palette;
     let compact = rect.size.x < 720.0;
+    let pad_x = if compact { 20.0 } else { 28.0 };
+    let pad_y = if compact { 16.0 } else { 22.0 };
+    let stat_w = (rect.size.x * 0.30).clamp(220.0, 290.0);
+    let stat = Rect::new(
+        rect.max().x - pad_x - stat_w,
+        rect.origin.y + pad_y,
+        stat_w,
+        rect.size.y - pad_y * 2.0,
+    );
 
     canvas.rect(rect, 16.0, palette.hero_start, 0, 0.0, 20.0);
     canvas.begin_clip_rounded(rect, 16.0);
@@ -536,29 +545,40 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         0.0,
         0.0,
     );
+    // 装饰波浪线严格限制在右侧状态卡片之外，避免横穿卡片与按钮文字。
+    let wave_end_x = if compact {
+        rect.max().x + 14.0
+    } else {
+        (stat.origin.x - 16.0).max(rect.origin.x)
+    };
+    if !compact {
+        canvas.begin_clip(Rect::new(
+            rect.origin.x,
+            rect.origin.y,
+            (wave_end_x - rect.origin.x).max(0.0),
+            rect.size.y,
+        ));
+    }
     for index in 0..4 {
         let f = index as f32;
+        let start_x = if compact {
+            rect.origin.x + rect.size.x * (0.56 + f * 0.03)
+        } else {
+            (wave_end_x - rect.size.x * 0.22 + f * 12.0).max(rect.origin.x + rect.size.x * 0.42)
+        };
+        let ctrl_x = (start_x + wave_end_x) * 0.5;
         canvas.curve(
-            [
-                rect.origin.x + rect.size.x * (0.56 + f * 0.03),
-                rect.max().y + 8.0,
-            ],
-            [
-                rect.origin.x + rect.size.x * 0.84,
-                rect.origin.y + rect.size.y * 0.52 + f * 14.0,
-            ],
-            [
-                rect.max().x + 14.0,
-                rect.origin.y + rect.size.y * 0.85 - f * 12.0,
-            ],
+            [start_x, rect.max().y + 8.0],
+            [ctrl_x, rect.origin.y + rect.size.y * 0.52 + f * 14.0],
+            [wave_end_x, rect.origin.y + rect.size.y * 0.85 - f * 12.0],
             2.0,
             palette.on_hero,
         );
     }
+    if !compact {
+        canvas.end_clip();
+    }
     canvas.end_clip();
-
-    let pad_x = if compact { 20.0 } else { 28.0 };
-    let pad_y = if compact { 16.0 } else { 22.0 };
     let left_w = if compact {
         rect.size.x - pad_x * 2.0
     } else {
@@ -628,16 +648,9 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
         true,
     );
 
-    // 右侧实时引擎状态胶囊（仅宽屏展示，凸显 Unbound 独有工程气质）
+    // 右侧实时引擎状态胶囊（仅宽屏展示，使用标准卡片表面令牌以保障深浅双主题可读性）
     if !compact {
-        let stat_w = (rect.size.x * 0.30).clamp(220.0, 290.0);
-        let stat = Rect::new(
-            rect.max().x - pad_x - stat_w,
-            rect.origin.y + pad_y,
-            stat_w,
-            rect.size.y - pad_y * 2.0,
-        );
-        canvas.rect(stat, 12.0, palette.hero_scrim, palette.on_hero, 1.0, 0.0);
+        canvas.rect(stat, 12.0, palette.card_bg, palette.border, 1.0, 0.0);
         canvas.text(
             if zh {
                 "引擎与控件概览"
@@ -651,7 +664,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
                 18.0,
             ),
             12.0,
-            palette.on_hero,
+            palette.text,
             AlignX::Start,
             AlignY::Top,
         );
@@ -683,7 +696,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
                 18.0,
             ),
             12.0,
-            palette.on_hero,
+            palette.text,
             AlignX::Start,
             AlignY::Top,
         );
@@ -696,7 +709,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
                 18.0,
             ),
             10.5,
-            palette.on_hero,
+            palette.text_muted,
             AlignX::Start,
             AlignY::Top,
         );
@@ -715,7 +728,7 @@ fn draw_landing_hero(canvas: &mut Canvas<'_>, state: &GalleryState, rect: Rect, 
             } else {
                 "Open Parity Inspector →"
             },
-            ButtonVariant::OnHeroSecondary,
+            ButtonVariant::Primary,
             true,
         );
     }

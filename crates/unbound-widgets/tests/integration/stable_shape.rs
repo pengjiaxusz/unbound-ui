@@ -56,7 +56,7 @@ fn states() -> Vec<ControlState> {
 /// * 悬停高亮驻留在各自交互状态（如 `MenuState::highlighted`、`ChartState::hover`、
 ///   `TableState`、`PropertyGridState` 等）而非 `ControlState::phase` 中的组件：
 ///   `MenuFlyout`、`ContextMenu`、`Chart`、`Table`、`PropertyGrid`、`CommandPalette`、
-///   `BreadcrumbBar`、`ColorPicker`、`CurveEditor`、`CalendarView`、`Minimap`、
+///   `BreadcrumbBar`、`ColorPicker`、`CurveEditor`、`Minimap`、
 ///   `Gizmo`、`NodeGraph`、`Ruler`。
 /// * `Overlay` 仅做定位/栈记账，不输出任何图元。
 /// * `Pivot` 的整排只有一个命中区域，`ControlState` 不携带「悬停在哪一项」，
@@ -77,7 +77,6 @@ const INERT_BY_DESIGN: &[WidgetCatalogId] = &[
     WidgetCatalogId::Containers,
     WidgetCatalogId::ContextMenu,
     WidgetCatalogId::CurveEditor,
-    WidgetCatalogId::CalendarView,
     WidgetCatalogId::Descriptions,
     WidgetCatalogId::Divider,
     WidgetCatalogId::SplitView,
@@ -335,4 +334,52 @@ fn the_probe_covers_every_component() {
     // 控件目录的条目数：这个数字是门禁——新增控件必须同步更新，
     // 否则「每个控件都被探针覆盖」这句话就不再成立。
     assert_eq!(WidgetCatalogId::COUNT, 134);
+}
+
+#[test]
+fn calendar_view_and_date_range_picker_respond_to_hover_and_press_with_stable_shape() {
+    let idle = ControlState {
+        phase: PointerPhase::Idle,
+        ..ControlState::default()
+    };
+    let hovered = ControlState {
+        phase: PointerPhase::Hovered,
+        ..ControlState::default()
+    };
+    let pressed = ControlState {
+        phase: PointerPhase::Pressed,
+        ..ControlState::default()
+    };
+
+    for id in [
+        WidgetCatalogId::CalendarView,
+        WidgetCatalogId::DateRangePicker,
+    ] {
+        assert!(
+            !INERT_BY_DESIGN.contains(&id),
+            "{id:?} must not be listed in INERT_BY_DESIGN"
+        );
+        let idle_prims = probe_widget(id, idle).primitives;
+        let hovered_prims = probe_widget(id, hovered).primitives;
+        let pressed_prims = probe_widget(id, pressed).primitives;
+
+        assert_eq!(
+            idle_prims.len(),
+            hovered_prims.len(),
+            "{id:?} primitive count must stay stable between Idle and Hovered"
+        );
+        assert_eq!(
+            idle_prims.len(),
+            pressed_prims.len(),
+            "{id:?} primitive count must stay stable between Idle and Pressed"
+        );
+        assert_ne!(
+            idle_prims, hovered_prims,
+            "{id:?} must paint differently when hovered"
+        );
+        assert_ne!(
+            idle_prims, pressed_prims,
+            "{id:?} must paint differently when pressed"
+        );
+    }
 }

@@ -268,6 +268,54 @@ impl Window {
         }
     }
 
+    /// 窗口当前是否处于最小化状态。
+    #[must_use]
+    pub fn is_minimized(&self) -> bool {
+        #[cfg(windows)]
+        {
+            win32::is_minimized(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
+    /// 获取窗口外框左上角在屏幕物理坐标系中的位置。
+    #[must_use]
+    pub fn outer_position(&self) -> Option<(i32, i32)> {
+        #[cfg(windows)]
+        {
+            win32::outer_position(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
+    /// 设置窗口外框左上角在屏幕物理坐标系中的位置。
+    pub fn set_outer_position(&self, x: i32, y: i32) {
+        #[cfg(windows)]
+        win32::set_outer_position(self.hwnd, x, y);
+        #[cfg(not(windows))]
+        let _ = (x, y);
+    }
+
+    /// 设置窗口客户区物理像素尺寸。
+    pub fn set_inner_size(&self, width: u32, height: u32) {
+        #[cfg(windows)]
+        win32::set_inner_size(self.hwnd, width, height);
+        #[cfg(not(windows))]
+        let _ = (width, height);
+    }
+
+    /// 恢复隐藏或最小化的窗口并将其激活置顶到前台。
+    pub fn activate_foreground(&self) {
+        #[cfg(windows)]
+        win32::activate_foreground(self.hwnd);
+    }
+
     /// 窗口是否使用系统原生装饰（标题栏与边框）。
     #[must_use]
     pub fn is_decorated(&self) -> bool {
@@ -459,13 +507,14 @@ pub(crate) mod win32 {
     use super::*;
     use core::ffi::c_void;
 
-    use ::windows::core::PCWSTR;
+    use ::windows::core::{BOOL, PCWSTR};
     use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
     use ::windows::Win32::Graphics::Gdi::{
-        ClientToScreen, GetDC, GetDeviceCaps, MonitorFromWindow, ReleaseDC,
-        MONITOR_DEFAULTTONEAREST, VREFRESH,
+        ClientToScreen, EnumDisplayMonitors, GetDC, GetDeviceCaps, GetMonitorInfoW,
+        MonitorFromWindow, ReleaseDC, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        VREFRESH,
     };
-    use ::windows::Win32::UI::HiDpi::GetDpiForWindow;
+    use ::windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
     use ::windows::Win32::UI::Input::Ime::{
         ImmAssociateContextEx, ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow,
         ImmSetCompositionWindow, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, HIMC,
@@ -473,10 +522,11 @@ pub(crate) mod win32 {
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetCursorPos, GetWindowLongPtrW, IsWindowVisible, IsZoomed, LoadCursorW,
-        PostMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        GWL_EXSTYLE, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND,
-        IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+        BringWindowToTop, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsIconic,
+        IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SetCursor, SetForegroundWindow,
+        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, GWL_EXSTYLE, HTCAPTION,
+        HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO,
+        IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MONITORINFOF_PRIMARY,
         SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
         SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WMSZ_BOTTOM,
         WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
@@ -551,6 +601,129 @@ pub(crate) mod win32 {
 
     pub(crate) fn is_maximized(hwnd: isize) -> bool {
         unsafe { IsZoomed(hwnd_from_isize(hwnd)).as_bool() }
+    }
+
+    pub(crate) fn is_minimized(hwnd: isize) -> bool {
+        unsafe { IsIconic(hwnd_from_isize(hwnd)).as_bool() }
+    }
+
+    pub(crate) fn outer_position(hwnd: isize) -> Option<(i32, i32)> {
+        let mut rect = RECT::default();
+        if unsafe { GetWindowRect(hwnd_from_isize(hwnd), &mut rect) }.is_ok() {
+            Some((rect.left, rect.top))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn set_outer_position(hwnd: isize, x: i32, y: i32) {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd_from_isize(hwnd),
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub(crate) fn set_inner_size(hwnd: isize, width: u32, height: u32) {
+        let hwnd = hwnd_from_isize(hwnd);
+        let mut win_rect = RECT::default();
+        let mut client_rect = RECT::default();
+        let (extra_w, extra_h) = if unsafe { GetWindowRect(hwnd, &mut win_rect) }.is_ok()
+            && unsafe { GetClientRect(hwnd, &mut client_rect) }.is_ok()
+        {
+            let ww = win_rect.right - win_rect.left;
+            let wh = win_rect.bottom - win_rect.top;
+            let cw = client_rect.right - client_rect.left;
+            let ch = client_rect.bottom - client_rect.top;
+            ((ww - cw).max(0), (wh - ch).max(0))
+        } else {
+            (0, 0)
+        };
+        let outer_w = (width.max(1) as i32).saturating_add(extra_w);
+        let outer_h = (height.max(1) as i32).saturating_add(extra_h);
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                outer_w,
+                outer_h,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub(crate) fn activate_foreground(hwnd: isize) {
+        let hwnd = hwnd_from_isize(hwnd);
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else if !IsWindowVisible(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+
+    /// 枚举当前系统所有显示器的工作区物理矩形、DPI 缩放与主屏标记。
+    pub(crate) fn enumerate_monitor_work_areas() -> Vec<crate::window::DisplayWorkArea> {
+        unsafe extern "system" fn enum_proc(
+            monitor: HMONITOR,
+            _hdc: HDC,
+            _rect: *mut RECT,
+            lparam: LPARAM,
+        ) -> BOOL {
+            let out_ptr = lparam.0 as *mut Vec<crate::window::DisplayWorkArea>;
+            if out_ptr.is_null() {
+                return BOOL(0);
+            }
+            let mut mi = MONITORINFO {
+                cbSize: core::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if unsafe { GetMonitorInfoW(monitor, &mut mi) }.as_bool() {
+                let mut dpi_x: u32 = 96;
+                let mut dpi_y: u32 = 96;
+                let scale_factor = if unsafe {
+                    GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y)
+                }
+                .is_ok()
+                    && dpi_x > 0
+                {
+                    f64::from(dpi_x) / 96.0
+                } else {
+                    1.0
+                };
+                let area = crate::window::DisplayWorkArea {
+                    x: mi.rcWork.left,
+                    y: mi.rcWork.top,
+                    width: (mi.rcWork.right - mi.rcWork.left).max(0),
+                    height: (mi.rcWork.bottom - mi.rcWork.top).max(0),
+                    scale_factor,
+                    is_primary: (mi.dwFlags & MONITORINFOF_PRIMARY) != 0,
+                };
+                // SAFETY: `out_ptr` 指向调用栈上独占的 `Vec<MonitorWorkArea>`，仅在本回调内同步写入。
+                unsafe {
+                    (*out_ptr).push(area);
+                }
+            }
+            BOOL(1)
+        }
+
+        let mut areas = Vec::new();
+        let lparam = LPARAM((&raw mut areas) as isize);
+        unsafe {
+            let _ = EnumDisplayMonitors(None, None, Some(enum_proc), lparam);
+        }
+        areas
     }
 
     pub(crate) fn set_visible(hwnd: isize, visible: bool) {

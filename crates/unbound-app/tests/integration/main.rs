@@ -5,6 +5,7 @@
 
 mod appearance_ledger;
 mod asset_pipeline;
+mod bc7_atlas_pipeline;
 mod declarative_ergonomics;
 mod event_bubbling;
 mod form_binding;
