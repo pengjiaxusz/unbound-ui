@@ -23,11 +23,12 @@ use std::sync::Arc;
 
 use ash::vk;
 
+use crate::bc7_atlas::Bc7AtlasManager;
 use crate::data::{
     BackdropCompositePush, BlurPush, FramePushConstants, GpuClipNode, GpuPayload,
     GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PushConstants,
 };
-use crate::device::{Buffer, FrameSync, Gpu, GpuError, MemoryKind};
+use crate::device::{Buffer, CompressedTextureCapabilities, FrameSync, Gpu, GpuError, MemoryKind};
 use crate::pipeline::{
     ExternalTextureSlots, GraphicsPipelineSet, Pipelines, COLOR_FORMAT, DEPTH_FORMAT,
 };
@@ -587,7 +588,7 @@ impl ManagedExternalTexture {
 
 /// 按在飞帧代次对齐的通用延迟销毁队列（纯 CPU 状态机，便于无头单测）。
 #[derive(Debug)]
-struct DeferredDestroyQueue<T> {
+pub(crate) struct DeferredDestroyQueue<T> {
     pending: VecDeque<(u64, T)>,
 }
 
@@ -599,20 +600,20 @@ impl<T> Default for DeferredDestroyQueue<T> {
 
 impl<T> DeferredDestroyQueue<T> {
     /// 创建空的延迟销毁队列。
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             pending: VecDeque::new(),
         }
     }
 
     /// 将待销毁对象登记到队列中，至少在 `frames_in_flight` 帧提交并退役后才允许回收。
-    fn defer(&mut self, current_frame: u64, frames_in_flight: u32, item: T) {
+    pub(crate) fn defer(&mut self, current_frame: u64, frames_in_flight: u32, item: T) {
         let retire_at = current_frame.saturating_add(u64::from(frames_in_flight.max(1)));
         self.pending.push_back((retire_at, item));
     }
 
     /// 取出全部在 `completed_frame` 代次时已安全退役的对象并交由回调销毁。
-    fn drain_ready_with(&mut self, completed_frame: u64, mut on_reclaim: impl FnMut(T)) {
+    pub(crate) fn drain_ready_with(&mut self, completed_frame: u64, mut on_reclaim: impl FnMut(T)) {
         while let Some((retire_at, _)) = self.pending.front() {
             if *retire_at > completed_frame {
                 break;
@@ -624,20 +625,20 @@ impl<T> DeferredDestroyQueue<T> {
     }
 
     /// 强制排空队列中全部对象（用于渲染器销毁且设备已空闲时）。
-    fn drain_all_with(&mut self, mut on_reclaim: impl FnMut(T)) {
+    pub(crate) fn drain_all_with(&mut self, mut on_reclaim: impl FnMut(T)) {
         while let Some((_, item)) = self.pending.pop_front() {
             on_reclaim(item);
         }
     }
 
     /// 当前滞留等待退役的对象数量。
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.pending.len()
     }
 
     /// 当前队列是否为空。
     #[allow(dead_code)]
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.pending.is_empty()
     }
 }
@@ -940,6 +941,8 @@ pub struct Renderer {
     managed_external: HashMap<u32, ManagedExternalTexture>,
     /// 已解绑等待在飞帧退役的托管外部纹理延迟销毁队列。
     deferred_external_destroys: DeferredDestroyQueue<ManagedExternalTexture>,
+    /// 动态多页 BC7 图集与持久化异步 Staging 上传管理器。
+    bc7_atlas: Bc7AtlasManager,
     /// 若已设置，则渲染到外部拥有的颜色附件。
     /// 借用的颜色附件：图像句柄、视图与尺寸。
     ///
@@ -1293,6 +1296,7 @@ impl Renderer {
         }
 
         let ring = TransientRing::new(ring_bytes as u32, gpu.frames_in_flight());
+        let bc7_atlas = Bc7AtlasManager::new(frames.len());
 
         let mut renderer = Self {
             gpu,
@@ -1341,6 +1345,7 @@ impl Renderer {
             external_slots: ExternalTextureSlots::default(),
             managed_external: HashMap::new(),
             deferred_external_destroys: DeferredDestroyQueue::new(),
+            bc7_atlas,
             external_color: None,
             external_color_format: COLOR_FORMAT,
             external_present: false,
@@ -1625,6 +1630,8 @@ impl Renderer {
         // 围栏等待完成后，至少 `frames_in_flight` 帧前解绑的托管外部纹理已不再被 GPU 引用。
         let completed_generation = self.frame_index.saturating_add(1);
         self.reclaim_deferred_external_textures(completed_generation);
+        self.bc7_atlas
+            .reclaim_deferred(&self.gpu, &mut self.external_slots, completed_generation);
         self.sync_lut_slot(frame_slot)?;
         {
             let gpu = &self.gpu;
@@ -1946,6 +1953,15 @@ impl Renderer {
         upload: &UploadPlan,
         frame_slot: usize,
     ) -> Result<(), GpuError> {
+        // ---- 0. BC7 异步 Staging 批量上传 -----------------------------------
+        self.bc7_atlas.record_pending_uploads(
+            &self.gpu,
+            cmd,
+            frame_slot,
+            self.frame_index,
+            self.frames.len() as u32,
+        )?;
+
         let patches_offset = self.frame_slices.patches_offset(frame_slot);
 
         // ---- 1/2. 增量散布更新 -----------------------------------------------
@@ -2579,6 +2595,9 @@ impl Renderer {
         if self.managed_external.contains_key(&slot) {
             return self.destroy_external_texture(slot);
         }
+        if self.bc7_atlas.contains_external(slot) {
+            return self.destroy_external_bc7(slot);
+        }
         if !self.external_slots.release(slot) {
             return Err(GpuError::InvalidArgument(format!(
                 "bindless slot {slot} is not a live external texture slot"
@@ -2727,6 +2746,108 @@ impl Renderer {
     #[must_use]
     pub const fn external_texture_count(&self) -> u32 {
         self.external_slots.used()
+    }
+
+    /// 返回当前设备的压缩纹理（BC7）硬件能力与生效后端快照。
+    #[must_use]
+    pub fn compressed_texture_capabilities(&self) -> CompressedTextureCapabilities {
+        self.gpu.compressed_texture_capabilities()
+    }
+
+    /// 按需创建一张 `2048×2048` 的动态 BC7 图集页并绑定到外部 Bindless 槽位（`48..304`）。
+    ///
+    /// 新页会自动向持久化异步 Staging 环提交整页 Mode 6 透明黑块清零任务，严禁同步阻塞等待。
+    ///
+    /// # Errors
+    /// 当设备不支持原生 BC7、`page_id` 已存在或外部槽位已满时返回 [`GpuError::InvalidArgument`]；
+    /// 底层 Vulkan 分配失败时透传对应 [`GpuError`]。
+    pub fn create_bc7_atlas_page(&mut self, page_id: u32) -> Result<u32, GpuError> {
+        self.bc7_atlas.create_page(
+            &self.gpu,
+            &self.pipelines,
+            &mut self.external_slots,
+            page_id,
+        )
+    }
+
+    /// 将 4×4 块对齐的 BC7 子区域压缩数据加入下一帧异步 Staging 批量上传队列。
+    ///
+    /// # Errors
+    /// 当 `page_id` 不存在、坐标/尺寸未按 4×4 对齐、越界或字节长度不匹配时返回
+    /// [`GpuError::InvalidArgument`]。
+    pub fn stage_bc7_atlas_subregion(
+        &mut self,
+        page_id: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        bc7_bytes: &[u8],
+    ) -> Result<(), GpuError> {
+        self.bc7_atlas
+            .stage_page_subregion(page_id, x, y, width, height, bc7_bytes)
+    }
+
+    /// 立即解除指定 BC7 图集页的 Bindless 绑定并将底层图像与槽位推入 `frames_in_flight` 延迟销毁队列。
+    ///
+    /// # Errors
+    /// 当 `page_id` 不存在时返回 [`GpuError::InvalidArgument`]。
+    pub fn destroy_bc7_atlas_page(&mut self, page_id: u32) -> Result<(), GpuError> {
+        self.bc7_atlas.destroy_page(
+            &self.gpu,
+            &self.pipelines,
+            page_id,
+            self.frame_index,
+            self.frames.len() as u32,
+        )
+    }
+
+    /// 创建并经持久化异步 Staging 环上传一张独立 BC7 纹理（适用于 `> 512px` 大图），
+    /// 返回绑定的外部 Bindless 槽位（`48..304`）。
+    ///
+    /// # Errors
+    /// 当设备不支持原生 BC7、尺寸未按 4×4 对齐、字节长度不匹配或外部槽位已满时返回
+    /// [`GpuError::InvalidArgument`]；底层 Vulkan 分配失败时透传对应 [`GpuError`]。
+    pub fn upload_external_bc7(
+        &mut self,
+        width: u32,
+        height: u32,
+        bc7_bytes: &[u8],
+    ) -> Result<u32, GpuError> {
+        self.bc7_atlas.upload_external(
+            &self.gpu,
+            &self.pipelines,
+            &mut self.external_slots,
+            width,
+            height,
+            bc7_bytes,
+        )
+    }
+
+    /// 立即解除独立 BC7 纹理的 Bindless 绑定并将底层图像与槽位推入 `frames_in_flight` 延迟销毁队列。
+    ///
+    /// # Errors
+    /// 当 `slot` 不属于已托管的独立 BC7 纹理时返回 [`GpuError::InvalidArgument`]。
+    pub fn destroy_external_bc7(&mut self, slot: u32) -> Result<(), GpuError> {
+        self.bc7_atlas.destroy_external(
+            &self.gpu,
+            &self.pipelines,
+            slot,
+            self.frame_index,
+            self.frames.len() as u32,
+        )
+    }
+
+    /// 当前活跃的动态 BC7 图集页数量。
+    #[must_use]
+    pub fn bc7_active_page_count(&self) -> usize {
+        self.bc7_atlas.active_page_count()
+    }
+
+    /// 当前处于延迟销毁队列中等待在飞帧退役的 BC7 图像数量。
+    #[must_use]
+    pub fn bc7_deferred_destroy_count(&self) -> usize {
+        self.bc7_atlas.deferred_destroy_count()
     }
 
     /// 将指定视口子矩形（`x, y, width, height`）内的离屏颜色缓冲像素回读为紧凑 BGRA8 字节数组。
@@ -3589,6 +3710,10 @@ impl Renderer {
                 // SAFETY: 设备已空闲，可立即排空全部延迟销毁对象。
                 unsafe { texture.destroy(gpu) };
             });
+            // SAFETY: 设备已空闲，排空并释放全部 BC7 图集页、独立纹理、延迟队列与 Staging 环缓冲。
+            unsafe {
+                this.bc7_atlas.destroy_all(gpu);
+            }
         }
         // SAFETY: 设备已空闲且 `self` 正在被消费。
         unsafe {

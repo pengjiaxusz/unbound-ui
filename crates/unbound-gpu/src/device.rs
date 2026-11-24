@@ -115,8 +115,28 @@ pub struct GpuFeatures {
     ///
     /// 低延迟呈现路径 `VK_KHR_present_wait` 依赖此特性。
     pub present_id: bool,
+    /// `textureCompressionBC`：可选硬件特性，启用原生 BC7 等块压缩纹理采样。
+    pub texture_compression_bc: bool,
     /// 当持久化池位于 ReBAR 宿主可见显存时为 true。
     pub rebar: bool,
+}
+
+/// 压缩纹理当前激活的渲染后端路径。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CompressedTextureBackend {
+    /// 硬件原生 `VK_FORMAT_BC7_UNORM_BLOCK` 采样路径。
+    NativeBc7,
+    /// 设备不支持 BC7 时透明回退至 RGBA8 纹理路径。
+    Rgba8Fallback,
+}
+
+/// 设备压缩纹理硬件能力与当前生效后端快照。
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct CompressedTextureCapabilities {
+    /// 是否同时支持 `textureCompressionBC` 特性与 `BC7_UNORM_BLOCK` 线性采样/传输格式能力。
+    pub supports_bc7: bool,
+    /// 当前生效的压缩纹理后端路径。
+    pub active_backend: CompressedTextureBackend,
 }
 
 impl GpuFeatures {
@@ -662,6 +682,8 @@ pub struct Gpu {
     pub graphics_queue: vk::Queue,
     pub transfer_queue: vk::Queue,
     pub features: GpuFeatures,
+    /// 设备压缩纹理（BC7）能力探测结果。
+    compressed_textures: CompressedTextureCapabilities,
     pub enabled_device_extensions: Vec<String>,
     /// 实际启用的实例扩展列表。
     ///
@@ -693,6 +715,7 @@ impl core::fmt::Debug for Gpu {
             .field("device", &self.device_name())
             .field("api", &self.api_version())
             .field("features", &self.features)
+            .field("compressed_textures", &self.compressed_textures)
             .field("frames_in_flight", &self.frames.len())
             .finish_non_exhaustive()
     }
@@ -1405,6 +1428,7 @@ impl Gpu {
             swapchain_maintenance1: swapchain_maintenance1_supported,
             present_wait: present_wait_supported,
             present_id: present_wait_supported,
+            texture_compression_bc: core.texture_compression_bc == vk::TRUE,
             rebar: false,
         };
 
@@ -1498,7 +1522,8 @@ impl Gpu {
             .independent_blend(features.independent_blend)
             .sampler_anisotropy(features.sampler_anisotropy)
             .shader_int64(features.shader_int64)
-            .shader_float64(features.shader_float64);
+            .shader_float64(features.shader_float64)
+            .texture_compression_bc(features.texture_compression_bc);
 
         let dev_ext_cstrings = cstrings(&device_exts);
         let dev_ext_ptrs = raw_ptrs(&dev_ext_cstrings);
@@ -1601,6 +1626,25 @@ impl Gpu {
             ) && memory_properties.memory_heaps[t.heap_index as usize].size > (256 << 20)
         });
 
+        // 探测 `BC7_UNORM_BLOCK` 的最优平铺格式能力（采样 + 传输目标 + 线性过滤）。
+        let bc7_format_props =
+            instance.get_physical_device_format_properties(physical, vk::Format::BC7_UNORM_BLOCK);
+        let required_bc7_features = vk::FormatFeatureFlags::SAMPLED_IMAGE
+            | vk::FormatFeatureFlags::TRANSFER_DST
+            | vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR;
+        let supports_bc7 = features.texture_compression_bc
+            && bc7_format_props
+                .optimal_tiling_features
+                .contains(required_bc7_features);
+        let compressed_textures = CompressedTextureCapabilities {
+            supports_bc7,
+            active_backend: if supports_bc7 {
+                CompressedTextureBackend::NativeBc7
+            } else {
+                CompressedTextureBackend::Rgba8Fallback
+            },
+        };
+
         // 时间线信号量，供各子系统精确判断某帧何时在 GPU 上真正执行完毕。
         let sem_type = vk::SemaphoreTypeCreateInfo::default()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -1673,6 +1717,7 @@ impl Gpu {
             graphics_queue,
             transfer_queue,
             features,
+            compressed_textures,
             enabled_device_extensions,
             enabled_instance_extensions,
             khr_dynamic_rendering,
@@ -1709,6 +1754,12 @@ impl Gpu {
     #[must_use]
     pub fn frames_in_flight(&self) -> u32 {
         self.frames.len() as u32
+    }
+
+    /// 返回当前设备的 BC7 压缩纹理硬件能力与生效后端快照。
+    #[must_use]
+    pub const fn compressed_texture_capabilities(&self) -> CompressedTextureCapabilities {
+        self.compressed_textures
     }
 
     /// 内存类型查找的公开封装（供纹理池使用）。
