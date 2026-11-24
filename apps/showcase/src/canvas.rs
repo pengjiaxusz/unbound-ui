@@ -698,7 +698,19 @@ impl<'a> Canvas<'a> {
             }
             region.z = u32::from(self.z);
             if let Some(clip) = clip_shape {
-                region = region.with_clip(clip);
+                let effective = match region.clip {
+                    Some(existing) => ClipRect {
+                        rect: existing.rect.intersect(&clip.rect),
+                        radii: [
+                            existing.radii[0].max(clip.radii[0]),
+                            existing.radii[1].max(clip.radii[1]),
+                            existing.radii[2].max(clip.radii[2]),
+                            existing.radii[3].max(clip.radii[3]),
+                        ],
+                    },
+                    None => clip,
+                };
+                region = region.with_clip(effective);
             }
             if !self
                 .regions
@@ -728,7 +740,19 @@ impl<'a> Canvas<'a> {
             }
             sub_region.z = u32::from(self.z);
             if let Some(clip) = clip_shape {
-                sub_region = sub_region.with_clip(clip);
+                let effective = match sub_region.clip {
+                    Some(existing) => ClipRect {
+                        rect: existing.rect.intersect(&clip.rect),
+                        radii: [
+                            existing.radii[0].max(clip.radii[0]),
+                            existing.radii[1].max(clip.radii[1]),
+                            existing.radii[2].max(clip.radii[2]),
+                            existing.radii[3].max(clip.radii[3]),
+                        ],
+                    },
+                    None => clip,
+                };
+                sub_region = sub_region.with_clip(effective);
             }
             if !self
                 .regions

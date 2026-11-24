@@ -284,3 +284,69 @@ WinUI 3 官方控件库中不存在、面向专业工具与工业工作台场景
 **动态渲染缩放（Dynamic Render Scale）**：
 独立于视口布局物理尺寸的离屏渲染分辨率倍率（`render_scale ∈ [0.25, 1.0]`），允许在高负载交互期临时降低离屏绘制像素数并由 UI 主通道双线性放大，交互结束后瞬时恢复原生分辨率，全过程不触发布局重算且通过延迟销毁与槽位保帧保持零闪烁。
 *避免使用*：布局缩放、CSS 缩放
+## 动态视频帧与视频表面
+
+**视频表面（Video Surface）**：
+由 `AssetHub` 托管、以 `VideoSurfaceHandle` 标识并通过 `ViewBuilder::video_surface` 声明渲染的高频动态帧容器。它负责首帧占位、最新帧覆盖防积压、分辨率或格式切换时的零闪烁保帧、并发显存上限控制与离屏 LRU 驱逐；它不是媒体解码器，也不包含音画同步或播放控制状态机。
+*避免使用*：播放器控件、视频纹理句柄、流媒体组件
+
+**计算着色器预转换（Compute Pre-Conversion）**：
+仅在视频表面产出新帧时执行一次独立计算着色器（`video_convert.comp`），将 `NV12` / `P010` / `I420` 等多平面 YUV 帧按色彩矩阵、量化范围与 HDR 色调映射转换为目标 `R8G8B8A8_UNORM` 外部纹理槽的渲染策略。主图元着色器无需增加 YUV 采样分支，高刷新率界面也不必每帧重复转色。
+*避免使用*：直采转色、着色器内联解码
+
+**双路径帧上传（Dual-Tier Frame Upload）**：
+视频帧进入 GPU 预转换管线的统一双阶梯输入契约：Tier 1 在支持的 Windows 设备上经 `VK_KHR_external_memory_win32` 零拷贝导入 D3D11 DXGI NT 共享句柄；Tier 2 在非 Windows 平台、旧驱动、软解或无头环境下自动降级为双缓冲异步 Staging 上传，上层调用方零感知。
+*避免使用*：硬解直通、CPU 拷贝回退
+## 幽灵窗与悬浮浮岛宿主
+
+**幽灵窗（Ghost Window）**：
+以 `WindowRole::Ghost` 运行于 `MultiWindowCoordinator` 的独立渲染无激活顶层窗口（默认 `no_activate + topmost + skip_taskbar + click_through`，支持运行期热切为可交互态），用于瞬时预览或轻量浮层展示且绝不抢占主窗键盘焦点。它区别于无独立 `AppRuntime` 的父窗绑定 `PopupHostRegistry` 弹出窗。
+*避免使用*：预览弹窗、非模态对话框
+
+**悬浮浮岛宿主（Floating Island Host）**：
+以 `WindowRole::FloatingIsland` 托管常驻可拖拽置顶迷你窗口的多窗宿主抽象（`FloatingHost`），共享主进程 GPU 与图集资源并持有独立 `Surface`/`AppRuntime`，支持不抢焦点交互、运行期热切换置顶/穿透以及跨显示器工作区边缘磁吸。
+*避免使用*：工具窗口补丁、画中画控件
+
+**工作区磁吸定位（Work-Area Edge Snap）**：
+基于公开多显示器工作区查询与 64 位安全钳制算法的纯逻辑窗口定位策略（含 `CursorMonitorAvoid`、`AnchorRectAvoid` 与 `EdgeSnap`），确保幽灵窗与悬浮浮岛在负坐标辅屏、任务栏遮挡与跨屏 DPI 切换下始终落在合法可见工作区内。
+*避免使用*：裸屏幕坐标定位、主屏居中写死
+## 硬件块压缩与动态多页图集
+
+**BC7 多页图集（BC7 Multi-Page Atlas）**：
+面向 `<= 512px` 高密度小图的 Bindless 动态纹理图集体系：每页固定为 `2048×2048` 的 `VK_FORMAT_BC7_UNORM_BLOCK`（4 MiB/页、按需占用单个 Bindless 槽位、新页以 BC7 Mode 6 透明黑块清零），配合非阻塞异步 Staging 批量上传与 `frames_in_flight` 冷页回收；大于阈值的大纹理则直接走独立 Bindless 外部纹理槽。
+*避免使用*：单页翻倍图集、静态 48 层图集
+
+**分级货架即时回收（Tiered Shelf with Immediate Span Merge）**：
+在多页图集页内按 4px 块对齐的高度档位（如 `64`/`128`/`256`/`512`）收纳任意长宽比小图的装箱策略；条目释放时立即归还并合并相邻空闲水平区间（`freeSpans`）以原位复用，杜绝墓碑泄漏。
+*避免使用*：只增不减货架、墓碑标记图集
+
+**帧级上传节拍闸门（Frame Upload Pacing Gate）**：
+在压缩资产池中对每帧提交到 GPU 的子区域数量与总字节数施加可动态调节的双重上限（`max_uploads_per_frame` / `max_bytes_per_frame`），超额项留在有界可取消队列顺延至后续帧，用于在高密度滚动或切档时平滑上传尖刺、守住帧率预算。
+*避免使用*：全量同步上传、无界上传队列
+## 展台信息架构与像素对照检视台
+
+**控件分类元数据（Control Catalog Metadata）**：
+挂载在 `WidgetCatalogId` 上的穷举编译期元数据，声明每个目录控件的 10 项功能分类（`ControlCategory`）、三层来源归属（`ControlOrigin`：`WinUi3` / `Toolkit` / `Unbound`）与一句话用途简述；导航树、分类索引网格与覆盖率门禁全部由此派生。
+*避免使用*：硬编码组件计数、侧边栏扁平组件清单
+
+**展台页面模板（Showcase Page Template）**：
+自举展台区分的三套顶层页面骨架——落地页（Landing，无示例外框与旋钮）、分类索引页（Category Hub，顶部筛选条 + 卡片网格）与工坊详情页（Detail / Lab，交互舞台 + 属性面板 + 可折叠代码区）。
+*避免使用*：全站统一 ExampleCard、首页示例框
+
+**像素对照检视台（Parity Inspector）**：
+展台内嵌的主从式（Master-Detail）像素差分审阅界面：左侧为支持状态胶囊（存在失败项时默认聚焦 `Fail`/`Invalid`）、多维过滤与 ΔE 降序排序的紧凑用例列表，右侧为支持并排（Side-by-Side）、卷帘（Curtain，鼠标悬停跟随且点击可锁定分界线）与叠加（Overlay）三种对比视图及像素倍放的检视舞台。
+*避免使用*：Parity 纵向长列表、静态三列缩略图墙
+
+## 动效令牌与停靠预览
+
+**动效令牌（Motion Token）**：
+`unbound-anim` 统一治理动画时长、缓动曲线与物理弹簧的语义化契约单元（由基础档位 `DurationToken` / `EasingToken` 组合而成），受全局 `MotionPolicy`（速率倍率 `speed_scale` 与 `reduced_motion` 开关）约束；开启 `reduced_motion` 时自动坍缩为 `0ms` 瞬切。它不是业务控件源码里散落的硬编码秒数字面量，也不直接依赖平台句柄探测。
+*避免使用*：硬编码 duration、裸毫秒字面量、局部动画开关
+
+**停靠预览叠加层（Docking Overlay）**：
+拖拽面板或标签页时覆盖在候选目标窗口/面板之上的纯区域高亮反馈层（`docking_overlay`），直接根据指针落点渲染半透明预览矩形（边缘半区、避开标签栏的中心内容区或 `2px` 标签插入线）与紧贴光标的状态提示胶囊，并以三态语义配色区分允许（主题强调色）、禁止（中性灰）与可选嵌套目标；不采用老式五向指南针按钮，也不在窗外自由空间绘制宿主框。
+*避免使用*：五向指南针图标按钮、停靠十字准星
+
+**拖拽代理（Drag Proxy）**：
+标签页或面板拖拽过程中跟随指针移动的轻量视觉替身描述（携带标题、状态角标与停靠/分离状态提示），用于向用户反馈当前被拖拽对象及其跨窗落点状态；它仅负责视觉表达，不替代真实标签组数据或 OS 原生窗口生命周期。
+*避免使用*：拖拽缩略图快照、游离标签页本体

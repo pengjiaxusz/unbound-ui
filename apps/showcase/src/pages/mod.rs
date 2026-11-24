@@ -74,7 +74,7 @@ impl CategoryId {
             Self::Collections => "Collections",
             Self::Canvas => "Infinite Canvas",
             Self::Motion => "Motion, A11y & Telemetry",
-            Self::Components => "Components (109)",
+            Self::Components => "Controls",
             Self::System => "Engine Systems",
         }
     }
@@ -92,7 +92,7 @@ impl CategoryId {
                 Self::Collections => "集合与流式资产",
                 Self::Canvas => "无限画布",
                 Self::Motion => "动效、无障碍与遥测",
-                Self::Components => "组件展厅 (109)",
+                Self::Components => "组件目录",
                 Self::System => "引擎系统与国际化",
             }
         } else {
@@ -131,6 +131,116 @@ impl CategoryId {
                 PageId::TextRender,
                 PageId::Backdrop,
             ],
+        }
+    }
+}
+
+/// 展台页面顶层布局模板（ADR 0036）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PageTemplate {
+    /// 首页落地页：无 `ExampleCard` 外框、无旋钮与代码折叠条。
+    Landing,
+    /// 分类索引页 / 全部控件总览页：顶部筛选条 + 响应式控件卡片网格。
+    CategoryHub,
+    /// 主从式像素对照检视台（Parity Inspector）。
+    Inspector,
+    /// 交互工坊与单控件详情页：保留 `ExampleCard` 舞台、属性面板与代码区。
+    Workshop,
+}
+
+/// 返回功能分类的本地化显示名。
+#[must_use]
+pub const fn category_localized_label(
+    cat: unbound_widgets::ControlCategory,
+    locale: Locale,
+) -> &'static str {
+    if !locale.is_zh() {
+        return cat.label();
+    }
+    match cat {
+        unbound_widgets::ControlCategory::BasicInput => "基础输入",
+        unbound_widgets::ControlCategory::TextAndForm => "文本与表单",
+        unbound_widgets::ControlCategory::DateAndTime => "日期与时间",
+        unbound_widgets::ControlCategory::CollectionsAndData => "集合与数据",
+        unbound_widgets::ControlCategory::LayoutAndContainers => "布局与容器",
+        unbound_widgets::ControlCategory::Navigation => "导航与路径",
+        unbound_widgets::ControlCategory::MenusAndToolbars => "菜单与工具栏",
+        unbound_widgets::ControlCategory::DialogsAndOverlays => "对话框与浮层",
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => "状态、媒体与滚动",
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => "画布、节点与工作台",
+    }
+}
+
+/// 返回功能分类的一句话本地化摘要。
+#[must_use]
+pub const fn category_localized_summary(
+    cat: unbound_widgets::ControlCategory,
+    locale: Locale,
+) -> &'static str {
+    if !locale.is_zh() {
+        return cat.summary();
+    }
+    match cat {
+        unbound_widgets::ControlCategory::BasicInput => {
+            "按钮、复选、开关、滑块与取色等直接交互控件。"
+        }
+        unbound_widgets::ControlCategory::TextAndForm => {
+            "单行/多行文本、富文本、自动补全与结构化表单。"
+        }
+        unbound_widgets::ControlCategory::DateAndTime => "月历视图、日期/区间选择与时间滚轮。",
+        unbound_widgets::ControlCategory::CollectionsAndData => {
+            "虚拟化列表、网格、树视图、数据表格与图表。"
+        }
+        unbound_widgets::ControlCategory::LayoutAndContainers => {
+            "卡片容器、折叠面板、分栏与可停靠工作区。"
+        }
+        unbound_widgets::ControlCategory::Navigation => "NavigationView、标签页、面包屑与地址栏。",
+        unbound_widgets::ControlCategory::MenusAndToolbars => {
+            "菜单栏、右键菜单、命令栏与全局命令面板。"
+        }
+        unbound_widgets::ControlCategory::DialogsAndOverlays => {
+            "模态对话框、气泡浮层、工具提示与教学引导。"
+        }
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => {
+            "进度条、信息条、头像图片与按需滚动容器。"
+        }
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => {
+            "节点图、曲线/渐变编辑器、时间轴、代码与终端。"
+        }
+    }
+}
+
+/// 返回控件来源层级的简短徽章文本。
+#[must_use]
+pub const fn control_class_badge(class: unbound_widgets::ControlClass) -> &'static str {
+    match class {
+        unbound_widgets::ControlClass::Baseline => "WinUI 3",
+        unbound_widgets::ControlClass::Toolkit => "Toolkit",
+        unbound_widgets::ControlClass::Exclusive => "Unbound",
+    }
+}
+
+/// 为 10 个功能分类分配清晰的语义图标。
+#[must_use]
+pub const fn category_shell_icon(
+    cat: unbound_widgets::ControlCategory,
+) -> unbound_widgets::ShellIcon {
+    match cat {
+        unbound_widgets::ControlCategory::BasicInput => unbound_widgets::ShellIcon::Snap,
+        unbound_widgets::ControlCategory::TextAndForm => unbound_widgets::ShellIcon::Layers,
+        unbound_widgets::ControlCategory::DateAndTime => unbound_widgets::ShellIcon::ChevronDown,
+        unbound_widgets::ControlCategory::CollectionsAndData => unbound_widgets::ShellIcon::Chart,
+        unbound_widgets::ControlCategory::LayoutAndContainers => unbound_widgets::ShellIcon::Grid,
+        unbound_widgets::ControlCategory::Navigation => unbound_widgets::ShellIcon::Layers,
+        unbound_widgets::ControlCategory::MenusAndToolbars => {
+            unbound_widgets::ShellIcon::ChevronDown
+        }
+        unbound_widgets::ControlCategory::DialogsAndOverlays => unbound_widgets::ShellIcon::Dot,
+        unbound_widgets::ControlCategory::StatusMediaAndScrolling => {
+            unbound_widgets::ShellIcon::Chart
+        }
+        unbound_widgets::ControlCategory::CanvasGraphAndDevTools => {
+            unbound_widgets::ShellIcon::Snap
         }
     }
 }

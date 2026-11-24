@@ -143,6 +143,162 @@ impl ControlClass {
     }
 }
 
+/// 目录控件的 10 个功能分类（展台导航树、分类索引与首页导览的唯一事实源）。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ControlCategory {
+    /// 基础输入（按钮、选择、滑块与取色）。
+    BasicInput,
+    /// 文本编辑与结构化表单。
+    TextAndForm,
+    /// 日期、月历与时间选择。
+    DateAndTime,
+    /// 集合视图、树表与数据可视化。
+    CollectionsAndData,
+    /// 布局容器、分栏与停靠工作区。
+    LayoutAndContainers,
+    /// 顶层导航、标签页与路径定位。
+    Navigation,
+    /// 菜单栏、命令栏与快捷工具条。
+    MenusAndToolbars,
+    /// 对话框、气泡浮层与通知反馈。
+    DialogsAndOverlays,
+    /// 状态进度、媒体展示与滚动容器。
+    StatusMediaAndScrolling,
+    /// 无限画布、节点图与专业开发者工具（Unbound 特色）。
+    CanvasGraphAndDevTools,
+}
+
+impl ControlCategory {
+    /// 按展台导航顺序排列的全部 10 个功能分类。
+    pub const ALL: [Self; 10] = [
+        Self::BasicInput,
+        Self::TextAndForm,
+        Self::DateAndTime,
+        Self::CollectionsAndData,
+        Self::LayoutAndContainers,
+        Self::Navigation,
+        Self::MenusAndToolbars,
+        Self::DialogsAndOverlays,
+        Self::StatusMediaAndScrolling,
+        Self::CanvasGraphAndDevTools,
+    ];
+
+    /// 分类总数。
+    pub const COUNT: usize = Self::ALL.len();
+
+    /// 返回分类在 [`Self::ALL`] 中的稳定索引。
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::BasicInput => 0,
+            Self::TextAndForm => 1,
+            Self::DateAndTime => 2,
+            Self::CollectionsAndData => 3,
+            Self::LayoutAndContainers => 4,
+            Self::Navigation => 5,
+            Self::MenusAndToolbars => 6,
+            Self::DialogsAndOverlays => 7,
+            Self::StatusMediaAndScrolling => 8,
+            Self::CanvasGraphAndDevTools => 9,
+        }
+    }
+
+    /// 按索引还原分类。
+    #[must_use]
+    pub const fn from_index(index: usize) -> Option<Self> {
+        if index < Self::ALL.len() {
+            Some(Self::ALL[index])
+        } else {
+            None
+        }
+    }
+
+    /// 分类的稳定短标识，用于路由与测试。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BasicInput => "basic-input",
+            Self::TextAndForm => "text-and-form",
+            Self::DateAndTime => "date-and-time",
+            Self::CollectionsAndData => "collections-and-data",
+            Self::LayoutAndContainers => "layout-and-containers",
+            Self::Navigation => "navigation",
+            Self::MenusAndToolbars => "menus-and-toolbars",
+            Self::DialogsAndOverlays => "dialogs-and-overlays",
+            Self::StatusMediaAndScrolling => "status-media-and-scrolling",
+            Self::CanvasGraphAndDevTools => "canvas-graph-and-devtools",
+        }
+    }
+
+    /// 分类的英文标准显示名称。
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::BasicInput => "Basic Input",
+            Self::TextAndForm => "Text & Form",
+            Self::DateAndTime => "Date & Time",
+            Self::CollectionsAndData => "Collections & Data",
+            Self::LayoutAndContainers => "Layout & Containers",
+            Self::Navigation => "Navigation",
+            Self::MenusAndToolbars => "Menus & Toolbars",
+            Self::DialogsAndOverlays => "Dialogs & Overlays",
+            Self::StatusMediaAndScrolling => "Status, Media & Scrolling",
+            Self::CanvasGraphAndDevTools => "Canvas, Graph & DevTools",
+        }
+    }
+
+    /// 分类的一句话英文概述。
+    #[must_use]
+    pub const fn summary(self) -> &'static str {
+        match self {
+            Self::BasicInput => "Buttons, toggles, sliders, pickers and direct actions.",
+            Self::TextAndForm => {
+                "Single/multi-line text, rich editors, schema forms and structured inputs."
+            }
+            Self::DateAndTime => "Calendar views, date/range pickers and time wheels.",
+            Self::CollectionsAndData => "Virtualized lists, grids, trees, data tables and charts.",
+            Self::LayoutAndContainers => {
+                "Cards, expanders, split panes, docking and adaptive panels."
+            }
+            Self::Navigation => "NavigationView, tabs, breadcrumbs, pivots and address bars.",
+            Self::MenusAndToolbars => {
+                "Menu bars, context flyouts, command bars and command palette."
+            }
+            Self::DialogsAndOverlays => {
+                "Modal dialogs, flyouts, tooltips, teaching tips and toasts."
+            }
+            Self::StatusMediaAndScrolling => {
+                "Progress indicators, info bars, avatars, images and scroll views."
+            }
+            Self::CanvasGraphAndDevTools => {
+                "Node graphs, curve/gradient editors, timelines, code and terminal."
+            }
+        }
+    }
+
+    /// 遍历归属该分类的全部目录控件。
+    pub fn controls(self) -> impl Iterator<Item = WidgetCatalogId> {
+        WidgetCatalogId::ALL
+            .iter()
+            .copied()
+            .filter(move |id| id.category() == self)
+    }
+
+    /// 返回该分类下的控件数量。
+    #[must_use]
+    pub const fn count(self) -> usize {
+        let mut idx = 0;
+        let mut total = 0;
+        while idx < WidgetCatalogId::ALL.len() {
+            if WidgetCatalogId::ALL[idx].category() as u8 == self as u8 {
+                total += 1;
+            }
+            idx += 1;
+        }
+        total
+    }
+}
+
 /// 基准对齐控件总数（含 Community Toolkit 之外的 WinUI 3 标准控件与变体）。
 pub const BASELINE_COUNT: usize = 70;
 
@@ -153,6 +309,147 @@ pub const TOOLKIT_COUNT: usize = 20;
 pub const EXCLUSIVE_COUNT: usize = 43;
 
 impl WidgetCatalogId {
+    /// 返回该控件所属的功能分类（编译期穷举，禁止通配符）。
+    #[must_use]
+    #[deny(unreachable_patterns)]
+    pub const fn category(self) -> ControlCategory {
+        match self {
+            Self::Button
+            | Self::ToggleButton
+            | Self::SplitButton
+            | Self::ToggleSplitButton
+            | Self::DropDownButton
+            | Self::HyperlinkButton
+            | Self::RepeatButton
+            | Self::CheckBox
+            | Self::RadioButton
+            | Self::ToggleSwitch
+            | Self::Slider
+            | Self::RangeSelector
+            | Self::RatingControl
+            | Self::ColorPicker
+            | Self::ColorSwatch
+            | Self::ComboBox
+            | Self::ComboBoxEditable
+            | Self::Chip
+            | Self::Stepper
+            | Self::SwipeControl => ControlCategory::BasicInput,
+            Self::TextBox
+            | Self::TextBoxMultiline
+            | Self::PasswordBox
+            | Self::NumberBox
+            | Self::AutoSuggestBox
+            | Self::RichEditBox
+            | Self::RichTextBlock
+            | Self::TagInput
+            | Self::PinInput
+            | Self::HotkeyInput
+            | Self::Cascader
+            | Self::Form
+            | Self::SchemaForm
+            | Self::Descriptions
+            | Self::PropertyGrid
+            | Self::QueryBuilder
+            | Self::Transfer
+            | Self::FileDrop => ControlCategory::TextAndForm,
+            Self::DatePicker
+            | Self::CalendarDatePicker
+            | Self::CalendarView
+            | Self::DateRangePicker
+            | Self::TimePicker => ControlCategory::DateAndTime,
+            Self::ListView
+            | Self::GridView
+            | Self::ListBox
+            | Self::ItemsView
+            | Self::TreeView
+            | Self::TreeTable
+            | Self::Table
+            | Self::DataGrid
+            | Self::GenericDataTable
+            | Self::Masonry
+            | Self::VirtualMasonry
+            | Self::FlipView
+            | Self::Chart
+            | Self::Timeline
+            | Self::OrbitView
+            | Self::PipelineView => ControlCategory::CollectionsAndData,
+            Self::Containers
+            | Self::StackPanel
+            | Self::Wrap
+            | Self::Expander
+            | Self::ExpanderGroup
+            | Self::SplitView
+            | Self::SplitPane
+            | Self::MultiSplit
+            | Self::Dock
+            | Self::BladeView
+            | Self::HeaderedContentControl
+            | Self::AspectRatioBox
+            | Self::Divider
+            | Self::NinePatch
+            | Self::EmptyState
+            | Self::Watermark => ControlCategory::LayoutAndContainers,
+            Self::NavigationView
+            | Self::TabView
+            | Self::Pivot
+            | Self::BreadcrumbBar
+            | Self::SelectorBar
+            | Self::PipsPager
+            | Self::AddressBar => ControlCategory::Navigation,
+            Self::MenuBar
+            | Self::MenuFlyout
+            | Self::ContextMenu
+            | Self::CommandBar
+            | Self::CommandBarFlyout
+            | Self::AppBarButton
+            | Self::AppBarToggleButton
+            | Self::AppBarSeparator
+            | Self::CommandPalette
+            | Self::StatusBar
+            | Self::ShortcutBar => ControlCategory::MenusAndToolbars,
+            Self::ContentDialog
+            | Self::AlertDialog
+            | Self::Flyout
+            | Self::HoverCard
+            | Self::ToolTip
+            | Self::TeachingTip
+            | Self::Callout
+            | Self::Popconfirm
+            | Self::Toast
+            | Self::Tour
+            | Self::NotificationCenter
+            | Self::Overlay => ControlCategory::DialogsAndOverlays,
+            Self::ProgressBar
+            | Self::ProgressRing
+            | Self::LoadingOverlay
+            | Self::InfoBar
+            | Self::Banner
+            | Self::InfoBadge
+            | Self::Skeleton
+            | Self::RadialGauge
+            | Self::TaskHud
+            | Self::PersonPicture
+            | Self::AvatarGroup
+            | Self::Image
+            | Self::FontIcon
+            | Self::ImageCropper
+            | Self::ScrollView
+            | Self::RefreshContainer
+            | Self::AnnotatedScrollBar => ControlCategory::StatusMediaAndScrolling,
+            Self::NodeGraph
+            | Self::CanvasToolbar
+            | Self::Minimap
+            | Self::Gizmo
+            | Self::Ruler
+            | Self::CurveEditor
+            | Self::GradientEditor
+            | Self::TimelineTrack
+            | Self::CodeBlock
+            | Self::CodeEditor
+            | Self::TerminalView => ControlCategory::CanvasGraphAndDevTools,
+        }
+    }
+
     /// 该组件的能力边界声明（编译期穷举，禁止通配符）。
     #[must_use]
     pub const fn capabilities(self) -> WidgetCapabilities {
@@ -803,5 +1100,22 @@ mod tests {
         let overlay_ids: Vec<WidgetCatalogId> =
             WidgetCatalogId::ids_with_overlay_scrollbar().collect();
         assert_eq!(overlay_ids.len(), 8);
+    }
+
+    #[test]
+    fn control_categories_partition_all_133_variants() {
+        assert_eq!(ControlCategory::ALL.len(), 10);
+        let mut sum = 0usize;
+        for (idx, cat) in ControlCategory::ALL.iter().copied().enumerate() {
+            assert_eq!(cat.index(), idx);
+            assert_eq!(ControlCategory::from_index(idx), Some(cat));
+            let count = cat.count();
+            assert!(count > 0, "{cat:?} must not be empty");
+            assert_eq!(cat.controls().count(), count);
+            assert!(!cat.label().is_empty());
+            assert!(!cat.summary().is_empty());
+            sum += count;
+        }
+        assert_eq!(sum, WidgetCatalogId::COUNT);
     }
 }

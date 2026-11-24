@@ -31,7 +31,9 @@ use unbound_widgets::{
 use crate::canvas::{AlignX, AlignY, Canvas, RangeZone};
 use crate::gallery::{self, Labels, Palette};
 use crate::layout_tree::{CardLayout, KnobRow, PageLayout, ShellLayout, ShellTree};
-use crate::pages::{self, CategoryId, DemoCtx, KnobSpec, PageId};
+use unbound_widgets::{ControlCategory, ControlClass};
+
+use crate::pages::{self, CategoryId, DemoCtx, KnobSpec, PageId, PageTemplate};
 use crate::state::{EditorId, GalleryState, ThemeMode, ZOOM_STEPS};
 use crate::target::{self, Target, ROOT};
 use crate::widgets::{self, Icon};
@@ -103,20 +105,26 @@ const _: () = {
     );
 };
 
-/// 返回展开状态下侧边栏挂载的全部导航目标（含首页、全部分类页、全部 91 个目录组件项与页脚快捷项）。
+/// 返回导航视图挂载的全部导航目标（含首页、全部控件、10 大功能分类、133 个目录控件、引擎实验室页与页脚快捷项）。
 #[must_use]
 pub fn sidebar_all_targets() -> Vec<Target> {
-    let mut targets =
-        Vec::with_capacity(1 + PageId::ALL.len() + pages::SIDEBAR_COMPONENT_IDS.len() + 2);
+    let mut targets = Vec::with_capacity(
+        2 + ControlCategory::COUNT + PageId::ALL.len() + pages::SIDEBAR_COMPONENT_IDS.len() + 2,
+    );
     targets.push(Target::NavPage(PageId::Home.index() as u8));
+    targets.push(Target::NavPage(PageId::Components.index() as u8));
+    for cat in ControlCategory::ALL {
+        targets.push(Target::NavCategory(cat.index() as u8));
+        for comp_id in cat.controls() {
+            targets.push(Target::NavComponent(comp_id as u8));
+        }
+    }
     for category in CategoryId::ALL {
+        if category == CategoryId::Components {
+            continue;
+        }
         for page in category.pages() {
             targets.push(Target::NavPage(page.index() as u8));
-            if *page == PageId::Components {
-                for comp_id in pages::SIDEBAR_COMPONENT_IDS {
-                    targets.push(Target::NavComponent(comp_id as u8));
-                }
-            }
         }
     }
     targets.push(Target::Footer(0));
@@ -336,12 +344,17 @@ struct LayoutKey {
     nav_width: u32,
     page: u8,
     locale: u8,
-    /// 处于打开状态的代码面板（支持最多 128 张卡片，覆盖 Components 页全部 109 个组件）。
-    code_mask: [u64; 2],
+    /// 当前激活的单控件详情 ID；`u16::MAX` 表示非单控件详情页。
+    active_component: u16,
+    /// 当前激活的分类索引 ID；`u8::MAX` 表示 All Controls 或非分类页。
+    active_category: u8,
+    /// 当前来源筛选标识。
+    origin_filter: u8,
+    /// 首页快捷区标签索引。
+    home_quick_tab: u8,
+    /// 处于打开状态的代码面板（支持最多 192 张卡片）。
+    code_mask: [u64; 3],
     /// 已载入的像素对照用例数；`u32::MAX` 表示报告尚未载入。
-    ///
-    /// 对照页的舞台高度由用例数决定，因此报告异步载入后必须重新求解布局，
-    /// 否则滚动范围仍停留在载入前的旧高度。
     parity_cases: u32,
 }
 
@@ -360,11 +373,8 @@ impl GalleryApp {
         state.text_render.report = labels.cache.report();
         let init_viewport = Rect::new(0.0, 0.0, 1280.0, 800.0);
         let init_nav_desc = build_navigation_view_desc(&state, init_viewport, None);
-        let mut nav_view = NavigationViewState::from_desc(&init_nav_desc);
-        // 默认展开 Components 分组，确保全部目录组件可直接浏览与滚动定位。
-        nav_view.expanded_item_ids.push(target::id(Target::NavPage(
-            PageId::Components.index() as u8
-        )));
+        let nav_view = NavigationViewState::from_desc(&init_nav_desc);
+        // 10 个控件分类默认折叠，首屏导航树保持简洁直观（ADR 0036）。
         let nav_layout = init_nav_desc.compute_layout(&nav_view);
         let mut tree = ShellTree::new();
         let layout = tree.solve(&state, init_viewport, nav_layout.pane_rect.width());
@@ -404,9 +414,13 @@ impl GalleryApp {
                 width: 0,
                 height: 0,
                 nav_width: 0,
-                page: 0,
-                locale: 0,
-                code_mask: [0; 2],
+                page: u8::MAX,
+                locale: u8::MAX,
+                active_component: u16::MAX,
+                active_category: u8::MAX,
+                origin_filter: 0,
+                home_quick_tab: 0,
+                code_mask: [0; 3],
                 parity_cases: u32::MAX,
             },
             external_diff: false,
@@ -866,6 +880,11 @@ impl GalleryApp {
                         let target_page = PageId::from_index(page as usize);
                         self.navigate_internal(target_page, item_id);
                     }
+                    Some(Target::NavCategory(cat_idx)) => {
+                        if let Some(cat) = ControlCategory::from_index(cat_idx as usize) {
+                            self.navigate_to_category(Some(cat));
+                        }
+                    }
                     Some(Target::NavComponent(index)) => {
                         if let Some(&id) = WidgetCatalogId::ALL.get(index as usize) {
                             self.navigate_to_component(id);
@@ -913,9 +932,30 @@ impl GalleryApp {
         self.navigate_internal(page, item_id);
     }
 
-    /// 导航至组件展厅中的指定目录组件卡片，并将其滚动到视口顶部。
+    /// 导航至指定功能分类索引页（`None` 表示全部控件总览页）。
+    pub fn navigate_to_category(&mut self, category: Option<ControlCategory>) {
+        self.state.navigate_to_category(category);
+        let item_id = match category {
+            Some(cat) => target::id(Target::NavCategory(cat.index() as u8)),
+            None => target::id(Target::NavPage(PageId::Components.index() as u8)),
+        };
+        self.nav_view.selected_item_id = Some(item_id);
+        self.state.blur_editors();
+        self.state.search.edit.set_text(String::new());
+        self.state.demo.modal_open = false;
+        self.state.demo.dropdown_open = false;
+        self.state.lang_dropdown_open = false;
+        self.state.zoom_dropdown_open = false;
+        self.pending_focus = Some(item_id);
+    }
+
+    /// 导航至指定目录控件的独立详情页，并自动展开其所属分类节点。
     pub fn navigate_to_component(&mut self, id: unbound_widgets::WidgetCatalogId) {
         self.state.navigate_to_component(id);
+        let cat_node = target::id(Target::NavCategory(id.category().index() as u8));
+        if !self.nav_view.expanded_item_ids.contains(&cat_node) {
+            self.nav_view.expanded_item_ids.push(cat_node);
+        }
         let item_id = target::id(Target::NavComponent(id as u8));
         self.nav_view.selected_item_id = Some(item_id);
         self.state.blur_editors();
@@ -1140,18 +1180,31 @@ impl GalleryApp {
     /// 布局所依赖的输入。
     fn layout_key(&self, viewport: (f32, f32), nav_width: f32) -> LayoutKey {
         let page = self.state.active_page;
-        let mut code_mask = [0u64; 2];
+        let mut code_mask = [0u64; 3];
         for (index, _) in page.examples().iter().enumerate() {
-            if self.state.code_open(page, index as u8) && index < 128 {
+            if self.state.code_open(page, index as u8) && index < 192 {
                 code_mask[index / 64] |= 1u64 << (index % 64);
             }
         }
+        let origin_filter = match self.state.control_origin_filter {
+            None => 0,
+            Some(ControlClass::Baseline) => 1,
+            Some(ControlClass::Toolkit) => 2,
+            Some(ControlClass::Exclusive) => 3,
+        };
         LayoutKey {
             width: viewport.0.to_bits(),
             height: viewport.1.to_bits(),
             nav_width: nav_width.to_bits(),
             page: page.index() as u8,
             locale: self.state.locale.index() as u8,
+            active_component: self.state.active_component.map_or(u16::MAX, |id| id as u16),
+            active_category: self
+                .state
+                .active_category
+                .map_or(u8::MAX, |cat| cat.index() as u8),
+            origin_filter,
+            home_quick_tab: self.state.home_quick_tab,
             code_mask,
             parity_cases: self
                 .state
@@ -1217,6 +1270,11 @@ impl GalleryApp {
         // 才能在进入报告页的首帧就得到完整滚动范围，而不是等到某次悬停才补一次重排。
         if self.state.active_page == PageId::Parity {
             self.state.demo.poll_parity(&mut self.labels.engine);
+            if let Some(report) = self.state.demo.parity_report.as_ref() {
+                if report.error.is_none() {
+                    self.state.parity_inspector.auto_focus_for_report(report);
+                }
+            }
         }
         // 布局树拥有几何信息：标题栏、导航窗格与页面均由树求解，而非手算测量。
         //
@@ -1572,6 +1630,11 @@ impl GalleryApp {
     ///
     pub fn pointer_move(&mut self, position: Vec2) {
         self.pointer = position;
+        if self.state.active_page == PageId::Parity
+            && self.state.parity_inspector.scrub_curtain(position)
+        {
+            self.state.bump();
+        }
         let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
         if self.nav_view.scrollbar_drag.is_some() {
             if self
@@ -1835,6 +1898,27 @@ impl GalleryApp {
         }
         if !self.layout.content.contains_point(point) {
             return;
+        }
+        if self.state.active_page == PageId::Parity {
+            if let Some(pane) = self.state.parity_inspector.list_pane_rect.get() {
+                if pane.contains_point(point) {
+                    let count = self.state.demo.parity_report.as_ref().map_or(0, |r| {
+                        pages::parity_report::filtered_case_indices(
+                            r,
+                            &self.state.parity_inspector,
+                            self.state.search.text(),
+                        )
+                        .len()
+                    });
+                    let total_h = count as f32 * 58.0;
+                    let max_scroll = (total_h - pane.size.y + 16.0).max(0.0);
+                    self.state.parity_inspector.list_scroll =
+                        (self.state.parity_inspector.list_scroll - delta_y * 44.0)
+                            .clamp(0.0, max_scroll);
+                    self.state.bump();
+                    return;
+                }
+            }
         }
         if let Some((zone_rect, tag)) = self
             .scroll_zones
@@ -2122,6 +2206,63 @@ impl GalleryApp {
             }
             return;
         }
+        if self.state.active_page == PageId::Parity && !modifiers.control {
+            match key {
+                PlatformKey::Named(name) if name == "ArrowDown" => {
+                    if let Some(report) = self.state.demo.parity_report.as_ref() {
+                        if self.state.parity_inspector.step_selection(
+                            report,
+                            self.state.search.text(),
+                            1,
+                        ) {
+                            self.state.bump();
+                        }
+                    }
+                    return;
+                }
+                PlatformKey::Named(name) if name == "ArrowUp" => {
+                    if let Some(report) = self.state.demo.parity_report.as_ref() {
+                        if self.state.parity_inspector.step_selection(
+                            report,
+                            self.state.search.text(),
+                            -1,
+                        ) {
+                            self.state.bump();
+                        }
+                    }
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "1" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::SideBySide;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "2" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::Curtain;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch) if ch == "3" => {
+                    self.state.parity_inspector.view_mode =
+                        pages::parity_report::ParityViewMode::Overlay;
+                    self.state.bump();
+                    return;
+                }
+                PlatformKey::Character(ch)
+                    if (ch == " " || ch.eq_ignore_ascii_case("l"))
+                        && self.state.parity_inspector.view_mode
+                            == pages::parity_report::ParityViewMode::Curtain =>
+                {
+                    self.state.parity_inspector.curtain_locked =
+                        !self.state.parity_inspector.curtain_locked;
+                    self.state.bump();
+                    return;
+                }
+                _ => {}
+            }
+        }
         if modifiers.control {
             if let PlatformKey::Character(text) = key {
                 if text.eq_ignore_ascii_case("k") {
@@ -2354,10 +2495,60 @@ impl GalleryApp {
             return;
         }
         match target {
-            Target::NavPage(_) | Target::NavComponent(_) => {
+            Target::NavPage(_) | Target::NavCategory(_) | Target::NavComponent(_) => {
                 let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
                 self.nav_view.invoke_item(&nav_desc, target::id(target));
                 self.drain_navigation_view_events();
+                // 首页或分类索引页内直接点击的卡片可能不在当前折叠展开的树视图中，兜底确保直达。
+                match target {
+                    Target::NavCategory(cat_idx) => {
+                        if let Some(cat) = ControlCategory::from_index(cat_idx as usize) {
+                            if self.state.active_page != PageId::Components
+                                || self.state.active_category != Some(cat)
+                                || self.state.active_component.is_some()
+                            {
+                                self.navigate_to_category(Some(cat));
+                            }
+                        }
+                    }
+                    Target::NavComponent(comp_idx) => {
+                        if let Some(&id) = WidgetCatalogId::ALL.get(comp_idx as usize) {
+                            if self.state.active_component != Some(id) {
+                                self.navigate_to_component(id);
+                            }
+                        }
+                    }
+                    Target::NavPage(page_idx) => {
+                        let page = PageId::from_index(page_idx as usize);
+                        if self.state.active_page != page
+                            || (page == PageId::Components
+                                && (self.state.active_component.is_some()
+                                    || self.state.active_category.is_some()))
+                        {
+                            self.navigate(page);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Target::ControlFilter(filter) => {
+                self.state.control_origin_filter = match filter {
+                    1 => Some(ControlClass::Baseline),
+                    2 => Some(ControlClass::Toolkit),
+                    3 => Some(ControlClass::Exclusive),
+                    _ => None,
+                };
+                self.state.content_scroll = 0.0;
+                self.state.bump();
+            }
+            Target::FavoriteToggle(comp_idx) => {
+                if let Some(&id) = WidgetCatalogId::ALL.get(comp_idx as usize) {
+                    self.state.toggle_favorite(id);
+                }
+            }
+            Target::HomeQuickTab(tab) => {
+                self.state.home_quick_tab = tab.min(1);
+                self.state.bump();
             }
             Target::NavToggle => {
                 let nav_desc = build_navigation_view_desc(&self.state, self.layout.viewport, None);
@@ -2579,31 +2770,107 @@ impl GalleryApp {
         }
         match page {
             PageId::Parity => {
-                if part == pages::parity_report::REFRESH_PART {
-                    // 只置位，真正的重读发生在下一帧的 poll_parity：那里才有 asset_hub
-                    // 与文本引擎，也能顺手复用未变化的截图纹理。
+                use pages::parity_report::{
+                    ParityStatusFilter, ParityViewMode, BACKDROP_FILTER_PART, CASE_ROW_BASE,
+                    CURTAIN_LOCK_PART, CURTAIN_STAGE_PART, OVERLAY_SOURCE_BASE, OVERLAY_SPLIT_BASE,
+                    REFRESH_PART, RESET_FILTER_PART, SORT_MODE_PART, STATUS_FILTER_BASE,
+                    THEME_FILTER_PART, VIEW_MODE_BASE, ZOOM_BASE,
+                };
+                if part == REFRESH_PART {
                     self.state.demo.parity_reload = true;
+                    self.state.parity_inspector.initialized_for_report = false;
                     self.state.bump();
+                } else if (STATUS_FILTER_BASE..STATUS_FILTER_BASE + 6).contains(&part) {
+                    if let Some(f) = ParityStatusFilter::from_index(part - STATUS_FILTER_BASE) {
+                        self.state.parity_inspector.status_filter = f;
+                        self.state.parity_inspector.list_scroll = 0.0;
+                        self.state.bump();
+                    }
+                } else if part == THEME_FILTER_PART {
+                    self.state.parity_inspector.theme_filter =
+                        self.state.parity_inspector.theme_filter.next();
+                    self.state.parity_inspector.list_scroll = 0.0;
+                    self.state.bump();
+                } else if part == BACKDROP_FILTER_PART {
+                    self.state.parity_inspector.backdrop_filter =
+                        self.state.parity_inspector.backdrop_filter.next();
+                    self.state.parity_inspector.list_scroll = 0.0;
+                    self.state.bump();
+                } else if part == SORT_MODE_PART {
+                    self.state.parity_inspector.sort_mode =
+                        self.state.parity_inspector.sort_mode.toggled();
+                    self.state.bump();
+                } else if part == RESET_FILTER_PART {
+                    self.state.parity_inspector.reset_filters();
+                    self.state.bump();
+                } else if (VIEW_MODE_BASE..VIEW_MODE_BASE + 3).contains(&part) {
+                    if let Some(m) = ParityViewMode::from_index(part - VIEW_MODE_BASE) {
+                        self.state.parity_inspector.view_mode = m;
+                        self.state.bump();
+                    }
+                } else if (ZOOM_BASE..ZOOM_BASE + 3).contains(&part) {
+                    let zoom = [1u8, 2, 4][(part - ZOOM_BASE) as usize];
+                    self.state.parity_inspector.zoom = zoom;
+                    self.state.bump();
+                } else if part == CURTAIN_STAGE_PART || part == CURTAIN_LOCK_PART {
+                    self.state.parity_inspector.curtain_locked =
+                        !self.state.parity_inspector.curtain_locked;
+                    self.state.bump();
+                } else if (OVERLAY_SOURCE_BASE..OVERLAY_SOURCE_BASE + 2).contains(&part) {
+                    self.state.parity_inspector.overlay_show_heatmap =
+                        (part - OVERLAY_SOURCE_BASE) == 1;
+                    self.state.bump();
+                } else if (OVERLAY_SPLIT_BASE..OVERLAY_SPLIT_BASE + 4).contains(&part) {
+                    let split = [0.25f32, 0.50, 0.75, 1.0][(part - OVERLAY_SPLIT_BASE) as usize];
+                    self.state.parity_inspector.overlay_split = split;
+                    self.state.bump();
+                } else if (CASE_ROW_BASE..REFRESH_PART).contains(&part) {
+                    let row_idx = (part - CASE_ROW_BASE) as usize;
+                    if let Some(report) = self.state.demo.parity_report.as_ref() {
+                        let filtered = pages::parity_report::filtered_case_indices(
+                            report,
+                            &self.state.parity_inspector,
+                            self.state.search.text(),
+                        );
+                        if let Some(&case_idx) = filtered.get(row_idx) {
+                            self.state.parity_inspector.selected_case =
+                                Some(report.cases[case_idx].name.clone());
+                            self.state.bump();
+                        }
+                    }
                 }
             }
             PageId::Home => match card {
-                0 => {
-                    if part == 1 {
-                        self.navigate(PageId::Buttons);
-                    } else if part == 2 {
-                        self.navigate(PageId::Viewport);
-                    }
-                }
+                0 => match part {
+                    1 => self.navigate_to_category(None),
+                    2 => self.navigate(PageId::Viewport),
+                    3 => self.navigate(PageId::Parity),
+                    _ => {}
+                },
                 1 => {
                     if let Some((_, _, target, _)) =
-                        pages::home::CAPABILITIES.get(part as usize - 1)
+                        pages::home::CAPABILITIES.get(part.saturating_sub(1) as usize)
                     {
                         self.navigate(*target);
                     }
                 }
                 2 => {
-                    if let Some(target) = pages::home::INDEX_PAGES.get(part as usize - 1) {
-                        self.navigate(*target);
+                    self.state.home_quick_tab = (part as u8).min(1);
+                    self.state.bump();
+                }
+                3 => {
+                    if let Some(cat) = ControlCategory::from_index(part as usize) {
+                        self.navigate_to_category(Some(cat));
+                    }
+                }
+                4 => {
+                    if let Some(&id) = WidgetCatalogId::ALL.get(part as usize) {
+                        self.navigate_to_component(id);
+                    }
+                }
+                5 => {
+                    if let Some(&id) = WidgetCatalogId::ALL.get(part as usize) {
+                        self.state.toggle_favorite(id);
                     }
                 }
                 _ => {}
@@ -4376,7 +4643,12 @@ fn draw_window_controls(
 const fn is_nav_item_node(node: u64) -> bool {
     matches!(
         target::decode(node),
-        Some(Target::NavPage(_) | Target::NavComponent(_) | Target::Footer(_))
+        Some(
+            Target::NavPage(_)
+                | Target::NavCategory(_)
+                | Target::NavComponent(_)
+                | Target::Footer(_)
+        )
     )
 }
 
@@ -4412,7 +4684,7 @@ fn build_navigation_view_desc(
         (viewport.size.y - crate::layout_tree::TOP_BAR_HEIGHT).max(0.0),
     );
 
-    let mut menu_items = Vec::with_capacity(2 + CategoryId::ALL.len() * 5);
+    let mut menu_items = Vec::with_capacity(64);
     menu_items.push(NavigationViewMenuItem::item(
         NavigationViewItem::new(
             target::id(Target::NavPage(PageId::Home.index() as u8)),
@@ -4422,32 +4694,57 @@ fn build_navigation_view_desc(
     ));
     menu_items.push(NavigationViewMenuItem::separator());
 
+    // 域一：组件目录（All Controls + 10 个默认折叠的功能分类，由 WidgetCatalogId 穷举元数据派生）
+    menu_items.push(NavigationViewMenuItem::header(
+        CategoryId::Components.localized_label(state.locale),
+    ));
+    menu_items.push(NavigationViewMenuItem::item(
+        NavigationViewItem::new(
+            target::id(Target::NavPage(PageId::Components.index() as u8)),
+            PageId::Components.localized_info(state.locale).short,
+        )
+        .with_icon(ShellIcon::Grid),
+    ));
+    for cat in ControlCategory::ALL {
+        let children: Vec<NavigationViewMenuItem> = cat
+            .controls()
+            .map(|comp_id| {
+                NavigationViewMenuItem::item(
+                    NavigationViewItem::new(
+                        target::id(Target::NavComponent(comp_id as u8)),
+                        pages::component_nav_label_localized(comp_id, state.locale),
+                    )
+                    .with_icon(ShellIcon::Dot),
+                )
+            })
+            .collect();
+        menu_items.push(NavigationViewMenuItem::item(
+            NavigationViewItem::new(
+                target::id(Target::NavCategory(cat.index() as u8)),
+                pages::category_localized_label(cat, state.locale),
+            )
+            .with_icon(pages::category_shell_icon(cat))
+            .with_children(children),
+        ));
+    }
+
+    // 域二：引擎与设计实验室
+    menu_items.push(NavigationViewMenuItem::separator());
     for category in CategoryId::ALL {
+        if category == CategoryId::Components {
+            continue;
+        }
         menu_items.push(NavigationViewMenuItem::header(
             category.localized_label(state.locale),
         ));
         for page in category.pages() {
-            let mut item = NavigationViewItem::new(
-                target::id(Target::NavPage(page.index() as u8)),
-                page.localized_info(state.locale).short,
-            )
-            .with_icon(nav_page_icon(*page));
-            if *page == PageId::Components {
-                let children: Vec<NavigationViewMenuItem> = pages::SIDEBAR_COMPONENT_IDS
-                    .iter()
-                    .map(|&comp_id| {
-                        NavigationViewMenuItem::item(
-                            NavigationViewItem::new(
-                                target::id(Target::NavComponent(comp_id as u8)),
-                                pages::component_nav_label_localized(comp_id, state.locale),
-                            )
-                            .with_icon(ShellIcon::Dot),
-                        )
-                    })
-                    .collect();
-                item = item.with_children(children);
-            }
-            menu_items.push(NavigationViewMenuItem::item(item));
+            menu_items.push(NavigationViewMenuItem::item(
+                NavigationViewItem::new(
+                    target::id(Target::NavPage(page.index() as u8)),
+                    page.localized_info(state.locale).short,
+                )
+                .with_icon(nav_page_icon(*page)),
+            ));
         }
     }
 
@@ -4471,6 +4768,8 @@ fn build_navigation_view_desc(
     let selected = if state.active_page == PageId::Components {
         if let Some(comp_id) = state.active_component {
             Some(target::id(Target::NavComponent(comp_id as u8)))
+        } else if let Some(cat) = state.active_category {
+            Some(target::id(Target::NavCategory(cat.index() as u8)))
         } else {
             Some(target::id(
                 Target::NavPage(PageId::Components.index() as u8),
@@ -4622,62 +4921,269 @@ fn draw_page(
     page: &PageLayout,
 ) {
     let palette = *canvas.palette;
-    let info = page.page.localized_info(state.locale);
     canvas.begin_clip(layout.content);
-    canvas.semantic(
-        Role::Heading,
-        info.title,
-        Rect::new(
-            page.header.origin.x,
-            page.header.origin.y,
-            page.header.size.x,
-            34.0,
-        ),
-    );
-    canvas.text(
-        info.title,
-        Rect::new(
-            page.header.origin.x,
-            page.header.origin.y,
-            page.header.size.x,
-            38.0,
-        ),
-        30.0,
-        palette.text,
-        AlignX::Start,
-        AlignY::Top,
-    );
-    canvas.text_wrapped(
-        info.description,
-        Rect::new(
-            page.header.origin.x,
-            page.header.origin.y + 42.0,
-            (page.header.size.x * 0.74).min(820.0),
-            46.0,
-        ),
-        12.5,
-        palette.text_muted,
-    );
-    let mut badge_x = page.header.origin.x;
-    for krate in info.crates {
-        let width = canvas.labels.measure(krate, 11.0).x + 16.0;
-        widgets::badge(
-            canvas,
-            Rect::new(badge_x, page.header.origin.y + 92.0, width, 20.0),
-            krate,
-            palette.primary,
-            palette.primary_soft,
-        );
-        badge_x += width + 6.0;
-    }
 
-    for card in &page.cards {
-        if card.rect.max().y < layout.content.origin.y
-            || card.rect.origin.y > layout.content.max().y
-        {
-            continue;
+    match page.template {
+        PageTemplate::Landing => {
+            pages::home::draw_landing(canvas, state, page.template_body);
         }
-        draw_example(canvas, state, page, card);
+        PageTemplate::Inspector => {
+            pages::parity_report::draw_inspector(canvas, state, page.template_body);
+        }
+        PageTemplate::CategoryHub => {
+            let title_owned: String;
+            let desc_owned: String;
+            if let Some(cat) = state.active_category {
+                title_owned = format!(
+                    "{} ({})",
+                    pages::category_localized_label(cat, state.locale),
+                    cat.count()
+                );
+                desc_owned = pages::category_localized_summary(cat, state.locale).to_string();
+            } else {
+                let info = page.page.localized_info(state.locale);
+                title_owned = format!("{} ({})", info.short, WidgetCatalogId::COUNT);
+                desc_owned = info.description.to_string();
+            }
+            canvas.semantic(
+                Role::Heading,
+                &title_owned,
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y,
+                    page.header.size.x,
+                    34.0,
+                ),
+            );
+            canvas.text(
+                &title_owned,
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y,
+                    page.header.size.x,
+                    38.0,
+                ),
+                28.0,
+                palette.text,
+                AlignX::Start,
+                AlignY::Top,
+            );
+            canvas.text_wrapped(
+                &desc_owned,
+                Rect::new(
+                    page.header.origin.x,
+                    page.header.origin.y + 40.0,
+                    (page.header.size.x * 0.78).min(820.0),
+                    40.0,
+                ),
+                12.5,
+                palette.text_muted,
+            );
+            pages::components::draw_category_hub(canvas, state, page.template_body);
+        }
+        PageTemplate::Workshop => {
+            if page.page == PageId::Components {
+                if let Some(comp_id) = state.active_component {
+                    let label = pages::component_nav_label_localized(comp_id, state.locale);
+                    let cat = comp_id.category();
+                    let cat_label = pages::category_localized_label(cat, state.locale);
+                    let all_label = PageId::Components.localized_info(state.locale).short;
+                    // 面包屑导航条：All Controls / <Category> / <Control>
+                    let all_w = canvas.labels.measure(all_label, 11.0).x + 8.0;
+                    let all_rect =
+                        Rect::new(page.header.origin.x, page.header.origin.y, all_w, 18.0);
+                    canvas.text(
+                        all_label,
+                        all_rect,
+                        11.0,
+                        palette.primary,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
+                    canvas.control(
+                        target::id(Target::NavPage(PageId::Components.index() as u8)),
+                        all_rect,
+                        Role::Link,
+                        all_label,
+                        CursorKind::Pointer,
+                        false,
+                        false,
+                    );
+                    let sep_x = all_rect.max().x + 4.0;
+                    canvas.text(
+                        "/",
+                        Rect::new(sep_x, page.header.origin.y, 10.0, 18.0),
+                        11.0,
+                        palette.text_muted,
+                        AlignX::Center,
+                        AlignY::Center,
+                    );
+                    let cat_w = canvas.labels.measure(cat_label, 11.0).x + 8.0;
+                    let cat_rect = Rect::new(sep_x + 12.0, page.header.origin.y, cat_w, 18.0);
+                    canvas.text(
+                        cat_label,
+                        cat_rect,
+                        11.0,
+                        palette.primary,
+                        AlignX::Start,
+                        AlignY::Center,
+                    );
+                    canvas.control(
+                        target::id(Target::NavCategory(cat.index() as u8)),
+                        cat_rect,
+                        Role::Link,
+                        cat_label,
+                        CursorKind::Pointer,
+                        false,
+                        false,
+                    );
+
+                    canvas.semantic(
+                        Role::Heading,
+                        label,
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 22.0,
+                            page.header.size.x,
+                            36.0,
+                        ),
+                    );
+                    canvas.text(
+                        label,
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 22.0,
+                            page.header.size.x - 140.0,
+                            38.0,
+                        ),
+                        28.0,
+                        palette.text,
+                        AlignX::Start,
+                        AlignY::Top,
+                    );
+                    let desc = pages::category_localized_summary(cat, state.locale);
+                    canvas.text(
+                        desc,
+                        Rect::new(
+                            page.header.origin.x,
+                            page.header.origin.y + 62.0,
+                            page.header.size.x - 140.0,
+                            20.0,
+                        ),
+                        12.0,
+                        palette.text_muted,
+                        AlignX::Start,
+                        AlignY::Top,
+                    );
+
+                    // 来源徽章 + 模块标签 + 收藏切换按钮
+                    let badge_text = pages::control_class_badge(comp_id.class());
+                    let (b_fg, b_bg) = pages::home::origin_badge_colors(palette, comp_id.class());
+                    let bw = canvas.labels.measure(badge_text, 10.5).x + 16.0;
+                    widgets::badge(
+                        canvas,
+                        Rect::new(page.header.origin.x, page.header.origin.y + 90.0, bw, 20.0),
+                        badge_text,
+                        b_fg,
+                        b_bg,
+                    );
+                    let mod_w = canvas.labels.measure(comp_id.module_name(), 10.5).x + 16.0;
+                    widgets::badge(
+                        canvas,
+                        Rect::new(
+                            page.header.origin.x + bw + 6.0,
+                            page.header.origin.y + 90.0,
+                            mod_w,
+                            20.0,
+                        ),
+                        comp_id.module_name(),
+                        palette.text_muted,
+                        palette.surface,
+                    );
+                    let starred = state.is_favorite(comp_id);
+                    let fav_label = if starred {
+                        "★ Favorited"
+                    } else {
+                        "☆ Favorite"
+                    };
+                    let fav_w = canvas.labels.measure(fav_label, 11.0).x + 22.0;
+                    widgets::button(
+                        canvas,
+                        target::id(Target::FavoriteToggle(comp_id as u8)),
+                        Rect::new(
+                            page.header.max().x - fav_w,
+                            page.header.origin.y + 24.0,
+                            fav_w,
+                            30.0,
+                        ),
+                        fav_label,
+                        if starred {
+                            widgets::ButtonVariant::Primary
+                        } else {
+                            widgets::ButtonVariant::Secondary
+                        },
+                        true,
+                    );
+                }
+            } else {
+                let info = page.page.localized_info(state.locale);
+                canvas.semantic(
+                    Role::Heading,
+                    info.title,
+                    Rect::new(
+                        page.header.origin.x,
+                        page.header.origin.y,
+                        page.header.size.x,
+                        34.0,
+                    ),
+                );
+                canvas.text(
+                    info.title,
+                    Rect::new(
+                        page.header.origin.x,
+                        page.header.origin.y,
+                        page.header.size.x,
+                        38.0,
+                    ),
+                    30.0,
+                    palette.text,
+                    AlignX::Start,
+                    AlignY::Top,
+                );
+                canvas.text_wrapped(
+                    info.description,
+                    Rect::new(
+                        page.header.origin.x,
+                        page.header.origin.y + 42.0,
+                        (page.header.size.x * 0.74).min(820.0),
+                        46.0,
+                    ),
+                    12.5,
+                    palette.text_muted,
+                );
+                let mut badge_x = page.header.origin.x;
+                for krate in info.crates {
+                    let width = canvas.labels.measure(krate, 11.0).x + 16.0;
+                    widgets::badge(
+                        canvas,
+                        Rect::new(badge_x, page.header.origin.y + 92.0, width, 20.0),
+                        krate,
+                        palette.primary,
+                        palette.primary_soft,
+                    );
+                    badge_x += width + 6.0;
+                }
+            }
+
+            for card in &page.cards {
+                if card.rect.max().y < layout.content.origin.y
+                    || card.rect.origin.y > layout.content.max().y
+                {
+                    continue;
+                }
+                draw_example(canvas, state, page, card);
+            }
+        }
     }
 
     if let Some(bar) = content_scrollbar(layout, page) {
