@@ -2430,7 +2430,7 @@ fn emit_case(
                             ),
                             unbound_widgets::NavigationViewMenuItem::item(
                                 unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
+                                    .with_glyph("\u{E908}"),
                             ),
                             unbound_widgets::NavigationViewMenuItem::item(
                                 unbound_widgets::NavigationViewItem::new(4, "Reports")
@@ -2524,7 +2524,7 @@ fn emit_case(
                             ),
                             unbound_widgets::NavigationViewMenuItem::item(
                                 unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
+                                    .with_glyph("\u{E908}"),
                             ),
                             unbound_widgets::NavigationViewMenuItem::item(
                                 unbound_widgets::NavigationViewItem::new(4, "Reports")
@@ -2582,7 +2582,7 @@ fn emit_case(
                             unbound_widgets::NavigationViewMenuItem::separator(),
                             unbound_widgets::NavigationViewMenuItem::item(
                                 unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
+                                    .with_glyph("\u{E908}"),
                             ),
                         ],
                     )
