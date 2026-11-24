@@ -320,7 +320,7 @@ impl<A: Application> WindowedRunner<A> {
         self
     }
 
-    /// 在运行期追加 3D 视口自定义渲染通道工厂；若渲染器已就绪则立即注册并回写 Bindless 槽位。
+    /// 在运行期追加 3D 视口自定义渲染通道工厂；若渲染器已就绪则立即注册（首帧渲染完成前保持占位槽位 `None`）。
     pub fn register_viewport_pass_factory(
         &mut self,
         factory: impl Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync + 'static,
@@ -330,9 +330,10 @@ impl<A: Application> WindowedRunner<A> {
             let pass = boxed();
             let viewport_id = pass.viewport_id();
             match renderer.register_viewport_pass(pass) {
-                Ok(slot) => self
-                    .runtime
-                    .commit_viewport_3d_slot(viewport_id, Some(slot)),
+                Ok(_slot) => {
+                    let committed = renderer.viewport_bindless_slot(viewport_id);
+                    self.runtime.commit_viewport_3d_slot(viewport_id, committed);
+                }
                 Err(error) => {
                     eprintln!(
                         "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
@@ -343,7 +344,7 @@ impl<A: Application> WindowedRunner<A> {
         self.viewport_pass_factories.push(boxed);
     }
 
-    /// 将所有已登记的 3D 视口通道工厂重新注册到当前渲染器。
+    /// 将所有已登记的 3D 视口通道工厂重新注册到当前渲染器（首帧离屏渲染完成前不提前暴露槽位）。
     fn register_all_viewport_passes(&mut self) {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
@@ -352,9 +353,10 @@ impl<A: Application> WindowedRunner<A> {
             let pass = factory();
             let viewport_id = pass.viewport_id();
             match renderer.register_viewport_pass(pass) {
-                Ok(slot) => self
-                    .runtime
-                    .commit_viewport_3d_slot(viewport_id, Some(slot)),
+                Ok(_slot) => {
+                    let committed = renderer.viewport_bindless_slot(viewport_id);
+                    self.runtime.commit_viewport_3d_slot(viewport_id, committed);
+                }
                 Err(error) => {
                     eprintln!(
                         "[unbound-app] Could not register 3D viewport pass {viewport_id:?}: {error:?}"
@@ -691,7 +693,7 @@ impl<A: Application> WindowedRunner<A> {
         }
     }
 
-    /// 同步本帧活跃的 3D 视口离屏渲染目标、Bindless 槽位及通道派发计数。
+    /// 同步本帧活跃的 3D 视口离屏渲染目标、暂停未挂载/零尺寸视口，并回写 Bindless 槽位及派发计数。
     fn sync_viewports_3d(
         &mut self,
         entries: &[crate::Viewport3DFrameEntry],
@@ -700,14 +702,17 @@ impl<A: Application> WindowedRunner<A> {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        let mut active_ids = std::collections::HashSet::with_capacity(entries.len());
         let mut slot_changed = false;
+        let mut awaiting_first_render = false;
         for entry in entries {
-            let mut desc = unbound_gpu::ViewportRenderPassDesc::new(entry.viewport_id);
-            desc.render_scale = entry.render_scale;
-            desc.bounds = entry.logical_rect;
-            if let Err(error) =
-                renderer.sync_viewport_target(entry.viewport_id, desc, entry.physical_size)
-            {
+            active_ids.insert(entry.viewport_id);
+            if let Err(error) = renderer.sync_viewport_layout(
+                entry.viewport_id,
+                entry.logical_rect,
+                entry.render_scale,
+                entry.physical_size,
+            ) {
                 eprintln!(
                     "[unbound-app] Could not sync 3D viewport target {:?}: {error:?}",
                     entry.viewport_id
@@ -717,8 +722,23 @@ impl<A: Application> WindowedRunner<A> {
             if self.runtime.viewport_3d_slot(entry.viewport_id) != committed {
                 slot_changed = true;
             }
+            if committed.is_none() && entry.physical_size.is_some() {
+                awaiting_first_render = true;
+            }
             self.runtime
                 .commit_viewport_3d_slot(entry.viewport_id, committed);
+        }
+        // 本帧未挂载或退化为零尺寸的已注册视口需显式暂停，避免继续离屏渲染。
+        for id in renderer.viewport_ids() {
+            if !active_ids.contains(&id) {
+                if let Err(error) =
+                    renderer.sync_viewport_layout(id, unbound_math::Rect::ZERO, 1.0, None)
+                {
+                    eprintln!(
+                        "[unbound-app] Could not pause inactive 3D viewport target {id:?}: {error:?}"
+                    );
+                }
+            }
         }
         let dispatches = renderer.take_viewport_pass_dispatches();
         if dispatches > 0 {
@@ -726,6 +746,8 @@ impl<A: Application> WindowedRunner<A> {
         }
         if slot_changed {
             self.runtime.invalidate();
+            window.request_redraw();
+        } else if awaiting_first_render {
             window.request_redraw();
         }
     }

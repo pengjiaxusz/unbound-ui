@@ -131,20 +131,62 @@ impl ViewportCameraConstraints {
         }
     }
 
-    /// 按当前俯仰约束安全钳制角度（自动处理上下界倒置）。
+    /// 消毒俯仰角与距离上下界：过滤 `NaN`/非有限值/非正距离并修正倒置区间，防止 `f32::clamp` 触发 panic。
     #[must_use]
-    fn clamp_pitch(self, pitch: f32) -> f32 {
-        let lo = self.min_pitch_rad.min(self.max_pitch_rad);
-        let hi = self.min_pitch_rad.max(self.max_pitch_rad);
-        pitch.clamp(lo, hi)
+    pub fn sanitized(&self) -> Self {
+        let defaults = Self::default();
+        let raw_min_pitch = if self.min_pitch_rad.is_finite() {
+            self.min_pitch_rad
+        } else {
+            defaults.min_pitch_rad
+        };
+        let raw_max_pitch = if self.max_pitch_rad.is_finite() {
+            self.max_pitch_rad
+        } else {
+            defaults.max_pitch_rad
+        };
+        let min_pitch_rad = raw_min_pitch.min(raw_max_pitch);
+        let max_pitch_rad = raw_min_pitch.max(raw_max_pitch);
+
+        let raw_min_dist = if self.min_distance.is_finite() && self.min_distance > 0.0 {
+            self.min_distance
+        } else {
+            defaults.min_distance
+        };
+        let raw_max_dist = if self.max_distance.is_finite() && self.max_distance > 0.0 {
+            self.max_distance
+        } else {
+            defaults.max_distance
+        };
+        let min_distance = raw_min_dist.min(raw_max_dist).max(1e-6);
+        let max_distance = raw_min_dist.max(raw_max_dist).max(min_distance);
+
+        Self {
+            min_pitch_rad,
+            max_pitch_rad,
+            min_distance,
+            max_distance,
+        }
     }
 
-    /// 按当前距离约束安全钳制观察距离（自动处理上下界倒置）。
+    /// 按消毒后的俯仰约束安全钳制角度（自动处理 `NaN` 与上下界倒置）。
+    #[must_use]
+    fn clamp_pitch(self, pitch: f32) -> f32 {
+        let safe = self.sanitized();
+        if !pitch.is_finite() {
+            return 0.0_f32.clamp(safe.min_pitch_rad, safe.max_pitch_rad);
+        }
+        pitch.clamp(safe.min_pitch_rad, safe.max_pitch_rad)
+    }
+
+    /// 按消毒后的距离约束安全钳制观察距离（自动处理 `NaN` 与上下界倒置）。
     #[must_use]
     fn clamp_distance(self, distance: f32) -> f32 {
-        let lo = self.min_distance.min(self.max_distance).max(1e-6);
-        let hi = self.min_distance.max(self.max_distance).max(lo);
-        distance.clamp(lo, hi)
+        let safe = self.sanitized();
+        if !distance.is_finite() {
+            return safe.min_distance;
+        }
+        distance.clamp(safe.min_distance, safe.max_distance)
     }
 }
 
@@ -192,9 +234,9 @@ impl ViewportCamera3D {
         self
     }
 
-    /// 更新轨道相机约束，并立即按新范围重新钳制 `orbit_pitch` 与 `distance`。
+    /// 更新轨道相机约束（先执行非有限值与倒置区间消毒），并立即重新钳制 `orbit_pitch` 与 `distance`。
     pub fn set_constraints(&mut self, c: ViewportCameraConstraints) {
-        self.constraints = c;
+        self.constraints = c.sanitized();
         self.orbit_pitch = self.constraints.clamp_pitch(self.orbit_pitch);
         self.distance = self.constraints.clamp_distance(self.distance);
     }
@@ -501,6 +543,33 @@ mod tests {
         let fallback = ViewportCameraConstraints::for_bounding_radius(f32::NAN, -1.0, 0.0);
         assert!(fallback.min_distance.is_finite() && fallback.min_distance > 0.0);
         assert!(fallback.max_distance >= fallback.min_distance);
+
+        // `NaN`、无穷大与倒置约束在 `sanitized` / `set_constraints` / `orbit` / `dolly` 下不得 panic。
+        let broken = ViewportCameraConstraints {
+            min_pitch_rad: f32::NAN,
+            max_pitch_rad: f32::INFINITY,
+            min_distance: -5.0,
+            max_distance: f32::NAN,
+        };
+        let sanitized = broken.sanitized();
+        assert!(sanitized.min_pitch_rad.is_finite() && sanitized.max_pitch_rad.is_finite());
+        assert!(sanitized.min_pitch_rad <= sanitized.max_pitch_rad);
+        assert!(sanitized.min_distance.is_finite() && sanitized.min_distance > 0.0);
+        assert!(
+            sanitized.max_distance.is_finite() && sanitized.max_distance >= sanitized.min_distance
+        );
+
+        let mut cam = ViewportCamera3D::default().with_constraints(broken);
+        cam.constraints = ViewportCameraConstraints {
+            min_pitch_rad: 0.8,
+            max_pitch_rad: -0.4,
+            min_distance: 10.0,
+            max_distance: 2.0,
+        };
+        cam.orbit(Vec2::new(1.0, f32::NAN), 0.1);
+        cam.dolly(f32::NAN);
+        assert!(cam.orbit_pitch.is_finite());
+        assert!(cam.distance.is_finite() && cam.distance >= 2.0 && cam.distance <= 10.0);
     }
 
     #[test]

@@ -644,7 +644,7 @@ mod tests {
 
         // 交互启用时注册 Grab 光标命中区；关闭交互时移除命中区。
         let hit = p_idle.hit.expect("interactive viewport must register hit");
-        assert_eq!(hit.cursor, CursorKind::Grab);
+        assert_eq!(hit.cursor, Some(CursorKind::Grab));
 
         let non_interactive = placeholder_desc.with_interactive(false);
         let ni_out = emit_viewport_3d(10, rect, &non_interactive, idle_state);

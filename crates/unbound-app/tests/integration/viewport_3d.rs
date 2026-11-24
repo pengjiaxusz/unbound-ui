@@ -145,6 +145,9 @@ fn placeholder_fallback_external_texture_and_gpu_slot_transition() {
         .collect();
     assert_eq!(image_prims_3.len(), 1);
     assert_eq!(image_prims_3[0].border_token_or_tex, 60);
+    // 验证 3D 视口发射的 `PrimType::Image` 图元携带默认 8px 圆角遮罩（`corner_radii`）。
+    let expected_radii = unbound_math::f16::pack_radii([8.0; 4]);
+    assert_eq!(image_prims_3[0].corner_radii, expected_radii);
 
     // 下一帧通道派发计数应清零，不重复累计。
     let r4 = rt.frame(0.0);
@@ -210,10 +213,12 @@ fn multi_instance_concurrent_layout_physical_extent_and_resize_count() {
         .find(|e| e.viewport_id == ViewportId::new(2))
         .expect("viewport 2 entry");
 
+    // `VP_KEY_2` 请求 `render_scale = 1.5`，经 `MAX_VIEWPORT_RENDER_SCALE (1.0)` 钳制为 `1.0`，
+    // 在 `effective_scale = 2.0` 下对应物理尺寸 `200 * 2.0 * 1.0 = 400`、`150 * 2.0 * 1.0 = 300`。
     assert_eq!(e1.physical_size, Some((800, 600)));
-    assert_eq!(e2.physical_size, Some((600, 450)));
+    assert_eq!(e2.physical_size, Some((400, 300)));
     assert!((e1.effective_scale - 2.0).abs() < 1e-4);
-    assert!((e2.render_scale - 1.5).abs() < 1e-4);
+    assert!((e2.render_scale - 1.0).abs() < 1e-4);
 
     // 稳态重绘帧：尺寸未变化，resize 计数应为 0。
     rt.invalidate();

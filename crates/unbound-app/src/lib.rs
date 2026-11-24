@@ -5839,6 +5839,8 @@ impl<A: Application> AppRuntime<A> {
                     unbound_widgets::Viewport3DPointerTracker::on_wheel(viewport_id, delta.y, 1.0)
                 {
                     self.viewport_3d_pending_gestures.push(gesture_event);
+                    // 交互式 3D 视口消费滚轮缩放手势后提前返回，防止外层 `ScrollView` 同时滚动。
+                    return scroll_dirty;
                 }
             }
         }

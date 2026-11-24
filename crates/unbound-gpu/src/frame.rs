@@ -829,6 +829,8 @@ struct ManagedViewport3D {
     desc: ViewportRenderPassDesc,
     desired_extent: Option<(u32, u32)>,
     attachments: Option<ViewportAttachments>,
+    /// 挂起等待前序在飞帧围栏退役后再切换 Bindless 绑定的新离屏附件。
+    pending_attachments: Option<ViewportAttachments>,
     has_rendered: bool,
 }
 
@@ -1882,6 +1884,7 @@ impl Renderer {
         let completed_generation = self.frame_index.saturating_add(1);
         self.reclaim_deferred_external_textures(completed_generation);
         self.reclaim_deferred_viewports(completed_generation);
+        self.promote_pending_viewport_attachments()?;
         self.sync_lut_slot(frame_slot)?;
         {
             let gpu = &self.gpu;
@@ -3030,6 +3033,7 @@ impl Renderer {
                 desc,
                 desired_extent: None,
                 attachments: None,
+                pending_attachments: None,
                 has_rendered: false,
             },
         );
@@ -3055,6 +3059,10 @@ impl Renderer {
             return Err(error);
         }
         self.external_slots.release(entry.slot);
+        if let Some(pending) = entry.pending_attachments {
+            // SAFETY: 挂起附件尚未绑定到描述符集，无在飞帧引用，可直接销毁。
+            unsafe { pending.destroy(&self.gpu) };
+        }
         if let Some(attachments) = entry.attachments {
             self.deferred_viewport_destroys.defer(
                 self.frame_index,
@@ -3065,15 +3073,42 @@ impl Renderer {
         Ok(())
     }
 
-    /// 同步指定 3D 视口的渲染描述与目标物理尺寸，按需创建或延迟替换离屏附件。
+    /// 仅更新已注册 3D 视口的布局矩形、渲染缩放与物理尺寸，保留自定义 Pass 自身的
+    /// `sample_count`、`depth_mode`、`clear_color` 与 `camera` 等渲染描述符配置。
+    ///
+    /// # Errors
+    /// 当 `id` 未注册或底层附件同步失败时返回 [`GpuError`]。
+    pub fn sync_viewport_layout(
+        &mut self,
+        id: ViewportId,
+        bounds: unbound_math::Rect,
+        render_scale: f32,
+        physical_extent: Option<(u32, u32)>,
+    ) -> Result<Option<u32>, GpuError> {
+        let mut desc = {
+            let Some(entry) = self.viewport_passes.get(&id) else {
+                return Err(GpuError::InvalidArgument(format!(
+                    "viewport pass {} is not registered",
+                    id.raw()
+                )));
+            };
+            entry.pass.render_pass_desc()
+        };
+        desc.bounds = bounds;
+        desc.render_scale = clamp_render_scale(render_scale);
+        self.sync_viewport_target(id, desc, physical_extent)
+    }
+
+    /// 同步指定 3D 视口的渲染描述与目标物理尺寸，按需创建新附件并挂起等待安全绑定。
     ///
     /// * 当 `physical_extent` 为 `None`（或宽高含 `0`）时，仅将本帧标记为非活跃并跳过录制，
     ///   保留视口注册与既有槽位不释放；
-    /// * 当尺寸、实际生效的 MSAA 采样数或深度模式变化时，立即创建新附件并更新 Bindless 槽位，
-    ///   旧附件进入 [`Self::deferred_viewport_destroys`]，保证本帧 3D Pass 写入后 UI 同帧采样无黑帧。
+    /// * 当尺寸、实际生效的 MSAA 采样数或深度模式变化时，先创建新附件暂存于 `pending_attachments`，
+    ///   待 [`Self::render`] 完成 [`Self::wait_for_previous_frame`] 后再切换 Bindless 槽位并将旧附件
+    ///   推入 [`Self::deferred_viewport_destroys`]，彻底消除在飞帧描述符更新竞态与未初始化采样风险。
     ///
     /// # Errors
-    /// 当 `id` 未注册、附件创建失败或 Bindless 描述符更新失败时返回 [`GpuError`]。
+    /// 当 `id` 未注册或离屏附件创建失败时返回 [`GpuError`]。
     pub fn sync_viewport_target(
         &mut self,
         id: ViewportId,
@@ -3098,7 +3133,11 @@ impl Renderer {
         };
 
         let effective_msaa = resolve_viewport_msaa(&self.gpu, desc.sample_count);
-        let needs_recreate = match entry.attachments.as_ref() {
+        let target_att = entry
+            .pending_attachments
+            .as_ref()
+            .or(entry.attachments.as_ref());
+        let needs_recreate = match target_att {
             Some(att) => {
                 att.width != w
                     || att.height != h
@@ -3110,32 +3149,19 @@ impl Renderer {
         if needs_recreate {
             let new_attachments =
                 ViewportAttachments::new(&self.gpu, w, h, effective_msaa, desc.depth_mode)?;
-            if let Err(error) = self.pipelines.bind_external_texture(
-                &self.gpu,
-                entry.slot,
-                new_attachments.resolve_view,
-                self.pipelines.sampler,
-            ) {
-                // SAFETY: 新附件尚未绑定至描述符集，无在飞帧引用，可立即销毁。
-                unsafe { new_attachments.destroy(&self.gpu) };
-                return Err(error);
-            }
-            if let Some(old_attachments) = entry.attachments.replace(new_attachments) {
-                self.deferred_viewport_destroys.defer(
-                    self.frame_index,
-                    self.gpu.frames_in_flight(),
-                    old_attachments,
-                );
+            if let Some(superseded) = entry.pending_attachments.replace(new_attachments) {
+                // SAFETY: 被覆盖的挂起附件从未绑定到描述符集，无在飞帧引用，可直接销毁。
+                unsafe { superseded.destroy(&self.gpu) };
             }
         }
         Ok(Some(entry.slot))
     }
 
-    /// 查询指定 3D 视口可供 UI 采样的 Bindless 槽位（仅在已有就绪附件或已渲染时返回 `Some`）。
+    /// 查询指定 3D 视口可供 UI 采样的 Bindless 槽位（仅在完成首帧渲染且附件就绪后返回 `Some`）。
     #[must_use]
     pub fn viewport_bindless_slot(&self, id: ViewportId) -> Option<u32> {
         self.viewport_passes.get(&id).and_then(|entry| {
-            if entry.has_rendered || entry.attachments.is_some() {
+            if entry.has_rendered && entry.attachments.is_some() {
                 Some(entry.slot)
             } else {
                 None
@@ -3305,6 +3331,40 @@ impl Renderer {
             });
     }
 
+    /// 在前序帧围栏退役后，将挂起的新离屏视口附件提升为活跃附件并安全绑定至 Bindless 槽位。
+    fn promote_pending_viewport_attachments(&mut self) -> Result<(), GpuError> {
+        if self.viewport_passes.is_empty() {
+            return Ok(());
+        }
+        let mut ids: Vec<ViewportId> = self.viewport_passes.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let Some(entry) = self.viewport_passes.get_mut(&id) else {
+                continue;
+            };
+            let Some(new_attachments) = entry.pending_attachments.take() else {
+                continue;
+            };
+            if let Err(error) = self.pipelines.bind_external_texture(
+                &self.gpu,
+                entry.slot,
+                new_attachments.resolve_view,
+                self.pipelines.sampler,
+            ) {
+                entry.pending_attachments = Some(new_attachments);
+                return Err(error);
+            }
+            if let Some(old_attachments) = entry.attachments.replace(new_attachments) {
+                self.deferred_viewport_destroys.defer(
+                    self.frame_index,
+                    self.gpu.frames_in_flight(),
+                    old_attachments,
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// 按 [`ViewportId`] 确定性升序录制全部活跃的离屏 3D 视口自定义 Pass。
     fn record_custom_viewport_passes(&mut self, cmd: vk::CommandBuffer) {
         if self.viewport_passes.is_empty() {
@@ -3343,7 +3403,7 @@ impl Renderer {
                 resolve_src_stage,
                 resolve_src_access,
                 vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags2::COLOR_ATTACHMENT_READ | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 false,
             ));
             if let Some((msaa_img, _, _)) = att.msaa_color {
@@ -3354,7 +3414,8 @@ impl Renderer {
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                     vk::AccessFlags2::NONE,
                     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                    vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                    vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                        | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                     false,
                 ));
             }
@@ -3367,7 +3428,8 @@ impl Renderer {
                 vk::AccessFlags2::NONE,
                 vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS
                     | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
-                vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ
+                    | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
                 true,
             ));
 
@@ -4321,11 +4383,20 @@ impl Renderer {
         if let Some(scope) = &self.timing {
             scope.destroy(&self.gpu);
         }
-        // 管线描述符集引用了图集与视口视图；设备已空闲，先排空全部 3D 视口附件再销毁管线与设备。
         let mut this = self;
+        // 管线描述符集引用了外部纹理与 3D 视口视图；先销毁管线与描述符池，再释放底层图像与视图。
+        // SAFETY: 设备处于空闲状态。
+        unsafe {
+            this.pipelines.destroy(&this.gpu);
+        }
+        // 清空全部存活、挂起及延迟销毁队列中的 3D 视口附件，避免任何显存或句柄泄漏。
         for (_, entry) in this.viewport_passes.drain() {
+            if let Some(pending) = entry.pending_attachments {
+                // SAFETY: 设备已空闲且管线已销毁，可直接销毁挂起的 3D 视口附件。
+                unsafe { pending.destroy(&this.gpu) };
+            }
             if let Some(attachments) = entry.attachments {
-                // SAFETY: 设备已空闲，可直接销毁存活的 3D 视口附件。
+                // SAFETY: 设备已空闲且管线已销毁，可直接销毁存活的 3D 视口附件。
                 unsafe { attachments.destroy(&this.gpu) };
             }
         }
@@ -4333,13 +4404,9 @@ impl Renderer {
             let gpu = &this.gpu;
             this.deferred_viewport_destroys
                 .drain_all_with(|attachments| {
-                    // SAFETY: 设备已空闲，可立即排空全部延迟销毁的 3D 视口附件。
+                    // SAFETY: 设备已空闲且管线已销毁，可立即排空全部延迟销毁的 3D 视口附件。
                     unsafe { attachments.destroy(gpu) };
                 });
-        }
-        // SAFETY: 设备处于空闲状态。
-        unsafe {
-            this.pipelines.destroy(&this.gpu);
         }
         // 清空全部存活及延迟销毁队列中的托管外部纹理，避免任何显存或句柄泄漏。
         for (_, texture) in this.managed_external.drain() {
@@ -5902,12 +5969,12 @@ mod tests {
             chunk_id: [0, 0],
             local_pos: [x, y],
             size: [w, h],
-            corner_radii: [0, 0],
+            corner_radii: [0, 0, 0, 0],
             border_width: 0,
             shadow_blur: 0,
             transform_idx: 0,
             clip_idx: crate::data::CLIP_NONE,
-            fill_token_or_uv: unbound_theme::Token::NONE.raw(),
+            fill_token_or_uv: u32::from(unbound_theme::Token::NONE.raw()),
             border_token_or_tex: slot,
             prim_type_and_flags: GpuPrimitiveInstance::pack_type(
                 crate::data::PrimType::Image,
@@ -5947,11 +6014,13 @@ mod tests {
             .sync_viewport_target(id, desc, Some((32, 24)))
             .expect("sync x1 viewport");
         assert_eq!(synced_slot, Some(slot));
-        assert_eq!(renderer.viewport_bindless_slot(id), Some(slot));
+        // 首帧离屏渲染完成前不得向 UI 暴露 Bindless 槽位，避免采样 UNDEFINED 图像。
+        assert_eq!(renderer.viewport_bindless_slot(id), None);
 
         renderer
             .render(&scene_at(&[], &[], 1, (64.0, 64.0)))
             .expect("render x1");
+        assert_eq!(renderer.viewport_bindless_slot(id), Some(slot));
         assert_eq!(renderer.take_viewport_pass_dispatches(), 1);
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
 
@@ -5980,7 +6049,13 @@ mod tests {
         assert!(px4[0] <= 2 && px4[1] >= 250 && px4[2].abs_diff(128) <= 2 && px4[3] >= 250);
 
         // 3. 透明 `alpha = 0.0` 清屏叠加在 UI 背景矩形之上，背景颜色必须透出。
-        let bg = quad(0.0, 0.0, 64.0, 64.0, unbound_theme::Token::ACCENT.raw());
+        let bg = quad(
+            0.0,
+            0.0,
+            64.0,
+            64.0,
+            u32::from(unbound_theme::Token::ACCENT.raw()),
+        );
         let bg_only = [bg];
         renderer
             .render(&scene_at(&bg_only, &[], 3, (64.0, 64.0)))
@@ -6062,12 +6137,13 @@ mod tests {
             renderer
                 .sync_viewport_target(id, desc, Some(extent))
                 .expect("sync resized viewport");
-            if idx > 0 {
-                assert!(renderer.pending_viewport_destroys() >= 1);
-            }
             renderer
                 .render(&scene_at(&[], &[], (idx as u64) + 1, (64.0, 64.0)))
                 .expect("render resized step");
+            // 旧附件在 `render` 等待前帧围栏退役并切换新绑定时进入延迟销毁队列。
+            if idx > 0 {
+                assert!(renderer.pending_viewport_destroys() >= 1);
+            }
             let rb = renderer
                 .readback_viewport_rgba8(id)
                 .expect("readback resized viewport");
