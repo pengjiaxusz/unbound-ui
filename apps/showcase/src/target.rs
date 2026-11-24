@@ -60,6 +60,14 @@ pub enum Target {
     FpsInput,
     /// 文本编辑器上下文菜单项（`0` 剪切、`1` 复制、`2` 粘贴、`3` 全选）。
     EditorMenuItem(u8),
+    /// 导航到控件功能分类索引页（`0..ControlCategory::COUNT`）。
+    NavCategory(u8),
+    /// 切换分类索引页的来源过滤（`0` = All、`1` = WinUI 3、`2` = Toolkit、`3` = Unbound）。
+    ControlFilter(u8),
+    /// 切换指定目录控件的收藏状态（`0..WidgetCatalogId::COUNT`）。
+    FavoriteToggle(u8),
+    /// 切换首页快捷访问标签（`0` = Recent、`1` = Favorites）。
+    HomeQuickTab(u8),
 }
 
 const TAG_NAV_TOGGLE: u64 = 1;
@@ -87,6 +95,10 @@ const TAG_ZOOM_MENU: u64 = 23;
 const TAG_LANG_MENU: u64 = 24;
 const TAG_LANG: u64 = 25;
 const TAG_EDITOR_MENU_ITEM: u64 = 26;
+const TAG_NAV_CATEGORY: u64 = 27;
+const TAG_CONTROL_FILTER: u64 = 28;
+const TAG_FAVORITE_TOGGLE: u64 = 29;
+const TAG_HOME_QUICK_TAB: u64 = 30;
 
 /// 展厅的语义根节点。
 pub const ROOT: u64 = 1;
@@ -144,6 +156,10 @@ pub const fn id(target: Target) -> u64 {
         Target::FpsPreset(index) => tag(TAG_FPS_PRESET) | index as u64,
         Target::FpsInput => tag(TAG_FPS_INPUT),
         Target::EditorMenuItem(index) => tag(TAG_EDITOR_MENU_ITEM) | index as u64,
+        Target::NavCategory(cat) => tag(TAG_NAV_CATEGORY) | cat as u64,
+        Target::ControlFilter(filter) => tag(TAG_CONTROL_FILTER) | filter as u64,
+        Target::FavoriteToggle(comp) => tag(TAG_FAVORITE_TOGGLE) | comp as u64,
+        Target::HomeQuickTab(tab) => tag(TAG_HOME_QUICK_TAB) | tab as u64,
     }
 }
 
@@ -191,6 +207,10 @@ pub const fn decode(value: u64) -> Option<Target> {
         TAG_FPS_PRESET => Target::FpsPreset((low & 0xff) as u8),
         TAG_FPS_INPUT => Target::FpsInput,
         TAG_EDITOR_MENU_ITEM => Target::EditorMenuItem((low & 0xff) as u8),
+        TAG_NAV_CATEGORY => Target::NavCategory((low & 0xff) as u8),
+        TAG_CONTROL_FILTER => Target::ControlFilter((low & 0xff) as u8),
+        TAG_FAVORITE_TOGGLE => Target::FavoriteToggle((low & 0xff) as u8),
+        TAG_HOME_QUICK_TAB => Target::HomeQuickTab((low & 0xff) as u8),
         _ => return None,
     })
 }
@@ -227,6 +247,10 @@ mod tests {
             Target::FpsPreset(4),
             Target::FpsInput,
             Target::EditorMenuItem(2),
+            Target::NavCategory(3),
+            Target::ControlFilter(1),
+            Target::FavoriteToggle(7),
+            Target::HomeQuickTab(1),
         ];
         for target in targets {
             assert_eq!(decode(id(target)), Some(target), "{target:?}");
