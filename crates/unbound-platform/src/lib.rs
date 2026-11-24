@@ -135,8 +135,8 @@ pub use win32_window::{
     CursorIcon, PhysicalPosition, PhysicalSize, ResizeDirection, Window, WindowId as NativeWindowId,
 };
 pub use window::{
-    apply, enumerate_monitor_work_areas, resolve_window_placement, ButtonState, ImeEvent, ImeState,
-    Modifiers, MonitorWorkArea, MouseButton, PlatformError, PlatformEvent, PlatformKey,
+    apply, enumerate_monitor_work_areas, resolve_window_placement, ButtonState, DisplayWorkArea,
+    ImeEvent, ImeState, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
     PlatformState, ScreenRect, SurfaceAlpha, WindowConfig, WindowPlacement, WindowPosition,
 };
 pub use windows::{WindowId, WindowRegistry, WindowSlot};

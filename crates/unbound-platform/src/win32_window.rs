@@ -674,14 +674,14 @@ pub(crate) mod win32 {
     }
 
     /// 枚举当前系统所有显示器的工作区物理矩形、DPI 缩放与主屏标记。
-    pub(crate) fn enumerate_monitor_work_areas() -> Vec<crate::window::MonitorWorkArea> {
+    pub(crate) fn enumerate_monitor_work_areas() -> Vec<crate::window::DisplayWorkArea> {
         unsafe extern "system" fn enum_proc(
             monitor: HMONITOR,
             _hdc: HDC,
             _rect: *mut RECT,
             lparam: LPARAM,
         ) -> BOOL {
-            let out_ptr = lparam.0 as *mut Vec<crate::window::MonitorWorkArea>;
+            let out_ptr = lparam.0 as *mut Vec<crate::window::DisplayWorkArea>;
             if out_ptr.is_null() {
                 return BOOL(0);
             }
@@ -702,7 +702,7 @@ pub(crate) mod win32 {
                 } else {
                     1.0
                 };
-                let area = crate::window::MonitorWorkArea {
+                let area = crate::window::DisplayWorkArea {
                     x: mi.rcWork.left,
                     y: mi.rcWork.top,
                     width: (mi.rcWork.right - mi.rcWork.left).max(0),

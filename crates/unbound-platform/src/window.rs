@@ -83,7 +83,7 @@ impl ScreenRect {
 
 /// 单个显示器的可用工作区（扣除任务栏/停靠栏）物理几何与缩放因子。
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MonitorWorkArea {
+pub struct DisplayWorkArea {
     /// 工作区左上角屏幕物理 X 坐标。
     pub x: i32,
     /// 工作区左上角屏幕物理 Y 坐标。
@@ -100,7 +100,7 @@ pub struct MonitorWorkArea {
 
 /// 枚举当前系统所有显示器的可用工作区（非 Windows 平台返回空列表）。
 #[must_use]
-pub fn enumerate_monitor_work_areas() -> Vec<MonitorWorkArea> {
+pub fn enumerate_monitor_work_areas() -> Vec<DisplayWorkArea> {
     #[cfg(windows)]
     {
         crate::win32_window::win32::enumerate_monitor_work_areas()
