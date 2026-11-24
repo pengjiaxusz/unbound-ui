@@ -288,9 +288,7 @@ impl MicaBackdrop {
 
     /// 按确定性经过时间推进双纹理叠化并在收敛后释放旧纹理句柄。
     pub fn step_crossfade_for_test(&mut self, elapsed_secs: f32) -> Option<f32> {
-        if self.crossfade_start.is_none() {
-            return None;
-        }
+        self.crossfade_start?;
         match self.sample_crossfade_alpha(elapsed_secs) {
             Some(alpha) => Some(alpha),
             None => {

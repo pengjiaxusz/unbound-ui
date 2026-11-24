@@ -29,6 +29,14 @@ use unbound_platform::{
 };
 use unbound_theme::{ThemeSet, ThemeState, ThemeTransition};
 
+/// 主题快照识别键（明暗种类、产品预设、品牌强调色与系统强调色比特表示）。
+type ThemeSnapshotKey = (
+    ThemeKind,
+    unbound_theme::ProductPreset,
+    unbound_theme::AccentBrand,
+    Option<[u32; 4]>,
+);
+
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::{
     AppKey, AppRuntime, Application, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
@@ -193,12 +201,7 @@ pub struct WindowContext<A: Application> {
     theme: ThemeState,
     /// 本窗口的主题过渡状态机（多可见窗口共享协调器时间戳同步推进）。
     theme_transition: ThemeTransition,
-    uploaded_theme: Option<(
-        ThemeKind,
-        unbound_theme::ProductPreset,
-        unbound_theme::AccentBrand,
-        Option<[u32; 4]>,
-    )>,
+    uploaded_theme: Option<ThemeSnapshotKey>,
     appearance: WindowAppearance,
     external_gpu_slots: FxHashMap<ExternalTextureHandle, (u32, u32, u32, bool)>,
     popup_host: PopupHostRegistry,
@@ -559,15 +562,7 @@ pub struct MultiWindowCoordinator<A: Application> {
     /// 多窗口共享主题过渡单调时钟基准。
     theme_clock_epoch: Instant,
     /// 最近一次全局主题切换对应的共享触发时间戳（秒），确保并排可见窗口同拍推进。
-    shared_theme_trigger: Option<(
-        (
-            ThemeKind,
-            unbound_theme::ProductPreset,
-            unbound_theme::AccentBrand,
-            Option<[u32; 4]>,
-        ),
-        f64,
-    )>,
+    shared_theme_trigger: Option<(ThemeSnapshotKey, f64)>,
 }
 
 impl<A: Application> MultiWindowCoordinator<A> {
