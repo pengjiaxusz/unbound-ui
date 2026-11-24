@@ -6,11 +6,16 @@ use unbound_input::{CursorKind, HitRegion};
 use unbound_math::Rect;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, outlined, surface};
+use crate::primitive::{focus_ring, glyphs as emit_glyphs, outlined};
+use crate::shell::{emit_shell_icon_primitives, ShellIcon};
 use crate::switch::CONTROL_LAYER;
-use crate::{ControlState, PointerPhase, WidgetOutput};
+use crate::{ControlState, PointerPhase, TextCtx, WidgetOutput};
 
 const MAX_STARS: usize = 5;
+/// 实心星形符号字体码点（WinUI 3 `SolidStar` `U+E735`）。
+pub const RATING_STAR_FILLED_GLYPH: &str = "\u{E735}";
+/// 空心星形符号字体码点（WinUI 3 `OutlineStar` `U+E734`）。
+pub const RATING_STAR_OUTLINE_GLYPH: &str = "\u{E734}";
 
 /// [`RatingDesc`] 的交互状态。
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -53,11 +58,33 @@ impl RatingDesc {
     }
 }
 
-/// 输出结构稳定的 5 星评分控件（1 个背景 + 5 个星形槽位 + 1 个焦点环 = 7 个图元）。
+/// 输出结构稳定的 5 星评分控件（使用 [`ShellIcon::StarFilled`] / [`ShellIcon::Star`] 矢量星形，
+/// 跨全部交互态保持图元数恒定）。
 #[must_use]
 pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetOutput {
-    let mut primitives = Vec::with_capacity(7);
-    let payloads = Vec::new();
+    emit_rating_inner(node, desc, state, None)
+}
+
+/// 输出结构稳定的 5 星评分控件，优先使用平台感知符号字体（`U+E735` / `U+E734`），
+/// 当无可用符号字体时自动回退 [`ShellIcon::StarFilled`] / [`ShellIcon::Star`] 矢量星形。
+#[must_use]
+pub fn render_rating_with_text(
+    node: u64,
+    desc: &RatingDesc,
+    state: ControlState,
+    text_ctx: &mut TextCtx<'_>,
+) -> WidgetOutput {
+    emit_rating_inner(node, desc, state, Some(text_ctx))
+}
+
+fn emit_rating_inner(
+    node: u64,
+    desc: &RatingDesc,
+    state: ControlState,
+    mut text_ctx: Option<&mut TextCtx<'_>>,
+) -> WidgetOutput {
+    let mut primitives = Vec::with_capacity(64);
+    let mut payloads = Vec::with_capacity(64);
 
     let hovered = state.phase == PointerPhase::Hovered;
     // WinUI RatingControl 自身无实心面板，只在悬停时叠 SubtleFillColorSecondary。
@@ -87,6 +114,9 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
     let y = desc.rect.origin.y + (desc.rect.height() - sz) * 0.5;
     for i in 0..MAX_STARS {
         let r = Rect::new(desc.rect.origin.x + gap + i as f32 * (sz + gap), y, sz, sz);
+        // 是否实心星仅由分值与半星配置决定，确保跨 24 种交互态图元数恒定。
+        let filled = desc.value >= i as f32 + 1.0
+            || (desc.allow_half && desc.value >= i as f32 + 0.5);
         let star_tok = if state.disabled {
             if desc.value >= i as f32 + 0.5 {
                 Token::TEXT_DISABLED // RatingControlDisabledSelectedForeground = TextFillColorDisabled
@@ -100,7 +130,32 @@ pub fn emit_rating(node: u64, desc: &RatingDesc, state: ControlState) -> WidgetO
         } else {
             Token::TEXT_SECONDARY // RatingControlUnselectedForeground = TextFillColorSecondary
         };
-        primitives.push(surface(r, sz * 0.25, star_tok, desc.z + 1));
+        let glyph = if filled {
+            RATING_STAR_FILLED_GLYPH
+        } else {
+            RATING_STAR_OUTLINE_GLYPH
+        };
+        let shaped = text_ctx
+            .as_deref_mut()
+            .and_then(|ctx| ctx.shape_symbol_glyph(glyph, r, sz));
+        if let Some(quads) = shaped {
+            emit_glyphs(&quads, star_tok, desc.z + 1, &mut primitives, &mut payloads);
+        } else {
+            let icon = if filled {
+                ShellIcon::StarFilled
+            } else {
+                ShellIcon::Star
+            };
+            emit_shell_icon_primitives(
+                icon,
+                r,
+                star_tok,
+                Token::SURFACE,
+                desc.z + 1,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
     }
 
     primitives.push(focus_ring(

@@ -480,6 +480,8 @@ pub struct TextEngine {
     /// 见 [`east_asian_family`]：Windows 的 CJK 界面字体与拉丁界面字体是两套，
     /// 必须显式绑定，否则塑形器的回退会挑到日文或楷体字库。
     cjk_family_override: Option<&'static str>,
+    /// 平台符号字体解析策略（默认 [`SymbolFontPolicy::Auto`]）。
+    symbol_font_policy: SymbolFontPolicy,
 }
 
 /// Windows 简体中文界面使用的 CJK 字体族。
@@ -496,6 +498,24 @@ pub const MS_JHENGHEI_UI: &str = "Microsoft JhengHei UI";
 pub const YU_GOTHIC_UI: &str = "Yu Gothic UI";
 /// Windows 韩文界面字体。
 pub const MALGUN_GOTHIC: &str = "Malgun Gothic";
+
+/// Windows 平台符号图标字体候选链（Win11 优先 `Segoe Fluent Icons`，Win10 回退 `Segoe MDL2 Assets`）。
+pub const WINDOWS_SYMBOL_FALLBACKS: &[&str] = &["Segoe Fluent Icons", "Segoe MDL2 Assets"];
+
+/// 平台符号字体解析策略。
+///
+/// 用于按操作系统能力自动解析系统符号字体，并在无头测试中确定性地切换
+/// 强制指定字体族或禁用符号字体以验证矢量图标回退路径。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum SymbolFontPolicy {
+    /// 自动模式：Windows 按 [`WINDOWS_SYMBOL_FALLBACKS`] 顺序探测可用字体族，非 Windows 返回 `None`。
+    #[default]
+    Auto,
+    /// 强制指定符号字体族名称（不依赖平台分支，主要用于测试与显式覆写）。
+    Force(&'static str),
+    /// 显式禁用符号字体，强制符号图标回退到解析矢量几何。
+    Disabled,
+}
 
 /// Linux 优先 UI 无衬线字体候选链。
 pub const LINUX_SANS_FALLBACKS: &[&str] = &["Noto Sans", "DejaVu Sans", "Liberation Sans"];
@@ -728,6 +748,7 @@ impl TextEngine {
             max_cache_entries: 4096,
             settings: TextRenderSettings::default(),
             cjk_family_override: None,
+            symbol_font_policy: SymbolFontPolicy::Auto,
         }
     }
 
@@ -751,6 +772,53 @@ impl TextEngine {
     /// 见 [`Self::set_east_asian_family`]。
     pub fn set_cjk_family(&mut self, family: Option<&'static str>) {
         self.set_east_asian_family(family);
+    }
+
+    /// 返回当前生效的符号字体解析策略。
+    #[must_use]
+    pub fn symbol_font_policy(&self) -> SymbolFontPolicy {
+        self.symbol_font_policy
+    }
+
+    /// 设置符号字体解析策略；策略变更时清空塑形与布局缓存。
+    pub fn set_symbol_font_policy(&mut self, policy: SymbolFontPolicy) {
+        if self.symbol_font_policy != policy {
+            self.symbol_font_policy = policy;
+            self.clear_caches();
+        }
+    }
+
+    /// 返回当前平台与策略下可用的符号字体族名称；不可用或被禁用时返回 `None`。
+    ///
+    /// - [`SymbolFontPolicy::Auto`]：Windows 按 [`WINDOWS_SYMBOL_FALLBACKS`] 顺序探测首个已安装字体族，
+    ///   非 Windows 恒返回 `None`；
+    /// - [`SymbolFontPolicy::Force`]：直接返回指定的字体族名称；
+    /// - [`SymbolFontPolicy::Disabled`]：恒返回 `None`。
+    #[must_use]
+    pub fn symbol_font_family(&self) -> Option<&str> {
+        match self.symbol_font_policy {
+            SymbolFontPolicy::Auto => {
+                #[cfg(windows)]
+                {
+                    WINDOWS_SYMBOL_FALLBACKS
+                        .iter()
+                        .copied()
+                        .find(|family| self.font_family_available(family))
+                }
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            }
+            SymbolFontPolicy::Force(family) => Some(family),
+            SymbolFontPolicy::Disabled => None,
+        }
+    }
+
+    /// 当前平台与策略下是否存在可用的符号字体。
+    #[must_use]
+    pub fn has_symbol_font(&self) -> bool {
+        self.symbol_font_family().is_some()
     }
 
     /// 系统上是否存在指定字体族。
@@ -1935,5 +2003,55 @@ mod tests {
     fn consecutive_newlines_produce_distinct_line_starts() {
         let starts = source_line_starts("a\r\nb\n\nc\r\rd");
         assert_eq!(starts, vec![0, 3, 5, 6, 8, 9]);
+    }
+
+    #[test]
+    fn symbol_font_policy_disabled_and_force_override_platform_detection() {
+        let mut e = TextEngine::with_font_system(FontSystem::new_with_locale_and_db("en-US".to_string(), cosmic_text::fontdb::Database::new()));
+        assert_eq!(e.symbol_font_policy(), SymbolFontPolicy::Auto);
+        // 空字体库下 Auto 在全平台均无可用符号字体。
+        assert_eq!(e.symbol_font_family(), None);
+        assert!(!e.has_symbol_font());
+
+        e.set_symbol_font_policy(SymbolFontPolicy::Force("Segoe Fluent Icons"));
+        assert_eq!(
+            e.symbol_font_policy(),
+            SymbolFontPolicy::Force("Segoe Fluent Icons")
+        );
+        assert_eq!(e.symbol_font_family(), Some("Segoe Fluent Icons"));
+        assert!(e.has_symbol_font());
+
+        e.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        assert_eq!(e.symbol_font_policy(), SymbolFontPolicy::Disabled);
+        assert_eq!(e.symbol_font_family(), None);
+        assert!(!e.has_symbol_font());
+    }
+
+    #[test]
+    fn symbol_font_policy_auto_respects_platform_and_clears_caches_on_change() {
+        let mut e = engine();
+        let _ = e.shape("abc", &TextStyle::sized(14.0));
+        assert!(!e.shape_cache.is_empty());
+
+        // 相同策略重复设置不应无谓清空缓存。
+        e.set_symbol_font_policy(SymbolFontPolicy::Auto);
+        assert!(!e.shape_cache.is_empty());
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(e.symbol_font_family(), None);
+            assert!(!e.has_symbol_font());
+        }
+        #[cfg(windows)]
+        {
+            if let Some(family) = e.symbol_font_family() {
+                assert!(WINDOWS_SYMBOL_FALLBACKS.contains(&family));
+            }
+        }
+
+        // 切换策略必须清空缓存，防止旧塑形结果残留。
+        e.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        assert!(e.shape_cache.is_empty());
+        assert_eq!(e.symbol_font_family(), None);
     }
 }

@@ -259,6 +259,81 @@ impl TextCtx<'_> {
         }
         quads
     }
+
+    /// 返回当前平台与策略下解析出的可用符号字体族名称；不可用或被禁用时返回 `None`。
+    #[must_use]
+    pub fn symbol_font_family(&self) -> Option<&str> {
+        self.engine.symbol_font_family()
+    }
+
+    /// 当前上下文是否存在可用的系统符号字体。
+    #[must_use]
+    pub fn has_symbol_font(&self) -> bool {
+        self.engine.has_symbol_font()
+    }
+
+    /// 使用平台可用符号字体在 `rect` 内精确居中塑形并光栅化单个符号字形。
+    ///
+    /// - 当 `glyph` 为空、`size`/`rect` 尺寸非正或符号字体不可用（含测试禁用）时返回 `None`，
+    ///   由调用方回退到 [`crate::shell::ShellIcon`] 解析矢量几何；
+    /// - 以 `line_height == font_size` 结合 [`unbound_text::TextEngine::measure`] 居中，
+    ///   避免正文 `AlignY::Middle` 的 `-1.0` 行盒偏移影响符号垂直居中。
+    pub fn shape_symbol_glyph(
+        &mut self,
+        glyph: &str,
+        rect: Rect,
+        size: f32,
+    ) -> Option<Vec<GlyphQuad>> {
+        if glyph.is_empty()
+            || !size.is_finite()
+            || size <= 0.0
+            || rect.width() <= 0.0
+            || rect.height() <= 0.0
+        {
+            return None;
+        }
+        let family = self.engine.symbol_font_family()?.to_owned();
+        let scale = self.effective_raster_scale();
+        let scaled_size = size * scale;
+        let style = unbound_text::TextStyle {
+            font_size: scaled_size,
+            line_height: scaled_size,
+            weight: 400,
+            family: Some(family),
+            ..unbound_text::TextStyle::default()
+        };
+        let measured = self.engine.measure(glyph, &style);
+        let width = measured.x / scale;
+        let height = (measured.y / scale).max(size);
+        let origin = Vec2::new(
+            ((rect.center().x - width * 0.5) * scale).round() / scale,
+            ((rect.center().y - height * 0.5) * scale).round() / scale,
+        );
+        let shaped = match self.engine.shape_laid_out(glyph, &style) {
+            Some(shaped) => shaped,
+            None => self.engine.shape(glyph, &style),
+        };
+        let mut quads = self.cache.quads_for(
+            self.engine,
+            &shaped,
+            Vec2::new(origin.x * scale, origin.y * scale),
+            400,
+            false,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for quad in &mut quads {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+        if quads.is_empty() {
+            None
+        } else {
+            Some(quads)
+        }
+    }
 }
 
 /// 在冒泡到应用程序前提供给 [`UiWidget::reduce`] 的高层输入事件。
@@ -4229,5 +4304,38 @@ impl UiWidget for WidgetCatalogId {
                 text_ctx.shape_line(text, line_r, size, 400, AlignX::Left, AlignY::Top)
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unbound_text::{GlyphCache, SymbolFontPolicy, TextEngine};
+
+    #[test]
+    fn shape_symbol_glyph_returns_none_when_disabled_or_empty() {
+        let mut engine = TextEngine::new();
+        engine.set_symbol_font_policy(SymbolFontPolicy::Disabled);
+        let mut cache = GlyphCache::new();
+        let mut ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+        assert_eq!(ctx.symbol_font_family(), None);
+        assert!(!ctx.has_symbol_font());
+
+        let rect = Rect::new(0.0, 0.0, 32.0, 32.0);
+        assert!(ctx.shape_symbol_glyph("\u{E71D}", rect, 24.0).is_none());
+        assert!(ctx.shape_symbol_glyph("", rect, 24.0).is_none());
+        assert!(ctx.shape_symbol_glyph("\u{E71D}", rect, 0.0).is_none());
+
+        // 即使启用 Force 策略，空字形也必须直接返回 None。
+        ctx.engine
+            .set_symbol_font_policy(SymbolFontPolicy::Force("NonExistentSymbolFont"));
+        assert_eq!(ctx.symbol_font_family(), Some("NonExistentSymbolFont"));
+        assert!(ctx.has_symbol_font());
+        assert!(ctx.shape_symbol_glyph("", rect, 24.0).is_none());
     }
 }

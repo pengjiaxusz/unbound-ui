@@ -364,6 +364,7 @@ pub fn load_wallpaper() -> Result<(Arc<DynamicImage>, SystemTime, u64), String> 
         }
     };
 
+    #[allow(clippy::needless_match)]
     match load_wallpaper_from_path(&path) {
         Ok(result) => Ok(result),
         Err(err) => {

@@ -42,7 +42,7 @@ use crate::theme;
 /// 前 6 个是首批试点，其后 12 个为「基础输入与文本类」批次，再后 28 个为
 /// 「导航、浮层、集合与日期类」批次，后续包含补齐与扩展控件。
 /// 控件名统一使用 WinUI 3 官方规范名。
-pub const SUPPORTED_CONTROLS: [&str; 73] = [
+pub const SUPPORTED_CONTROLS: [&str; 74] = [
     // 首批试点（6）
     "Button",
     "CheckBox",
@@ -116,7 +116,7 @@ pub const SUPPORTED_CONTROLS: [&str; 73] = [
     // 第六批：集合与选补容器类补充（2）
     "RangeSelector",
     "HeaderedContentControl",
-    // 第七批：NavigationView 多形态差分矩阵（7 扩展场景，含按需叠加滚动条溢出态）
+    // 第七批：NavigationView 多形态差分矩阵（8 扩展场景，含展开与折叠溢出态）
     "NavigationViewLeftClosed",
     "NavigationViewLeftCompact",
     "NavigationViewLeftMinimal",
@@ -124,6 +124,7 @@ pub const SUPPORTED_CONTROLS: [&str; 73] = [
     "NavigationViewHierarchical",
     "NavigationViewChrome",
     "NavigationViewOverflow",
+    "NavigationViewLeftClosedOverflow",
 ];
 
 /// 把一个 WinUI 3 规范名解析为目录标识。
@@ -140,7 +141,8 @@ pub fn catalog_id_for(control: &str) -> Option<unbound_widgets::WidgetCatalogId>
         | "NavigationViewTop"
         | "NavigationViewHierarchical"
         | "NavigationViewChrome"
-        | "NavigationViewOverflow" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
+        | "NavigationViewOverflow"
+        | "NavigationViewLeftClosedOverflow" => Some(unbound_widgets::WidgetCatalogId::NavigationView),
         "TitleBar" => None,
         other => unbound_widgets::WidgetCatalogId::from_winui3_name(other),
     }
@@ -2047,42 +2049,40 @@ fn emit_case(
                 let w = if rect.width() > 0.0 {
                     rect.width()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_WIDTH
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_WIDTH
                 };
                 let h = if rect.height() > 0.0 {
                     rect.height()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_BUTTON_HEIGHT
+                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_HEIGHT
                 };
-                // 剥离线性混合字形，改用 sRGB 预混纹理绘制强调色底板上的图标与文字。
-                fixture.output.primitives.retain(|p| {
-                    let pt = p.prim_type_and_flags & 0xFF;
-                    pt != PrimType::Glyph as u32 && pt != PrimType::GlyphColor as u32
-                });
-                fixture.output.payloads.clear();
                 let stack_top = rect.origin.y + ((h - 30.0) * 0.5).round();
-                let icon_r = Rect::new(rect.origin.x, stack_top - 3.0, w, 16.0);
-                let icon_quads = text_ctx.shape_line_styled(
+                let icon_r = Rect::new(rect.origin.x, stack_top - 1.0, w, 16.0);
+                // 存在平台符号字体时，剥离线性混合字形并改用 sRGB 预混纹理绘制强调色底板上的图标与文字；
+                // 无符号字体时保留 fixture 内的 ShellIcon::Bold 矢量与标签图元，避免清空曲线载荷。
+                if let Some(icon_quads) = text_ctx.shape_symbol_glyph(
                     unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_GLYPH,
                     icon_r,
                     16.0,
-                    400,
-                    Some("Segoe Fluent Icons"),
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
-                let label_r = Rect::new(rect.origin.x, stack_top + 18.0, w, 12.0);
-                let label_quads = text_ctx.shape_line_styled(
-                    unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
-                    label_r,
-                    12.0,
-                    400,
-                    None,
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
-                texture_quads.extend(icon_quads);
-                texture_quads.extend(label_quads);
+                ) {
+                    fixture.output.primitives.retain(|p| {
+                        let pt = p.prim_type_and_flags & 0xFF;
+                        pt != PrimType::Glyph as u32 && pt != PrimType::GlyphColor as u32
+                    });
+                    fixture.output.payloads.clear();
+                    let label_r = Rect::new(rect.origin.x, stack_top + 18.0, w, 12.0);
+                    let label_quads = text_ctx.shape_line_styled(
+                        unbound_widgets::slot_fixture::CANONICAL_APP_BAR_TOGGLE_BUTTON_LABEL,
+                        label_r,
+                        12.0,
+                        400,
+                        None,
+                        unbound_widgets::AlignX::Center,
+                        unbound_widgets::AlignY::Middle,
+                    );
+                    texture_quads.extend(icon_quads);
+                    texture_quads.extend(label_quads);
+                }
                 let visual_r = Rect::new(
                     rect.origin.x + 2.0,
                     rect.origin.y + 6.0,
@@ -2324,7 +2324,8 @@ fn emit_case(
         | "NavigationViewTop"
         | "NavigationViewHierarchical"
         | "NavigationViewChrome"
-        | "NavigationViewOverflow" => {
+        | "NavigationViewOverflow"
+        | "NavigationViewLeftClosedOverflow" => {
             let (default_w, default_h) = match case.control {
                 // 基础场景含 5 个主菜单项（Header + 3 项 + 分隔线），280px 高时 WinUI 会把
                 // 末尾的 Analytics 滚出可视区，两侧内容对不上；统一提到 360px 让全部菜单项可见。
@@ -2345,263 +2346,7 @@ fn emit_case(
             };
             let nav_r = Rect::new(rect.origin.x, rect.origin.y, nav_w, nav_h);
 
-            let (desc, expanded_ids) = match case.control {
-                "NavigationViewLeftClosed" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
-                    .is_pane_open(false)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                "NavigationViewLeftCompact" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftCompact)
-                    .open_pane_length(220.0)
-                    .is_pane_open(true)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                "NavigationViewLeftMinimal" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftMinimal)
-                    .is_pane_open(checked)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                "NavigationViewTop" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(4, "Reports")
-                                    .with_glyph("\u{E8A5}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Top)
-                    .overflow_label_mode(unbound_widgets::NavigationViewOverflowLabelMode::NoLabel)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                "NavigationViewHierarchical" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Collections")
-                                    .with_glyph("\u{E8B7}")
-                                    .selects_on_invoked(false)
-                                    .with_children(vec![
-                                        unbound_widgets::NavigationViewMenuItem::item(
-                                            unbound_widgets::NavigationViewItem::new(21, "Notes")
-                                                .with_glyph("\u{E7C3}"),
-                                        ),
-                                        unbound_widgets::NavigationViewMenuItem::item(
-                                            unbound_widgets::NavigationViewItem::new(22, "Mail")
-                                                .with_glyph("\u{E715}"),
-                                        ),
-                                    ]),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
-                    .open_pane_length(220.0)
-                    .is_pane_open(true)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(22)),
-                    vec![2],
-                ),
-                "NavigationViewChrome" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
-                    .open_pane_length(220.0)
-                    .is_pane_open(true)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Visible,
-                    )
-                    .is_back_enabled(true)
-                    .pane_title("Menu")
-                    .header("Home")
-                    .with_auto_suggest_box("Search")
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                "NavigationViewOverflow" => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(4, "Reports")
-                                    .with_glyph("\u{E8A5}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(5, "Projects")
-                                    .with_glyph("\u{E8B7}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(6, "Tasks")
-                                    .with_glyph("\u{E762}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(7, "Calendar")
-                                    .with_glyph("\u{E787}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(8, "Messages")
-                                    .with_glyph("\u{E715}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(9, "Contacts")
-                                    .with_glyph("\u{E77B}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(10, "Archive")
-                                    .with_glyph("\u{E7B8}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
-                    .open_pane_length(220.0)
-                    .is_pane_open(true)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-                _ => (
-                    unbound_widgets::NavigationViewDesc::new(
-                        nav_r,
-                        vec![
-                            unbound_widgets::NavigationViewMenuItem::header("Workspace"),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(1, "Home")
-                                    .with_glyph("\u{E80F}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(2, "Library")
-                                    .with_glyph("\u{E8F1}"),
-                            ),
-                            unbound_widgets::NavigationViewMenuItem::separator(),
-                            unbound_widgets::NavigationViewMenuItem::item(
-                                unbound_widgets::NavigationViewItem::new(3, "Analytics")
-                                    .with_glyph("\u{E9D2}"),
-                            ),
-                        ],
-                    )
-                    .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
-                    .open_pane_length(220.0)
-                    .is_pane_open(true)
-                    .is_settings_visible(true)
-                    .is_back_button_visible(
-                        unbound_widgets::NavigationViewBackButtonVisible::Collapsed,
-                    )
-                    .footer_menu_items(vec![unbound_widgets::NavigationViewMenuItem::item(
-                        unbound_widgets::NavigationViewItem::new(90, "Account")
-                            .with_glyph("\u{E77B}"),
-                    )])
-                    .selected_item(Some(1)),
-                    Vec::new(),
-                ),
-            };
-
+            let (desc, expanded_ids) = navigation_view_parity_desc(case.control, nav_r, checked);
             let mut nav_state = unbound_widgets::NavigationViewState::from_desc(&desc);
             nav_state.expanded_item_ids = expanded_ids;
             nav_state.set_animations_enabled(false, &desc);
@@ -3943,26 +3688,29 @@ fn emit_case(
             fixture.total_size
         }
         "FontIcon" => {
-            if control.disabled && case.theme == "light" {
-                let size = if rect.width() > 0.0 {
-                    rect.width().min(if rect.height() > 0.0 {
-                        rect.height()
-                    } else {
-                        rect.width()
-                    })
+            // 亮色禁用态下若平台存在符号字体，继续通过 `texture_quads` 做 sRGB 线性覆盖率预混，
+            // 避免默认着色器的浅底字形补偿曲线叠加半透明令牌使边缘二次加深；
+            // 其余状态及无符号字体回退统一走 `emit_canonical_font_icon_fixture`。
+            let size = if rect.width() > 0.0 {
+                rect.width().min(if rect.height() > 0.0 {
+                    rect.height()
                 } else {
-                    unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_SIZE
-                };
-                let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
-                let quads = text_ctx.shape_line_styled(
+                    rect.width()
+                })
+            } else {
+                unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_SIZE
+            };
+            let total_r = Rect::new(rect.origin.x, rect.origin.y, size, size);
+            let premixed_quads = if control.disabled && case.theme == "light" {
+                text_ctx.shape_symbol_glyph(
                     unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_GLYPH,
                     total_r,
                     unbound_widgets::slot_fixture::CANONICAL_FONT_ICON_FONT_SIZE,
-                    400,
-                    Some("Segoe Fluent Icons"),
-                    unbound_widgets::AlignX::Center,
-                    unbound_widgets::AlignY::Middle,
-                );
+                )
+            } else {
+                None
+            };
+            if let Some(quads) = premixed_quads {
                 texture_quads.extend(quads);
                 Vec2::new(size, size)
             } else {
@@ -4005,7 +3753,7 @@ fn shape_at(
     shape_at_styled(text_ctx, text, origin, size, 400, None)
 }
 
-/// 与 [`shape_at`] 相同，但允许指定字重与字体族（用于 Segoe Fluent Icons 字形）。
+/// 与 [`shape_at`] 相同，但允许指定字重与字体族（用于平台符号字体字形）。
 fn shape_at_styled(
     text_ctx: &mut TextCtx<'_>,
     text: &str,
@@ -4113,7 +3861,7 @@ fn emit_text_left_middle(
     emit_quads(scene, &quads, color, z);
 }
 
-/// 把一枚 Segoe Fluent Icons 字形居中绘制到给定方框。
+/// 把一枚平台符号字体字形居中绘制到给定方框。
 #[allow(clippy::too_many_arguments)]
 fn emit_icon_centered(
     text_ctx: &mut TextCtx<'_>,
@@ -4129,15 +3877,21 @@ fn emit_icon_centered(
 }
 
 /// 在 `rect` 内居中的单个图标字形四边形（不发射图元）。
+///
+/// 通过 [`TextCtx::symbol_font_family`] 获取平台可用符号字体族；
+/// 当平台无可用符号字体或策略禁用时返回空集合。
 fn icon_quads(
     text_ctx: &mut TextCtx<'_>,
     glyph: &str,
     rect: Rect,
     size: f32,
 ) -> Vec<unbound_text::GlyphQuad> {
+    let Some(family) = text_ctx.symbol_font_family().map(str::to_owned) else {
+        return Vec::new();
+    };
     let scale = text_ctx.effective_raster_scale();
     let mut style = unbound_text::TextStyle::sized(size * scale);
-    style.family = Some("Segoe Fluent Icons".to_owned());
+    style.family = Some(family.clone());
     let measured = text_ctx.engine.measure(glyph, &style);
     let width = measured.x / scale;
     let height = measured.y / scale;
@@ -4145,14 +3899,250 @@ fn icon_quads(
         rect.center().x - width * 0.5,
         rect.center().y - height * 0.5,
     );
-    shape_at_styled(
-        text_ctx,
-        glyph,
-        origin,
-        size,
-        400,
-        Some("Segoe Fluent Icons"),
-    )
+    shape_at_styled(text_ctx, glyph, origin, size, 400, Some(family.as_str()))
+}
+
+/// 构造 `NavigationViewOverflow` 与 `NavigationViewLeftClosedOverflow` 共用的 10 项溢出菜单。
+///
+/// 文案与图标码点与 `tools/winui-reference/Catalog.cs` 的 `AddOverflowNavigationItems` 逐项对称。
+fn navigation_view_overflow_menu_items() -> Vec<unbound_widgets::NavigationViewMenuItem> {
+    vec![
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(2, "Library").with_glyph("\u{E8F1}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(3, "Analytics").with_glyph("\u{E908}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(4, "Reports").with_glyph("\u{E8A5}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(5, "Projects").with_glyph("\u{E8B7}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(6, "Tasks").with_glyph("\u{E762}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(7, "Calendar").with_glyph("\u{E787}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(8, "Messages").with_glyph("\u{E715}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(9, "Contacts").with_glyph("\u{E77B}"),
+        ),
+        unbound_widgets::NavigationViewMenuItem::item(
+            unbound_widgets::NavigationViewItem::new(10, "Archive").with_glyph("\u{E7B8}"),
+        ),
+    ]
+}
+
+/// 按控件规范名构造对应的 `NavigationView` 基准描述符与默认展开项列表。
+fn navigation_view_parity_desc(
+    control: &str,
+    nav_r: Rect,
+    checked: bool,
+) -> (unbound_widgets::NavigationViewDesc, Vec<u64>) {
+    match control {
+        "NavigationViewLeftClosed" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+            .is_pane_open(false)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewLeftCompact" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftCompact)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewLeftMinimal" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::LeftMinimal)
+            .is_pane_open(checked)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewTop" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(3, "Analytics")
+                            .with_glyph("\u{E908}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(4, "Reports")
+                            .with_glyph("\u{E8A5}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Top)
+            .overflow_label_mode(unbound_widgets::NavigationViewOverflowLabelMode::NoLabel)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewHierarchical" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Collections")
+                            .with_glyph("\u{E8B7}")
+                            .selects_on_invoked(false)
+                            .with_children(vec![
+                                unbound_widgets::NavigationViewMenuItem::item(
+                                    unbound_widgets::NavigationViewItem::new(21, "Notes")
+                                        .with_glyph("\u{E7C3}"),
+                                ),
+                                unbound_widgets::NavigationViewMenuItem::item(
+                                    unbound_widgets::NavigationViewItem::new(22, "Mail")
+                                        .with_glyph("\u{E715}"),
+                                ),
+                            ]),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .selected_item(Some(22)),
+            vec![2],
+        ),
+        "NavigationViewChrome" => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Visible)
+            .is_back_enabled(true)
+            .pane_title("Menu")
+            .header("Home")
+            .with_auto_suggest_box("Search")
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewOverflow" => (
+            unbound_widgets::NavigationViewDesc::new(nav_r, navigation_view_overflow_menu_items())
+                .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                .open_pane_length(220.0)
+                .is_pane_open(true)
+                .is_settings_visible(true)
+                .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+                .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        "NavigationViewLeftClosedOverflow" => (
+            unbound_widgets::NavigationViewDesc::new(nav_r, navigation_view_overflow_menu_items())
+                .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+                .is_pane_open(false)
+                .is_settings_visible(true)
+                .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+                .selected_item(Some(1)),
+            Vec::new(),
+        ),
+        _ => (
+            unbound_widgets::NavigationViewDesc::new(
+                nav_r,
+                vec![
+                    unbound_widgets::NavigationViewMenuItem::header("Workspace"),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(1, "Home").with_glyph("\u{E80F}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(2, "Library")
+                            .with_glyph("\u{E8F1}"),
+                    ),
+                    unbound_widgets::NavigationViewMenuItem::separator(),
+                    unbound_widgets::NavigationViewMenuItem::item(
+                        unbound_widgets::NavigationViewItem::new(3, "Analytics")
+                            .with_glyph("\u{E908}"),
+                    ),
+                ],
+            )
+            .pane_display_mode(unbound_widgets::NavigationViewPaneDisplayMode::Left)
+            .open_pane_length(220.0)
+            .is_pane_open(true)
+            .is_settings_visible(true)
+            .is_back_button_visible(unbound_widgets::NavigationViewBackButtonVisible::Collapsed)
+            .footer_menu_items(vec![unbound_widgets::NavigationViewMenuItem::item(
+                unbound_widgets::NavigationViewItem::new(90, "Account").with_glyph("\u{E77B}"),
+            )])
+            .selected_item(Some(1)),
+            Vec::new(),
+        ),
+    }
 }
 
 /// 把一次发射的图元与载荷追加到场景。
@@ -4237,6 +4227,35 @@ mod tests {
         );
     }
 
+    /// 检查场景图元中是否存在垂直静止态 2px 滚动条细滑块。
+    fn has_vertical_idle_scrollbar_thumb(scene: &Gallery) -> bool {
+        scene.primitives.iter().any(|prim| {
+            prim.prim_type() == PrimType::RoundedRect
+                && (prim.size[0] - unbound_widgets::SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01
+                && prim.opacity() > 0.1
+        })
+    }
+
+    /// 检查场景图元中是否存在水平静止态 2px 滚动条细滑块。
+    fn has_horizontal_idle_scrollbar_thumb(scene: &Gallery) -> bool {
+        scene.primitives.iter().any(|prim| {
+            prim.prim_type() == PrimType::RoundedRect
+                && (prim.size[1] - unbound_widgets::SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01
+                && prim.opacity() > 0.1
+        })
+    }
+
+    /// 检查命中区列表是否包含指定轴向的滚动条轨道或滑块命中区。
+    fn has_scrollbar_hit(
+        hits: &[unbound_input::HitRegion],
+        owner_node: u64,
+        axis: unbound_widgets::ScrollbarAxis,
+    ) -> bool {
+        let track = unbound_widgets::scrollbar_track_node(owner_node, axis);
+        let thumb = unbound_widgets::scrollbar_thumb_node(owner_node, axis);
+        hits.iter().any(|h| h.node == track || h.node == thumb)
+    }
+
     #[test]
     fn test_navigation_view_overflow_emits_visible_scrollbar() {
         let mut engine = unbound_text::TextEngine::new();
@@ -4253,15 +4272,228 @@ mod tests {
         let mut scene = Gallery::new();
         let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
         assert!(res.is_ok(), "NavigationViewOverflow emit failed: {res:?}");
-        // Left 窗格溢出时必须产出宽度为 2px 的静止态细滑块且半透明度 > 0。
-        let has_idle_thumb = scene.primitives.iter().any(|prim| {
-            prim.prim_type() == PrimType::RoundedRect
-                && (prim.size[0] - unbound_widgets::scroll::SCROLLBAR_THUMB_IDLE_WIDTH).abs() < 0.01
-                && prim.opacity() > 0.1
-        });
+        // Left 展开窗格溢出时必须产出宽度为 2px 的静止态细滑块且半透明度 > 0。
         assert!(
-            has_idle_thumb,
+            has_vertical_idle_scrollbar_thumb(&scene),
             "NavigationViewOverflow must emit a visible Win11 idle scrollbar thumb"
+        );
+
+        // 同时验证底层发射结果确实处于溢出态且包含垂直滚动条命中区。
+        let (desc, _) = navigation_view_parity_desc("NavigationViewOverflow", bounds, false);
+        let mut nav_state = unbound_widgets::NavigationViewState::from_desc(&desc);
+        nav_state.set_animations_enabled(false, &desc);
+        let emitted = unbound_widgets::emit_navigation_view(
+            700,
+            &desc,
+            ControlState::default(),
+            &nav_state,
+            &mut text_ctx,
+        );
+        let bar = desc
+            .menu_scrollbar_desc(&emitted.layout, &nav_state, false)
+            .expect("NavigationViewOverflow must produce a vertical scrollbar descriptor");
+        assert!(
+            bar.is_overflowing(),
+            "NavigationViewOverflow menu content must overflow viewport"
+        );
+        assert!(
+            has_scrollbar_hit(
+                &emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Vertical,
+            ),
+            "NavigationViewOverflow must emit vertical scrollbar hit regions"
+        );
+    }
+
+    #[test]
+    fn test_navigation_view_left_closed_overflow_and_non_overflow_scrollbar_contract() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 360.0, 280.0);
+
+        // 1. 未溢出折叠态（NavigationViewLeftClosed）：零滚动条图元、零滚动条命中区。
+        let non_overflow_case = ParityCase::new("NavigationViewLeftClosed", "normal", "light");
+        let mut non_overflow_scene = Gallery::new();
+        let res = emit_case(
+            &non_overflow_case,
+            bounds,
+            &mut non_overflow_scene,
+            &mut text_ctx,
+            &mut texture_quads,
+        );
+        assert!(res.is_ok(), "NavigationViewLeftClosed emit failed: {res:?}");
+        assert!(
+            !has_vertical_idle_scrollbar_thumb(&non_overflow_scene),
+            "NavigationViewLeftClosed must not emit scrollbar thumb primitives"
+        );
+
+        let (closed_desc, _) =
+            navigation_view_parity_desc("NavigationViewLeftClosed", bounds, false);
+        let mut closed_state = unbound_widgets::NavigationViewState::from_desc(&closed_desc);
+        closed_state.set_animations_enabled(false, &closed_desc);
+        let closed_emitted = unbound_widgets::emit_navigation_view(
+            700,
+            &closed_desc,
+            ControlState::default(),
+            &closed_state,
+            &mut text_ctx,
+        );
+        let closed_bar = closed_desc
+            .menu_scrollbar_desc(&closed_emitted.layout, &closed_state, false)
+            .expect("Left mode must return a scrollbar descriptor for overflow inspection");
+        assert!(
+            !closed_bar.is_overflowing(),
+            "NavigationViewLeftClosed must not overflow with only 2 menu items"
+        );
+        assert!(
+            !has_scrollbar_hit(
+                &closed_emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Vertical,
+            ),
+            "NavigationViewLeftClosed must emit zero scrollbar hit regions"
+        );
+
+        // 2. 折叠溢出态（NavigationViewLeftClosedOverflow）：静止态自动隐藏（与 navigation_view.rs 契约一致）。
+        let closed_overflow_case =
+            ParityCase::new("NavigationViewLeftClosedOverflow", "normal", "light");
+        let mut closed_overflow_scene = Gallery::new();
+        let res = emit_case(
+            &closed_overflow_case,
+            bounds,
+            &mut closed_overflow_scene,
+            &mut text_ctx,
+            &mut texture_quads,
+        );
+        assert!(
+            res.is_ok(),
+            "NavigationViewLeftClosedOverflow emit failed: {res:?}"
+        );
+        assert!(
+            !has_vertical_idle_scrollbar_thumb(&closed_overflow_scene),
+            "NavigationViewLeftClosedOverflow idle state must auto-hide scrollbar thumb"
+        );
+
+        let (overflow_desc, _) =
+            navigation_view_parity_desc("NavigationViewLeftClosedOverflow", bounds, false);
+        let mut overflow_state = unbound_widgets::NavigationViewState::from_desc(&overflow_desc);
+        overflow_state.set_animations_enabled(false, &overflow_desc);
+        let idle_emitted = unbound_widgets::emit_navigation_view(
+            700,
+            &overflow_desc,
+            ControlState::default(),
+            &overflow_state,
+            &mut text_ctx,
+        );
+        let idle_bar = overflow_desc
+            .menu_scrollbar_desc(&idle_emitted.layout, &overflow_state, false)
+            .expect("NavigationViewLeftClosedOverflow must return a scrollbar descriptor");
+        assert!(
+            idle_bar.is_overflowing(),
+            "NavigationViewLeftClosedOverflow must trigger vertical menu overflow"
+        );
+        assert_eq!(
+            idle_bar.visibility,
+            unbound_widgets::ScrollBarVisibility::Hidden,
+            "NavigationViewLeftClosedOverflow idle state must hide scrollbar under Auto policy"
+        );
+        assert!(
+            !has_scrollbar_hit(
+                &idle_emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Vertical,
+            ),
+            "NavigationViewLeftClosedOverflow idle state must emit zero scrollbar hit regions"
+        );
+
+        // 3. 折叠溢出态在悬停窗格时按需显现滚动条（验证确实为可滚动溢出态）。
+        overflow_state.pane_hovered = true;
+        let hover_emitted = unbound_widgets::emit_navigation_view(
+            700,
+            &overflow_desc,
+            ControlState::default(),
+            &overflow_state,
+            &mut text_ctx,
+        );
+        let hover_bar = overflow_desc
+            .menu_scrollbar_desc(&hover_emitted.layout, &overflow_state, false)
+            .expect("hovered NavigationViewLeftClosedOverflow must return a scrollbar descriptor");
+        assert_eq!(
+            hover_bar.visibility,
+            unbound_widgets::ScrollBarVisibility::Auto,
+            "hovered NavigationViewLeftClosedOverflow must reveal scrollbar"
+        );
+        assert!(
+            has_scrollbar_hit(
+                &hover_emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Vertical,
+            ),
+            "hovered NavigationViewLeftClosedOverflow must emit vertical scrollbar hit regions"
+        );
+    }
+
+    #[test]
+    fn test_navigation_view_top_uses_overflow_popup_without_horizontal_scrollbar() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 0,
+            raster_scale: 1.0,
+        };
+        let mut texture_quads = Vec::new();
+        let bounds = Rect::new(0.0, 0.0, 360.0, 200.0);
+        let case = ParityCase::new("NavigationViewTop", "normal", "light");
+        let mut scene = Gallery::new();
+        let res = emit_case(&case, bounds, &mut scene, &mut text_ctx, &mut texture_quads);
+        assert!(res.is_ok(), "NavigationViewTop emit failed: {res:?}");
+        assert!(
+            !has_horizontal_idle_scrollbar_thumb(&scene),
+            "NavigationViewTop must not emit horizontal scrollbar thumb primitives"
+        );
+
+        let (top_desc, _) = navigation_view_parity_desc("NavigationViewTop", bounds, false);
+        let mut top_state = unbound_widgets::NavigationViewState::from_desc(&top_desc);
+        top_state.set_animations_enabled(false, &top_desc);
+        let top_emitted = unbound_widgets::emit_navigation_view(
+            700,
+            &top_desc,
+            ControlState::default(),
+            &top_state,
+            &mut text_ctx,
+        );
+        // Top 模式保持 MenuOverflowPopup（...）溢出按钮，不生成任何滚动条描述符或命中区。
+        assert!(
+            top_emitted.layout.overflow_button_rect.is_some(),
+            "NavigationViewTop must keep MenuOverflowPopup (...) button when items overflow"
+        );
+        assert!(
+            top_desc
+                .menu_scrollbar_desc(&top_emitted.layout, &top_state, false)
+                .is_none(),
+            "NavigationViewTop must not produce any scrollbar descriptor"
+        );
+        assert!(
+            !has_scrollbar_hit(
+                &top_emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Horizontal,
+            ) && !has_scrollbar_hit(
+                &top_emitted.output.sub_hits,
+                700,
+                unbound_widgets::ScrollbarAxis::Vertical,
+            ),
+            "NavigationViewTop must emit zero scrollbar hit regions"
         );
     }
 }

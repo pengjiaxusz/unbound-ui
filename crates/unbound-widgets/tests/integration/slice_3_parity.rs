@@ -339,18 +339,73 @@ fn flip_view_normal_and_disabled_states() {
 // 6. RefreshContainer 下拉刷新指示器容器
 // ---------------------------------------------------------------------------
 
+/// 采样 `WidgetOutput` 中全部 `PrimType::Curve` 图元的描边墨迹包围盒 `[min_x, min_y, max_x, max_y]`。
+fn sample_curve_ink_bbox(output: &WidgetOutput) -> [f32; 4] {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+
+    for prim in &output.primitives {
+        if prim.prim_type() != PrimType::Curve {
+            continue;
+        }
+        let payload = &output.payloads[prim.extra_payload_idx as usize];
+        let half_w = payload.line_width * 0.5;
+        let ox = prim.local_pos[0];
+        let oy = prim.local_pos[1];
+        let p0 = [ox + payload.p0[0], oy + payload.p0[1]];
+        let p1 = [ox + payload.p1[0], oy + payload.p1[1]];
+        let p2 = [ox + payload.p2[0], oy + payload.p2[1]];
+        for step in 0_u16..=32 {
+            let t = f32::from(step) / 32.0;
+            let u = 1.0 - t;
+            let x = u * u * p0[0] + 2.0 * u * t * p1[0] + t * t * p2[0];
+            let y = u * u * p0[1] + 2.0 * u * t * p1[1] + t * t * p2[1];
+            min_x = min_x.min(x - half_w);
+            min_y = min_y.min(y - half_w);
+            max_x = max_x.max(x + half_w);
+            max_y = max_y.max(y + half_w);
+        }
+    }
+
+    [min_x, min_y, max_x, max_y]
+}
+
 #[test]
 fn refresh_container_normal_and_disabled_states() {
     with_test_ctx(|text_ctx| {
-        let rect = Rect::new(0.0, 0.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
+        // 对齐 parity 画布原点 `(16, 16)`，便于直接对照参考图 `x=[136..155], y=[56..75]`。
+        let rect = Rect::new(16.0, 16.0, STANDARD_REFRESH_WIDTH, STANDARD_REFRESH_HEIGHT);
 
-        // 1. 正常态契约：包含 ProgressRing 环形强调色弧线
+        // 1. 正常态契约：24×24 指示器框内发射 6 条浅灰曲线（4 段圆弧 + 2 段 V 形箭头）
         let normal = emit_canonical_refresh_fixture(rect, FixtureState::normal(), text_ctx, 100);
         assert_eq!(normal.total_size.x, STANDARD_REFRESH_WIDTH);
         assert_eq!(normal.total_size.y, STANDARD_REFRESH_HEIGHT);
         assert_eq!(
             normal.indicator_rect.width(),
             STANDARD_REFRESH_INDICATOR_SIZE
+        );
+        assert_eq!(
+            normal.indicator_rect.height(),
+            STANDARD_REFRESH_INDICATOR_SIZE
+        );
+
+        let normal_curves: Vec<Token> = normal
+            .output
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::Curve)
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert_eq!(
+            normal_curves.len(),
+            6,
+            "normal RefreshContainer must emit 6 curve primitives (4 arc + 2 arrow)"
+        );
+        assert!(
+            normal_curves.iter().all(|&tok| tok == Token::TEXT_DISABLED),
+            "normal refresh ring icon must use Token::TEXT_DISABLED"
         );
 
         let normal_glyphs: Vec<Token> = normal
@@ -363,18 +418,69 @@ fn refresh_container_normal_and_disabled_states() {
         assert!(!normal_glyphs.is_empty());
         assert!(normal_glyphs.contains(&Token::TEXT_PRIMARY));
 
-        // 2. 禁用态契约：抑制弧线且文本降级
+        // 2. 禁用态契约：保留 6 条浅灰刷新曲线（恒定图元数不变量）且文本降级
         let disabled =
             emit_canonical_refresh_fixture(rect, FixtureState::disabled(), text_ctx, 100);
-        let curve_count = disabled
+        let disabled_curves: Vec<Token> = disabled
             .output
             .primitives
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
-            .count();
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
         assert_eq!(
-            curve_count, 0,
-            "disabled refresh indicator must suppress arc curves"
+            disabled_curves.len(),
+            6,
+            "disabled RefreshContainer must emit the same 6 curve primitives"
+        );
+        assert!(
+            disabled_curves
+                .iter()
+                .all(|&tok| tok == Token::TEXT_DISABLED),
+            "disabled refresh ring icon must use Token::TEXT_DISABLED"
+        );
+
+        let disabled_glyphs: Vec<Token> = disabled
+            .output
+            .primitives
+            .iter()
+            .filter(|p| matches!(p.prim_type(), PrimType::Glyph | PrimType::GlyphColor))
+            .map(|p| Token::new(p.fill_token_or_uv as u16))
+            .collect();
+        assert!(!disabled_glyphs.is_empty());
+        assert!(
+            disabled_glyphs
+                .iter()
+                .all(|&tok| tok == Token::TEXT_DISABLED),
+            "disabled RefreshContainer text must downgrade to Token::TEXT_DISABLED"
+        );
+
+        // 3. 无头内容包围盒回归校验：曲线墨迹精确覆盖参考图 20×20px 区域 x=[136..155], y=[56..75]
+        let normal_bbox = sample_curve_ink_bbox(&normal.output);
+        let disabled_bbox = sample_curve_ink_bbox(&disabled.output);
+        assert_eq!(
+            normal_bbox, disabled_bbox,
+            "normal and disabled refresh ring bbox must be identical"
+        );
+        assert!(
+            normal_bbox[0] <= 136.5 && normal_bbox[0] >= 135.5,
+            "refresh icon left edge must align with x=136, got {}",
+            normal_bbox[0]
+        );
+        assert!(
+            normal_bbox[2] >= 155.5 && normal_bbox[2] <= 156.5,
+            "refresh icon right edge must align with x=155, got {}",
+            normal_bbox[2]
+        );
+        assert!(
+            normal_bbox[1] <= 56.5 && normal_bbox[1] >= 55.0,
+            "refresh icon top edge must align with y=56, got {}",
+            normal_bbox[1]
+        );
+        assert!(
+            normal_bbox[3] >= 75.0 && normal_bbox[3] <= 76.0,
+            "refresh icon bottom edge must align with y=75, got {}",
+            normal_bbox[3]
         );
     });
 }
