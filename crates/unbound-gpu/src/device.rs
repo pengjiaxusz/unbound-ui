@@ -117,6 +117,8 @@ pub struct GpuFeatures {
     pub present_id: bool,
     /// 当持久化池位于 ReBAR 宿主可见显存时为 true。
     pub rebar: bool,
+    /// `VK_KHR_external_memory_win32` 已启用，支持 Windows DXGI / D3D11/D3D12 外部显存零拷贝导入。
+    pub external_memory_win32: bool,
 }
 
 impl GpuFeatures {
@@ -825,7 +827,10 @@ pub fn filter_instance_extensions(
 pub fn is_optional_device_extension(name: &str) -> bool {
     matches!(
         name,
-        "VK_EXT_swapchain_maintenance1" | "VK_KHR_present_wait" | "VK_KHR_present_id"
+        "VK_EXT_swapchain_maintenance1"
+            | "VK_KHR_present_wait"
+            | "VK_KHR_present_id"
+            | "VK_KHR_external_memory_win32"
     )
 }
 
@@ -1038,9 +1043,21 @@ impl Gpu {
     }
 
     unsafe fn new_inner(config: GpuConfig) -> Result<Self, GpuError> {
+        let requested_device_extensions = {
+            #[cfg(windows)]
+            {
+                let mut exts = config.device_extensions.clone();
+                push_unique(&mut exts, "VK_KHR_external_memory_win32");
+                exts
+            }
+            #[cfg(not(windows))]
+            {
+                config.device_extensions.clone()
+            }
+        };
         let mut diag = GpuInitDiagnostics {
             stage: "Entry::load",
-            requested_device_extensions: config.device_extensions.clone(),
+            requested_device_extensions: requested_device_extensions.clone(),
             ..Default::default()
         };
         store_init_diagnostics(&diag);
@@ -1200,8 +1217,7 @@ impl Gpu {
                 vk::api_version_patch(props.api_version)
             );
             let ext_names = device_extension_names(&instance, pd);
-            let missing: Vec<&str> = config
-                .device_extensions
+            let missing: Vec<&str> = requested_device_extensions
                 .iter()
                 .filter(|extension| {
                     !is_optional_device_extension(extension)
@@ -1244,8 +1260,7 @@ impl Gpu {
             if props.api_version >= vk::make_api_version(0, 1, 3, 0) {
                 score += 400;
             }
-            score += config
-                .device_extensions
+            score += requested_device_extensions
                 .iter()
                 .filter(|extension| is_optional_device_extension(extension))
                 .filter(|extension| ext_names.iter().any(|n| *n == **extension))
@@ -1288,7 +1303,7 @@ impl Gpu {
 
         // ---- 扩展依赖解析 ---------------------------------------------------
         let dev_resolution = resolve_device_extensions(
-            &config.device_extensions,
+            &requested_device_extensions,
             &dev_ext_names,
             &instance_exts,
             properties.api_version,
@@ -1371,6 +1386,7 @@ impl Gpu {
         // 闭包 `has_enabled_dev_ext` 持有不可变借用，需在其最后一次调用结束后才能可变借用。
         let swapchain_maintenance1_supported = has_enabled_dev_ext("VK_EXT_swapchain_maintenance1")
             && maintenance1_query.swapchain_maintenance1 == vk::TRUE;
+        let external_memory_win32_supported = has_enabled_dev_ext("VK_KHR_external_memory_win32");
         if !present_wait_supported {
             device_exts.retain(|e| e != "VK_KHR_present_wait" && e != "VK_KHR_present_id");
         }
@@ -1406,6 +1422,7 @@ impl Gpu {
             present_wait: present_wait_supported,
             present_id: present_wait_supported,
             rebar: false,
+            external_memory_win32: external_memory_win32_supported,
         };
 
         let missing = features.missing_required();
@@ -1709,6 +1726,15 @@ impl Gpu {
     #[must_use]
     pub fn frames_in_flight(&self) -> u32 {
         self.frames.len() as u32
+    }
+
+    /// 返回当前设备协商后的视频帧上传能力与层级画像。
+    #[must_use]
+    pub fn video_upload_capabilities(&self) -> crate::video::VideoUploadCapabilities {
+        crate::video::VideoUploadCapabilities::from_device_extensions(
+            self.features.external_memory_win32,
+            self.frames_in_flight() as usize,
+        )
     }
 
     /// 内存类型查找的公开封装（供纹理池使用）。

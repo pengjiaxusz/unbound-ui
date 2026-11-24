@@ -73,6 +73,7 @@ pub mod scheduler;
 pub mod settings;
 pub mod state_store;
 pub mod theme_driver;
+pub mod video;
 pub mod window_runner;
 
 pub use appearance::{
@@ -109,10 +110,15 @@ pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use theme_driver::{
     make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
 };
+pub use unbound_gpu::VideoUploadTier;
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use unbound_widgets::ergonomics::UiWidget;
+pub use video::{
+    VideoSurfaceDesc, VideoSurfaceHandle, VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState,
+    DEFAULT_VIDEO_VRAM_BUDGET_BYTES,
+};
 pub use window_runner::{
     run_windowed, run_windowed_with_frame_callback, run_windowed_with_hooks,
     run_windowed_with_hwnd, WindowedRunner,
@@ -1745,6 +1751,8 @@ pub enum WidgetSpec {
         /// 图像适应方式。
         fit: unbound_widgets::ObjectFit,
     },
+    /// 声明式视频表面控件（未就绪或被驱逐时绘制受控圆角占位图元，就绪后采样绑定槽位）。
+    VideoSurface(VideoSurfaceDesc),
     /// 虚拟树形视图。
     TreeView {
         /// 树形视图描述符。
@@ -2612,6 +2620,9 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
             WidgetSpec::ExternalImage { size, .. } => Some(*size),
+            WidgetSpec::VideoSurface(desc) => {
+                Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
+            }
             WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                 && desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -3035,6 +3046,12 @@ impl<'a> ViewBuilder<'a> {
             node_desc,
             WidgetSpec::ExternalImage { handle, size, fit },
         )
+    }
+
+    /// 声明式视频表面控件：未就绪或已驱逐时绘制受控圆角占位图元，就绪后发射 `PRIM_IMAGE` 采样绑定槽位。
+    pub fn video_surface(&mut self, key: u64, desc: VideoSurfaceDesc) -> NodeId {
+        let node_desc = RawNodeDesc::container().size(desc.size.x.max(0.0), desc.size.y.max(0.0));
+        self.widget(key, node_desc, WidgetSpec::VideoSurface(desc))
     }
 
     /// 声明式虚拟树形视图控件。
@@ -4849,6 +4866,20 @@ pub struct FrameReport {
     pub atlas_uploads: Vec<AtlasUpload>,
     /// 本帧待窗口运行器执行的外部纹理槽上传、更新与释放操作队列。
     pub external_texture_ops: Vec<ExternalTextureOp>,
+    /// 本帧待窗口运行器或测试驱动执行的视频表面上传、驱逐与释放操作队列。
+    pub video_surface_ops: Vec<VideoSurfaceOp>,
+    /// 累计派发上传的视频帧总数。
+    pub video_frame_upload_count: u64,
+    /// 累计因 Latest-Wins 覆盖丢弃的未读视频帧总数。
+    pub video_frame_dropped_count: u64,
+    /// 当前持有活跃 GPU 纹理槽的视频表面数量。
+    pub active_video_surfaces: usize,
+    /// 当前所有活跃视频表面合计占用的 VRAM 字节数。
+    pub video_vram_bytes: u64,
+    /// 累计因超出 VRAM 预算触发的离屏 LRU 驱逐次数。
+    pub video_eviction_count: u64,
+    /// 当前激活的视频帧上传档位（无头运行时默认为 `VideoUploadTier::HeadlessStub`）。
+    pub video_upload_tier: VideoUploadTier,
 }
 
 /// 单帧已挂载上下文菜单的点击反解条目。
@@ -6236,6 +6267,7 @@ impl<A: Application> AppRuntime<A> {
         self.dirty = self.dirty.merge(asset_dirty);
         let dirty = core::mem::replace(&mut self.dirty, DirtyFlags::NONE);
         if dirty == DirtyFlags::NONE && !self.force_rebuild {
+            let video_metrics = self.asset_hub.video_surface_metrics();
             return FrameReport {
                 diff: SceneDiff::Identical,
                 dirty,
@@ -6245,6 +6277,13 @@ impl<A: Application> AppRuntime<A> {
                 backdrops: self.backdrops.clone(),
                 atlas_uploads: self.collect_atlas_uploads(),
                 external_texture_ops: self.asset_hub.take_external_texture_ops(),
+                video_surface_ops: Vec::new(),
+                video_frame_upload_count: video_metrics.frame_upload_count,
+                video_frame_dropped_count: video_metrics.frame_dropped_count,
+                active_video_surfaces: video_metrics.active_surfaces,
+                video_vram_bytes: video_metrics.vram_bytes,
+                video_eviction_count: video_metrics.eviction_count,
+                video_upload_tier: video_metrics.upload_tier,
             };
         }
 
@@ -6489,6 +6528,8 @@ impl<A: Application> AppRuntime<A> {
         // 即便没有其他元素变脏。
         self.force_rebuild = inspector_active;
 
+        let video_surface_ops = self.asset_hub.drain_video_surface_ops(self.frame_count);
+        let video_metrics = self.asset_hub.video_surface_metrics();
         FrameReport {
             diff,
             dirty,
@@ -6498,6 +6539,13 @@ impl<A: Application> AppRuntime<A> {
             backdrops: self.backdrops.clone(),
             atlas_uploads: self.collect_atlas_uploads(),
             external_texture_ops: self.asset_hub.take_external_texture_ops(),
+            video_surface_ops,
+            video_frame_upload_count: video_metrics.frame_upload_count,
+            video_frame_dropped_count: video_metrics.frame_dropped_count,
+            active_video_surfaces: video_metrics.active_surfaces,
+            video_vram_bytes: video_metrics.vram_bytes,
+            video_eviction_count: video_metrics.eviction_count,
+            video_upload_tier: video_metrics.upload_tier,
         }
     }
 
@@ -6907,6 +6955,9 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
                     WidgetSpec::ExternalImage { size, .. } => Some(*size),
+                    WidgetSpec::VideoSurface(desc) => {
+                        Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
+                    }
                     WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                         && desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -7289,6 +7340,111 @@ impl<A: Application> AppRuntime<A> {
                         state,
                         &self.asset_hub,
                     );
+                    self.collector.push(entry.key, out);
+                }
+                WidgetSpec::VideoSurface(desc) => {
+                    // 零宽或零高退化布局矩形直接安全跳过，避免产生除零或退化图元。
+                    if rect.width() <= 0.0 || rect.height() <= 0.0 {
+                        continue;
+                    }
+                    self.asset_hub
+                        .mark_video_surface_visible(desc.handle, self.frame_count);
+                    let alpha = desc.opacity.clamp(0.0, 1.0);
+                    let z = entry.z_base.saturating_add(desc.z);
+                    let mut out = if let Some((slot, w, h)) =
+                        self.asset_hub.video_surface_slot(desc.handle)
+                    {
+                        let mut img = unbound_widgets::ImageDesc::new(
+                            rect,
+                            Vec2::new(w as f32, h as f32),
+                            slot,
+                        )
+                        .with_fit(desc.fit)
+                        .with_radii(desc.radius)
+                        .with_border(desc.border_width, desc.border_color);
+                        img.tint = desc.tint;
+                        img.sample_uv = desc.sample_uv;
+                        img.z = z;
+                        img.interactive = desc.interactive;
+                        if let Some(alt) = &desc.alt {
+                            img.alt = alt.clone();
+                        }
+                        unbound_widgets::emit_image_with_assets(
+                            entry.key,
+                            &img,
+                            state,
+                            &self.asset_hub,
+                        )
+                    } else {
+                        // 无效句柄、首帧未到、被驱逐或已释放时发射受控圆角占位图元，绝不采样未初始化槽位。
+                        let mut primitives = Vec::with_capacity(2);
+                        let mut payloads = Vec::with_capacity(1);
+                        let bg = unbound_widgets::primitive::instance(
+                            rect,
+                            desc.radius,
+                            desc.placeholder_color,
+                            unbound_theme::Token::NONE,
+                            0.0,
+                            0.0,
+                            PrimType::RoundedRect,
+                            SubElement::Background,
+                            z,
+                        );
+                        primitives.push(bg);
+                        payloads.push(GpuPayload {
+                            p0: [0.0; 2],
+                            p1: [0.0; 2],
+                            p2: [0.0, 0.0],
+                            line_width: 0.0,
+                            extra: 0,
+                            flags: 0,
+                            _reserved: [0; 3],
+                        });
+                        if desc.border_width > 0.0
+                            && desc.border_color != unbound_theme::Token::NONE
+                        {
+                            primitives.push(unbound_widgets::primitive::instance(
+                                rect,
+                                desc.radius,
+                                unbound_theme::Token::NONE,
+                                desc.border_color,
+                                desc.border_width,
+                                0.0,
+                                PrimType::RoundedRect,
+                                SubElement::Border,
+                                z,
+                            ));
+                        }
+                        let hit = (desc.interactive && !state.disabled).then(|| {
+                            unbound_input::HitRegion::new(
+                                entry.key,
+                                unbound_widgets::image::IMAGE_LAYER,
+                                u32::from(z),
+                                rect,
+                            )
+                            .with_shape(unbound_input::Shape::Rounded { radii: desc.radius })
+                        });
+                        let mut a11y =
+                            A11yNode::new(Role::Image, desc.alt.clone().unwrap_or_default(), rect)
+                                .disabled(state.disabled);
+                        if desc.interactive {
+                            a11y = a11y.clickable();
+                        }
+                        WidgetOutput {
+                            primitives,
+                            payloads,
+                            hit,
+                            a11y: Some(a11y),
+                            focusable: false,
+                            ..Default::default()
+                        }
+                    };
+                    if alpha < 1.0 {
+                        for primitive in &mut out.primitives {
+                            primitive.z_and_opacity =
+                                GpuPrimitiveInstance::pack_z_opacity(primitive.depth_u16(), alpha);
+                        }
+                    }
                     self.collector.push(entry.key, out);
                 }
                 WidgetSpec::TreeView {

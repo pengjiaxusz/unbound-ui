@@ -243,6 +243,12 @@ pub struct Pipelines {
     pub blur_up: vk::Pipeline,
     /// 全屏背景虚化合成图形管线。
     pub backdrop: vk::Pipeline,
+    /// 视频 YUV/HDR 转 RGBA8 计算着色器的描述符集布局（3 个采样平面 + 1 个输出存储图像）。
+    pub video_set_layout: vk::DescriptorSetLayout,
+    /// 视频转换计算管线布局（携带 32 字节 [`crate::video::VideoConvertPush`]）。
+    pub video_layout: vk::PipelineLayout,
+    /// 视频 YUV/HDR 转换计算管线（`video_convert.comp`）。
+    pub video_convert: vk::Pipeline,
     /// 供按窗口表面格式懒编译 4 条图形管线变体复用的着色器模块。
     graphics_shaders: GraphicsShaderModules,
     /// 按颜色附件格式懒缓存的 4 条窗口图形管线变体。
@@ -450,6 +456,67 @@ impl Pipelines {
         let blur_down = make_compute(shader::blur_down())?;
         let blur_up = make_compute(shader::blur_up())?;
 
+        // 视频 YUV/HDR 至 RGBA8 计算转换管线（3 个只读采样平面 + 1 个只写存储图像）。
+        let video_bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
+        let video_set_layout = device
+            .create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&video_bindings),
+                None,
+            )
+            .map_err(GpuError::from)?;
+        let video_set_layouts = [video_set_layout];
+        let video_pc_range = vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .offset(0)
+            .size(crate::video::VideoConvertPush::SIZE);
+        let video_layout = device
+            .create_pipeline_layout(
+                &vk::PipelineLayoutCreateInfo::default()
+                    .set_layouts(&video_set_layouts)
+                    .push_constant_ranges(&[video_pc_range]),
+                None,
+            )
+            .map_err(GpuError::from)?;
+        let video_convert = {
+            let module = shader_module(gpu, shader::VIDEO_CONVERT_COMP)?;
+            let stage_info = vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::COMPUTE)
+                .module(module)
+                .name(c"main");
+            let pipeline = device
+                .create_compute_pipelines(
+                    vk::PipelineCache::null(),
+                    &[vk::ComputePipelineCreateInfo::default()
+                        .stage(stage_info)
+                        .layout(video_layout)],
+                    None,
+                )
+                .map_err(|(_, e)| GpuError::from(e))?[0];
+            device.destroy_shader_module(module, None);
+            pipeline
+        };
+
         // 为默认离屏颜色格式（`B8G8R8A8_SRGB`）构建首组 4 条图形管线。
         let default_graphics = build_graphics_pipeline_set(
             device,
@@ -556,6 +623,9 @@ impl Pipelines {
             blur_down,
             blur_up,
             backdrop,
+            video_set_layout,
+            video_layout,
+            video_convert,
             graphics_shaders,
             format_cache,
             sampler,
@@ -854,6 +924,9 @@ impl Pipelines {
         device.destroy_pipeline(self.blur_down, None);
         device.destroy_pipeline(self.blur_up, None);
         device.destroy_pipeline(self.backdrop, None);
+        device.destroy_pipeline(self.video_convert, None);
+        device.destroy_pipeline_layout(self.video_layout, None);
+        device.destroy_descriptor_set_layout(self.video_set_layout, None);
         device.destroy_shader_module(self.graphics_shaders.uber_vert, None);
         device.destroy_shader_module(self.graphics_shaders.uber_frag, None);
         device.destroy_shader_module(self.graphics_shaders.opaque_core_vert, None);

@@ -26,8 +26,9 @@ pub use crate::{
     EventOutcome, ExternalTextureHandle, ExternalTextureOp, ExternalTextureState, FrameReport,
     I18nBundle, KeyDiscriminator, KeyScope, LayoutDirection, Locale, Modifiers, OverlayManager,
     PendingWidget, Propagation, TabHitTarget, ThemeSnapshotKey, ThemeSyncOutcome,
-    ThemeTransitionDriver, TitleBarSlots, ViewBuilder, ViewContext, WidgetSpec, WindowCommand,
-    ROOT,
+    ThemeTransitionDriver, TitleBarSlots, VideoSurfaceDesc, VideoSurfaceHandle,
+    VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState, VideoUploadTier, ViewBuilder,
+    ViewContext, WidgetSpec, WindowCommand, DEFAULT_VIDEO_VRAM_BUDGET_BYTES, ROOT,
 };
 
 pub use accesskit::Role;

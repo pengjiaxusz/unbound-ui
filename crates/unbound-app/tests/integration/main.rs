@@ -18,3 +18,4 @@ mod runtime_headless;
 mod runtime_subsystems;
 mod settings_and_select;
 mod tooltip_rich;
+mod video_surface;

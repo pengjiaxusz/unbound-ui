@@ -26,6 +26,7 @@ const SHADERS: &[&str] = &[
     "blur_up.comp",
     "backdrop.vert",
     "backdrop.frag",
+    "video_convert.comp",
 ];
 
 fn exe(name: &str) -> String {

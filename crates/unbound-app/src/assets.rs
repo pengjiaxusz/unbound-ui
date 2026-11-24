@@ -10,13 +10,20 @@
 
 use rustc_hash::FxHashMap;
 
-use unbound_asset::{AssetId, AssetKind, AssetPipeline, Completed, PipelineConfig};
+use unbound_asset::{
+    AssetId, AssetKind, AssetPipeline, Completed, PipelineConfig, VideoFrameError,
+    VideoFramePayload, VideoPixelFormat,
+};
 use unbound_gpu::atlas::{AtlasKind, AtlasUpload, PAGE_SIZE};
 use unbound_gpu::pipeline::EXTERNAL_TEXTURE_BASE;
+use unbound_gpu::VideoUploadTier;
 use unbound_math::{Rect, Vec2};
 use unbound_text::TextEngine;
 use unbound_widgets::{ImageAssetResolver, ResolvedImage};
 
+use crate::video::{
+    VideoSurfaceHandle, VideoSurfaceManager, VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState,
+};
 use crate::DirtyFlags;
 
 /// 外部托管 RGBA8 纹理的逻辑句柄。
@@ -202,6 +209,7 @@ pub struct AssetHub {
     external_ops: Vec<ExternalTextureOp>,
     next_external_id: u64,
     external_dirty: bool,
+    video_surfaces: VideoSurfaceManager,
 }
 
 impl std::fmt::Debug for AssetHub {
@@ -239,6 +247,7 @@ impl AssetHub {
             external_ops: Vec::new(),
             next_external_id: 1,
             external_dirty: false,
+            video_surfaces: VideoSurfaceManager::new(),
         }
     }
 
@@ -286,6 +295,9 @@ impl AssetHub {
             dirty = dirty.merge(self.accept(completed, text));
         }
         if core::mem::take(&mut self.external_dirty) {
+            dirty = dirty.merge(DirtyFlags::PAINT);
+        }
+        if self.video_surfaces.take_dirty() {
             dirty = dirty.merge(DirtyFlags::PAINT);
         }
         dirty
@@ -559,6 +571,92 @@ impl AssetHub {
             }
         }
         self.external_dirty = true;
+    }
+
+    /// 创建一个新的视频表面逻辑句柄，初始状态为 [`VideoSurfaceState::PendingFirstFrame`]。
+    pub fn create_video_surface(&mut self) -> VideoSurfaceHandle {
+        self.video_surfaces.create_surface()
+    }
+
+    /// 向指定视频表面提交一帧载荷，采用 Latest-Wins 覆盖策略并累计丢帧数。
+    ///
+    /// 同尺寸新帧提交至已 `Ready` 的表面时仅标记轻量绘制脏标志，绝不触发 `DirtyFlags::LAYOUT`。
+    pub fn submit_video_frame(
+        &mut self,
+        handle: VideoSurfaceHandle,
+        frame: VideoFramePayload,
+    ) -> Result<(), VideoFrameError> {
+        self.video_surfaces.submit_frame(handle, frame)
+    }
+
+    /// 主动释放指定视频表面，并入队对应的 GPU 槽位回收操作。
+    pub fn release_video_surface(&mut self, handle: VideoSurfaceHandle) {
+        self.video_surfaces.release_surface(handle);
+    }
+
+    /// 查询指定视频表面当前的生命周期状态。
+    #[must_use]
+    pub fn video_surface_state(&self, handle: VideoSurfaceHandle) -> Option<&VideoSurfaceState> {
+        self.video_surfaces.state(handle)
+    }
+
+    /// 查询指定视频表面当前可采样的 GPU 槽位与分辨率 `(slot, width, height)`。
+    ///
+    /// `Resizing` 阶段继续返回旧槽位实现零闪烁保帧；未就绪、已驱逐或已释放时返回 `None`。
+    #[must_use]
+    pub fn video_surface_slot(&self, handle: VideoSurfaceHandle) -> Option<(u32, u32, u32)> {
+        self.video_surfaces.slot(handle)
+    }
+
+    /// 标记指定视频表面在当前帧索引 `frame_index` 下位于视口中可见。
+    pub fn mark_video_surface_visible(&mut self, handle: VideoSurfaceHandle, frame_index: u64) {
+        self.video_surfaces.mark_visible(handle, frame_index);
+    }
+
+    /// 设置多路视频表面的 VRAM 显存预算上限（字节）。
+    pub fn set_video_vram_budget_bytes(&mut self, budget: u64) {
+        self.video_surfaces.set_vram_budget_bytes(budget);
+    }
+
+    /// 查询当前多路视频表面的 VRAM 显存预算上限（字节）。
+    #[must_use]
+    pub const fn video_vram_budget_bytes(&self) -> u64 {
+        self.video_surfaces.vram_budget_bytes()
+    }
+
+    /// 同步底层 GPU 渲染器协商激活的视频上传档位。
+    pub fn set_video_upload_tier(&mut self, tier: VideoUploadTier) {
+        self.video_surfaces.set_upload_tier(tier);
+    }
+
+    /// 排空本帧待执行的视频表面上传、离屏 LRU 驱逐与释放操作队列。
+    pub fn drain_video_surface_ops(&mut self, frame_index: u64) -> Vec<VideoSurfaceOp> {
+        self.video_surfaces.drain_ops(frame_index)
+    }
+
+    /// 在 GPU 上传完成后原子提交新纹理槽位与显存占用，若替换了旧槽位则返回旧槽位供延迟销毁。
+    pub fn commit_video_surface_slot(
+        &mut self,
+        handle: VideoSurfaceHandle,
+        slot: u32,
+        width: u32,
+        height: u32,
+        format: VideoPixelFormat,
+        vram_bytes: u64,
+    ) -> Option<u32> {
+        self.video_surfaces
+            .commit_slot(handle, slot, width, height, format, vram_bytes)
+    }
+
+    /// 查询当前视频表面子系统的帧级观测指标快照。
+    #[must_use]
+    pub fn video_surface_metrics(&self) -> VideoSurfaceMetrics {
+        self.video_surfaces.metrics()
+    }
+
+    /// 在 GPU 设备丢失或重建上下文时清空所有视频表面的活跃槽位绑定。
+    pub fn invalidate_all_video_surfaces(&mut self) {
+        self.video_surfaces.invalidate_all();
     }
 }
 
