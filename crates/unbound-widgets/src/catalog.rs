@@ -928,7 +928,7 @@ where
             if let Some(sel_date) = NaiveDate::new(2024, 1, 18) {
                 calendar.select(sel_date);
             }
-            if state.phase == PointerPhase::Hovered {
+            if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
                 calendar.hover(NaiveDate::new(2024, 1, 20));
             }
             let mut engine = unbound_text::TextEngine::new();
@@ -2194,7 +2194,7 @@ where
             if let Some(end) = NaiveDate::new(2026, 11, 13) {
                 calendar.select(end);
             }
-            if state.phase == PointerPhase::Hovered {
+            if matches!(state.phase, PointerPhase::Hovered | PointerPhase::Pressed) {
                 calendar.hover(NaiveDate::new(2026, 11, 18));
             }
             let mut engine = unbound_text::TextEngine::new();
