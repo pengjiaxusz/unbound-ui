@@ -885,6 +885,14 @@ pub struct Renderer {
     ring: TransientRing,
     ring_buffer: Buffer,
     lut_buffer: Buffer,
+    /// 单个主题 LUT 槽位的字节步长（按存储缓冲偏移与非一致原子尺寸对齐，至少 4096 字节）。
+    lut_stride: u64,
+    /// CPU 侧暂存的最新 4 KiB 主题 LUT 表项，待目标帧槽位围栏退役后再刷入 GPU，避免在途竞争。
+    lut_entries: [[u16; 4]; 512],
+    /// 主题 LUT 写入代次；每次调用 `write_theme` 递增。
+    lut_generation: u64,
+    /// 各在飞帧槽位已刷入的 LUT 代次，用于跳过静态帧的重复刷写。
+    lut_slot_generations: Vec<u64>,
     /// 启用计时时的 GPU 时间戳作用域。
     timing: Option<crate::timing::TimestampScope>,
 
@@ -1174,8 +1182,17 @@ impl Renderer {
             MemoryKind::HostVisible,
             "transient-ring",
         )?;
+        let lut_align = gpu
+            .properties
+            .limits
+            .min_storage_buffer_offset_alignment
+            .max(gpu.properties.limits.non_coherent_atom_size)
+            .max(1);
+        let lut_stride = align_up(4096, lut_align);
+        let lut_slot_count = frames.len().max(1);
+        let lut_total_bytes = lut_stride.saturating_mul(lut_slot_count as u64);
         let lut_buffer = gpu.create_buffer(
-            4096,
+            lut_total_bytes,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             MemoryKind::HostVisible,
             "theme-lut",
@@ -1288,6 +1305,10 @@ impl Renderer {
             ring,
             ring_buffer,
             lut_buffer,
+            lut_stride,
+            lut_entries: [[0u16; 4]; 512],
+            lut_generation: 0,
+            lut_slot_generations: vec![0; lut_slot_count],
             timing: None,
             prim_handle,
             transform_handle,
@@ -1360,19 +1381,44 @@ impl Renderer {
             unbound_math::f16_to_f32(surface[3]).clamp(0.0, 1.0),
         ];
         self.recompute_clear_color();
-        // 布局：512 × RGBA16F = 4 KiB，每项存储四个 u16。
-        // SAFETY: LUT 缓冲区宿主可见且长度为 4096 字节。
+        // 仅更新 CPU 暂存表并递增代次；真正写入 GPU 环形槽延后到 `render` 等待该槽位围栏退役之后，
+        // 彻底避免 `frames_in_flight >= 2` 连续逐帧切换主题时覆写 GPU 仍在读取的旧帧 LUT。
+        self.lut_entries = entries;
+        self.lut_generation = self.lut_generation.saturating_add(1).max(1);
+        Ok(())
+    }
+
+    /// 将最新主题 LUT 刷入已退役的 `frame_slot` 环形槽位（若该槽位代次已同步则跳过）。
+    fn sync_lut_slot(&mut self, frame_slot: usize) -> Result<(), GpuError> {
+        let slot = frame_slot % self.lut_slot_generations.len().max(1);
+        if self.lut_slot_generations[slot] == self.lut_generation {
+            return Ok(());
+        }
+        let offset = (slot as u64) * self.lut_stride;
+        // 布局：512 × RGBA16F = 4 KiB，每槽按 `lut_stride` 隔离。
+        // SAFETY: `lut_buffer` 宿主可见且总容量为 `frames.len() * lut_stride`，目标槽位已通过围栏退役。
         unsafe {
             let ptr = self
                 .lut_buffer
-                .host_ptr(0)
+                .host_ptr(offset)
                 .ok_or_else(|| GpuError::Allocation("lut not mapped".into()))?;
-            core::ptr::copy_nonoverlapping(entries.as_ptr().cast::<u8>(), ptr, entries.len() * 8);
-            // 内存可能非宿主一致，必须在 GPU 读取前刷写，否则着色器可能采样到旧主题。
-            self.gpu
-                .flush(&self.lut_buffer, 0, (entries.len() * 8) as u64);
+            core::ptr::copy_nonoverlapping(
+                self.lut_entries.as_ptr().cast::<u8>(),
+                ptr,
+                self.lut_entries.len() * 8,
+            );
+            // 内存可能非宿主一致，按 `lut_stride`（已对齐 `non_coherent_atom_size`）刷写当前槽位。
+            self.gpu.flush(&self.lut_buffer, offset, self.lut_stride);
         }
+        self.lut_slot_generations[slot] = self.lut_generation;
         Ok(())
+    }
+
+    /// 返回指定在飞帧槽位对应的主题 LUT 物理设备地址。
+    #[must_use]
+    pub fn theme_lut_address_for_slot(&self, frame_slot: usize) -> u64 {
+        let slot = frame_slot % self.lut_slot_generations.len().max(1);
+        self.lut_buffer.address + (slot as u64) * self.lut_stride
     }
 
     /// 上传语义化主题。
@@ -1579,6 +1625,7 @@ impl Renderer {
         // 围栏等待完成后，至少 `frames_in_flight` 帧前解绑的托管外部纹理已不再被 GPU 引用。
         let completed_generation = self.frame_index.saturating_add(1);
         self.reclaim_deferred_external_textures(completed_generation);
+        self.sync_lut_slot(frame_slot)?;
         {
             let gpu = &self.gpu;
             let sync = &self.frames[frame_slot];
@@ -1736,7 +1783,7 @@ impl Renderer {
             );
         }
         let mut pc = PushConstants {
-            frame: self.frame_constants(scene),
+            frame: self.frame_constants(scene, frame_slot),
             prim_count: n,
             digit: min_z,
             aux: max_z,
@@ -2984,14 +3031,14 @@ impl Renderer {
         }
     }
 
-    fn frame_constants(&self, scene: &SceneUpload<'_>) -> FramePushConstants {
+    fn frame_constants(&self, scene: &SceneUpload<'_>, frame_slot: usize) -> FramePushConstants {
         FramePushConstants {
             primitives_bda: self.pool_buffer.address
                 + u64::from(self.pool_offset(self.prim_handle)),
             transforms_bda: self.pool_buffer.address
                 + u64::from(self.pool_offset(self.transform_handle)),
             clips_bda: self.pool_buffer.address + u64::from(self.pool_offset(self.clip_handle)),
-            theme_lut_bda: self.lut_buffer.address,
+            theme_lut_bda: self.theme_lut_address_for_slot(frame_slot),
             payloads_bda: self.pool_buffer.address
                 + u64::from(self.pool_offset(self.payload_handle)),
             camera_chunk: scene.camera.chunk,
@@ -3200,7 +3247,7 @@ impl Renderer {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent,
         };
-        let pc = PushConstants::from_frame(self.frame_constants(scene));
+        let pc = PushConstants::from_frame(self.frame_constants(scene, frame_slot));
 
         // SAFETY: 处于录制状态；所有句柄均存活且归 `self` 所有。
         unsafe {
@@ -4829,6 +4876,51 @@ mod tests {
     }
 
     /// 验证延迟销毁队列严格按 `frames_in_flight` 代次推进并在到期前保留对象。
+    #[test]
+    /// 验证主题 LUT 环形槽按 `frames_in_flight` 分配互不重叠的物理地址且代次同步无串色。
+    fn theme_lut_ring_slots_are_isolated_across_frames_in_flight() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let frames = gpu.frames_in_flight().max(1) as usize;
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        if frames >= 2 {
+            let addr0 = renderer.theme_lut_address_for_slot(0);
+            let addr1 = renderer.theme_lut_address_for_slot(1);
+            assert!(
+                addr1 >= addr0 + 4096,
+                "LUT ring slots must be separated by at least 4096 bytes: addr0={addr0}, addr1={addr1}"
+            );
+            assert_eq!(
+                renderer.theme_lut_address_for_slot(frames),
+                addr0,
+                "LUT ring slot addressing must wrap around frames_in_flight"
+            );
+        }
+
+        // 连续多帧逐帧写入不同主题颜色，验证清屏色与渲染读回均与当帧主题一致。
+        let mut theme = unbound_theme::ThemeState::default();
+        let kinds = [
+            unbound_theme::ThemeKind::Light,
+            unbound_theme::ThemeKind::Dark,
+            unbound_theme::ThemeKind::Light,
+        ];
+        for (idx, kind) in kinds.iter().enumerate() {
+            if idx > 0 {
+                theme.switch(*kind);
+            }
+            renderer.write_theme_lut(theme.lut()).expect("write lut");
+            renderer
+                .render(&scene(&[], &[], (idx + 1) as u64))
+                .expect("render frame");
+            let expected_surface = theme.lut().color(unbound_theme::Token::SURFACE);
+            assert!((renderer.surface_color[0] - expected_surface.r).abs() < 1e-2);
+            assert!((renderer.surface_color[1] - expected_surface.g).abs() < 1e-2);
+            assert!((renderer.surface_color[2] - expected_surface.b).abs() < 1e-2);
+        }
+    }
+
     #[test]
     fn deferred_destroy_queue_respects_frames_in_flight_generations() {
         let mut queue: DeferredDestroyQueue<u32> = DeferredDestroyQueue::new();
