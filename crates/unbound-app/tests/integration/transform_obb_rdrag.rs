@@ -244,10 +244,9 @@ fn view_builder_gizmo_emits_rotated_obb_handles_and_hit_regions() {
 
     let mut rt = AppRuntime::new(GizmoApp, Vec2::new(640.0, 480.0));
     let _ = rt.frame(0.016);
-    let scene = rt.scene();
-
-    let gizmo_hits: Vec<_> = scene
-        .regions
+    let gizmo_hits: Vec<_> = rt
+        .router()
+        .regions()
         .iter()
         .filter(|r| r.node == NODE_GIZMO)
         .collect();
