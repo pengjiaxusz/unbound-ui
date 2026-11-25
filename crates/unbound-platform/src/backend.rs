@@ -344,7 +344,6 @@ mod win32 {
     use ::windows::Win32::Foundation::{
         CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
     };
-    use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use ::windows::Win32::Graphics::Gdi::{
         ClientToScreen, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, ScreenToClient,
         MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -371,17 +370,16 @@ mod win32 {
     use ::windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
     use ::windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-        GetCursorPos, GetWindow, GetWindowLongPtrW, GetWindowLongW, GetWindowRect, IsIconic,
-        IsWindowVisible, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageW,
-        PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+        GetCursorPos, GetWindowLongPtrW, IsZoomed, LoadCursorW, MsgWaitForMultipleObjectsEx,
+        PeekMessageW, PostMessageW, RegisterClassExW, SetWindowLongPtrW, SetWindowPos, ShowWindow,
         TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CW_USEDEFAULT,
-        GWLP_USERDATA, GWL_EXSTYLE, GW_HWNDPREV, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT,
-        HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-        HWND_TOPMOST, IDC_ARROW, MA_NOACTIVATE, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE,
-        NCCALCSIZE_PARAMS, PM_REMOVE, QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
-        SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE,
-        SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR,
-        WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
+        GWLP_USERDATA, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTCLOSE, HTLEFT,
+        HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, IDC_ARROW,
+        MA_NOACTIVATE, MINMAXINFO, MSG, MWMO_INPUTAVAILABLE, NCCALCSIZE_PARAMS, PM_REMOVE,
+        QS_ALLINPUT, SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_FRAMECHANGED,
+        SWP_NOACTIVATE, SWP_NOZORDER, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+        SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CHAR, WM_CLOSE,
+        WM_DESTROY, WM_DPICHANGED, WM_DROPFILES, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
         WM_IME_ENDCOMPOSITION, WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SETCONTEXT,
         WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
         WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
@@ -389,7 +387,7 @@ mod win32 {
         WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
         WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
         WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        WS_EX_TOPMOST,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -838,67 +836,9 @@ mod win32 {
         destroyed: Arc<AtomicBool>,
     }
 
-    /// 探测指定 Win32 窗口是否被 Z 序上方的不透明顶层窗口完全遮挡。
+    /// 探测指定 Win32 窗口是否处于最小化、`DWMWA_CLOAKED` 或被上方至多 64 层不透明窗口完全遮挡。
     fn probe_window_occluded(hwnd: HWND) -> bool {
-        unsafe {
-            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
-                return true;
-            }
-            let mut target_rc = RECT::default();
-            if GetWindowRect(hwnd, &mut target_rc).is_err() {
-                return false;
-            }
-            let target = unbound_math::Rect::new(
-                target_rc.left as f32,
-                target_rc.top as f32,
-                (target_rc.right - target_rc.left).max(0) as f32,
-                (target_rc.bottom - target_rc.top).max(0) as f32,
-            );
-            if target.is_empty() {
-                return true;
-            }
-            let mut opaque_covers = Vec::new();
-            let mut cursor = hwnd;
-            for _ in 0..256 {
-                let Ok(prev) = GetWindow(cursor, GW_HWNDPREV) else {
-                    break;
-                };
-                if prev.0.is_null() {
-                    break;
-                }
-                cursor = prev;
-                if !IsWindowVisible(prev).as_bool() || IsIconic(prev).as_bool() {
-                    continue;
-                }
-                let ex_style = GetWindowLongW(prev, GWL_EXSTYLE) as u32;
-                if (ex_style & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)) != 0 {
-                    continue;
-                }
-                let mut cloaked: u32 = 0;
-                let cloaked_ok = DwmGetWindowAttribute(
-                    prev,
-                    DWMWA_CLOAKED,
-                    (&raw mut cloaked).cast::<c_void>(),
-                    core::mem::size_of::<u32>() as u32,
-                );
-                if cloaked_ok.is_ok() && cloaked != 0 {
-                    continue;
-                }
-                let mut rc = RECT::default();
-                if GetWindowRect(prev, &mut rc).is_ok() {
-                    let cover = unbound_math::Rect::new(
-                        rc.left as f32,
-                        rc.top as f32,
-                        (rc.right - rc.left).max(0) as f32,
-                        (rc.bottom - rc.top).max(0) as f32,
-                    );
-                    if !cover.is_empty() {
-                        opaque_covers.push(cover);
-                    }
-                }
-            }
-            crate::overlay_host::is_rect_fully_covered(target, &opaque_covers)
-        }
+        crate::overlay_host::probe_hwnd_occluded(hwnd.0 as isize)
     }
 
     unsafe extern "system" fn wnd_proc(
@@ -2058,7 +1998,8 @@ mod win32 {
         let mut msg = MSG::default();
         let high_res_timer = HighResWaitableTimer::try_create();
         let mut last_occlusion_probe = Instant::now();
-        const OCCLUSION_PROBE_INTERVAL: Duration = Duration::from_millis(250);
+        const OCCLUSION_PROBE_INTERVAL: Duration =
+            crate::overlay_host::DEFAULT_OCCLUSION_POLL_INTERVAL;
 
         'main_loop: while !windows.is_empty() {
             let mut modal_exit = false;

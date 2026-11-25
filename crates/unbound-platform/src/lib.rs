@@ -115,11 +115,13 @@ pub use system_accent::{
     DEFAULT_SYSTEM_ACCENT_SRGB,
 };
 pub use tray::{
-    active_tray_menu_items, is_tray_heartbeat_stalled, notification_urgency, poll_tray_events,
-    push_tray_event_for_test, reattach_tray_icon, set_taskbar_progress,
+    active_tray_menu_items, clear_tray_rescue_callbacks, dispatch_tray_menu_command_for_test,
+    is_tray_heartbeat_stalled, notification_urgency, poll_tray_events, push_tray_event_for_test,
+    reattach_tray_icon, register_tray_rescue_callback, set_taskbar_progress,
     set_tray_heartbeat_stalled_for_test, set_tray_icon, set_tray_menu, set_tray_rescue_menu,
-    show_tray_balloon, update_tray_heartbeat, TaskbarProgressState, TrayEvent, TrayIconState,
-    TrayMenuItem, TrayNotificationSeverity, WM_APP_TRAY,
+    show_tray_balloon, unregister_tray_rescue_callback, update_tray_heartbeat, SystemTray,
+    TaskbarProgressState, TrayEvent, TrayIconState, TrayMenuItem, TrayNotificationSeverity,
+    WM_APP_TRAY,
 };
 pub use wayland_logic::{
     compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
@@ -145,7 +147,9 @@ pub use windows::{WindowId, WindowRegistry, WindowSlot};
 pub use windows_build::windows_build;
 
 pub use overlay_host::{
-    is_rect_fully_covered, place_popup_in_work_area, should_use_popup_host, FileDragDropBridge,
-    FileDragEffect, HitTestPassThroughPolicy, MultiWindowHostPool, OcclusionMonitor,
-    OverlayHitDisposition, OverlayWindowSpec, ScreenSleepInhibitor, TargetWindowFollower,
+    is_rect_fully_covered, place_popup_in_work_area, probe_hwnd_occluded, rects_cover,
+    should_use_popup_host, FileDragDropBridge, FileDragEffect, HitTestPassThroughPolicy,
+    MultiWindowHostPool, OcclusionMonitor, OverlayHitDisposition, OverlayWindowSpec,
+    ScreenSleepInhibitor, TargetWindowFollower, DEFAULT_OCCLUSION_POLL_INTERVAL,
+    MAX_OCCLUSION_Z_ORDER_LAYERS,
 };

@@ -9,6 +9,7 @@
 //!   策略层与内存测试替身）、窗口完全被遮挡时的 0% 渲染暂停，以及重度任务期间的屏幕防休眠守卫。
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use unbound_math::{Rect, Vec2};
 
@@ -226,13 +227,28 @@ impl TargetWindowFollower {
 
 pub use crate::pacing::RenderThrottleState;
 
-/// 窗口遮挡检测器：判断目标窗口矩形是否被前方不透明窗口集合完全覆盖。
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+/// 窗口遮挡轮询默认间隔（500ms）。
+pub const DEFAULT_OCCLUSION_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Win32 Z 序枚举最大窗口层数上限，防止极端窗口数量下的轮询卡顿。
+pub const MAX_OCCLUSION_Z_ORDER_LAYERS: usize = 64;
+
+/// 窗口遮挡检测器：判断目标窗口是否最小化、被虚拟桌面隐藏（`DWMWA_CLOAKED`），
+/// 或被 Z 序上方的不透明窗口矩形并集完全覆盖。
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub struct OcclusionMonitor {
     minimized: bool,
     visible: bool,
     occluded: bool,
     focused: bool,
+    cloaked: bool,
+    poll_interval: Duration,
+    last_probe: Option<Instant>,
+}
+
+impl Default for OcclusionMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OcclusionMonitor {
@@ -243,7 +259,82 @@ impl OcclusionMonitor {
             visible: true,
             occluded: false,
             focused: true,
+            cloaked: false,
+            poll_interval: DEFAULT_OCCLUSION_POLL_INTERVAL,
+            last_probe: None,
         }
+    }
+
+    /// 使用自定义轮询间隔构造窗口遮挡监视器。
+    #[must_use]
+    pub const fn with_poll_interval(poll_interval: Duration) -> Self {
+        Self {
+            minimized: false,
+            visible: true,
+            occluded: false,
+            focused: true,
+            cloaked: false,
+            poll_interval,
+            last_probe: None,
+        }
+    }
+
+    /// 返回当前配置的轮询间隔。
+    #[must_use]
+    pub const fn poll_interval(&self) -> Duration {
+        self.poll_interval
+    }
+
+    /// 根据窗口矩形、最小化/可见/虚拟桌面隐藏状态（`cloaked`）与 Z 序上方不透明矩形集合更新遮挡状态。
+    pub fn evaluate_occlusion_with_cloaked(
+        &mut self,
+        window_rect: Rect,
+        minimized: bool,
+        visible: bool,
+        focused: bool,
+        cloaked: bool,
+        z_above_opaque_rects: &[Rect],
+    ) -> RenderThrottleState {
+        self.cloaked = cloaked;
+        if cloaked {
+            self.minimized = minimized;
+            self.visible = visible;
+            self.focused = focused;
+            self.occluded = true;
+            return RenderThrottleState::Suspended;
+        }
+        self.evaluate_occlusion(
+            window_rect,
+            minimized,
+            visible,
+            focused,
+            z_above_opaque_rects,
+        )
+    }
+
+    /// 按设定间隔轮询指定原生 `HWND` 的遮挡状态；仅在状态发生变化时返回 `Some(occluded)`。
+    ///
+    /// 非 Windows 平台安全降级为无操作（保持未遮挡）。
+    pub fn poll_hwnd(&mut self, hwnd: isize, now: Instant) -> Option<bool> {
+        if let Some(last) = self.last_probe {
+            if now.saturating_duration_since(last) < self.poll_interval {
+                return None;
+            }
+        }
+        self.last_probe = Some(now);
+        let next = probe_hwnd_occluded(hwnd);
+        if next != self.occluded {
+            self.occluded = next;
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    /// 返回最近一次评估中窗口是否处于虚拟桌面隐藏（`DWMWA_CLOAKED`）状态。
+    #[must_use]
+    pub const fn is_cloaked(&self) -> bool {
+        self.cloaked
     }
 
     /// 根据窗口矩形与其Z序上方不透明窗口矩形列表更新遮挡状态。
@@ -310,6 +401,110 @@ impl OcclusionMonitor {
     #[must_use]
     pub const fn is_focused(&self) -> bool {
         self.focused
+    }
+}
+
+/// 纯几何并集覆盖算法：判断目标矩形 `target` 是否被 `covers` 中所有矩形的并集 100% 覆盖。
+#[must_use]
+pub fn rects_cover(target: Rect, covers: &[Rect]) -> bool {
+    is_rect_fully_covered(target, covers)
+}
+
+/// 探测指定原生窗口句柄（`HWND`）是否处于不可见、最小化、`DWMWA_CLOAKED`（虚拟桌面隐藏），
+/// 或被 Z 序上方至多 64 层不透明顶层窗口的几何并集完全覆盖。
+///
+/// 非 Windows 平台安全降级返回 `false`。
+#[must_use]
+pub fn probe_hwnd_occluded(hwnd: isize) -> bool {
+    #[cfg(windows)]
+    {
+        use ::windows::Win32::Foundation::{HWND, RECT};
+        use ::windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+        use ::windows::Win32::UI::WindowsAndMessaging::{
+            GetWindow, GetWindowLongW, GetWindowRect, IsIconic, IsWindowVisible, GWL_EXSTYLE,
+            GW_HWNDPREV, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        };
+        use core::ffi::c_void;
+
+        if hwnd == 0 {
+            return false;
+        }
+        let hwnd = HWND(hwnd as *mut c_void);
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+                return true;
+            }
+            // 检测目标窗口自身是否被 DWM 隐藏（例如位于其他虚拟桌面）。
+            let mut target_cloaked: u32 = 0;
+            let target_cloaked_ok = DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                (&raw mut target_cloaked).cast::<c_void>(),
+                core::mem::size_of::<u32>() as u32,
+            );
+            if target_cloaked_ok.is_ok() && target_cloaked != 0 {
+                return true;
+            }
+            let mut target_rc = RECT::default();
+            if GetWindowRect(hwnd, &mut target_rc).is_err() {
+                return false;
+            }
+            let target = Rect::new(
+                target_rc.left as f32,
+                target_rc.top as f32,
+                (target_rc.right - target_rc.left).max(0) as f32,
+                (target_rc.bottom - target_rc.top).max(0) as f32,
+            );
+            if target.is_empty() {
+                return true;
+            }
+            let mut opaque_covers = Vec::new();
+            let mut cursor = hwnd;
+            for _ in 0..MAX_OCCLUSION_Z_ORDER_LAYERS {
+                let Ok(prev) = GetWindow(cursor, GW_HWNDPREV) else {
+                    break;
+                };
+                if prev.0.is_null() {
+                    break;
+                }
+                cursor = prev;
+                if !IsWindowVisible(prev).as_bool() || IsIconic(prev).as_bool() {
+                    continue;
+                }
+                let ex_style = GetWindowLongW(prev, GWL_EXSTYLE) as u32;
+                if (ex_style & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0)) != 0 {
+                    continue;
+                }
+                let mut cloaked: u32 = 0;
+                let cloaked_ok = DwmGetWindowAttribute(
+                    prev,
+                    DWMWA_CLOAKED,
+                    (&raw mut cloaked).cast::<c_void>(),
+                    core::mem::size_of::<u32>() as u32,
+                );
+                if cloaked_ok.is_ok() && cloaked != 0 {
+                    continue;
+                }
+                let mut rc = RECT::default();
+                if GetWindowRect(prev, &mut rc).is_ok() {
+                    let cover = Rect::new(
+                        rc.left as f32,
+                        rc.top as f32,
+                        (rc.right - rc.left).max(0) as f32,
+                        (rc.bottom - rc.top).max(0) as f32,
+                    );
+                    if !cover.is_empty() {
+                        opaque_covers.push(cover);
+                    }
+                }
+            }
+            rects_cover(target, &opaque_covers)
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        false
     }
 }
 
@@ -654,6 +849,53 @@ mod tests {
         assert_eq!(pool.primary_window(), Some(main_id));
         assert_eq!(pool.close_window(main_id), Some("main_swapchain"));
         assert_eq!(pool.primary_window(), Some(tasks_id));
+    }
+
+    #[test]
+    fn occlusion_monitor_handles_rects_cover_cloaked_and_poll_interval() {
+        let target = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // 两个半屏矩形并集完全覆盖 target。
+        assert!(rects_cover(
+            target,
+            &[
+                Rect::new(0.0, 0.0, 50.0, 100.0),
+                Rect::new(50.0, 0.0, 50.0, 100.0),
+            ]
+        ));
+        // 留下 1px 缝隙时不算完全覆盖。
+        assert!(!rects_cover(
+            target,
+            &[
+                Rect::new(0.0, 0.0, 49.0, 100.0),
+                Rect::new(50.0, 0.0, 50.0, 100.0),
+            ]
+        ));
+
+        let mut monitor = OcclusionMonitor::with_poll_interval(Duration::from_millis(500));
+        assert_eq!(monitor.poll_interval(), DEFAULT_OCCLUSION_POLL_INTERVAL);
+
+        // 虚拟桌面隐藏（DWMWA_CLOAKED）直接进入挂起态。
+        assert_eq!(
+            monitor.evaluate_occlusion_with_cloaked(target, false, true, true, true, &[]),
+            RenderThrottleState::Suspended
+        );
+        assert!(monitor.is_occluded());
+        assert!(monitor.is_cloaked());
+
+        // 取消 cloaked 且无遮挡时恢复 Active。
+        assert_eq!(
+            monitor.evaluate_occlusion_with_cloaked(target, false, true, true, false, &[]),
+            RenderThrottleState::Active
+        );
+        assert!(!monitor.is_occluded());
+        assert!(!monitor.is_cloaked());
+
+        // 非 Windows 平台（或无效 HWND 0）轮询安全降级为无变化且遵守节流间隔。
+        let t0 = Instant::now();
+        assert_eq!(monitor.poll_hwnd(0, t0), None);
+        assert_eq!(monitor.poll_hwnd(0, t0 + Duration::from_millis(100)), None);
+        assert_eq!(monitor.poll_hwnd(0, t0 + Duration::from_millis(600)), None);
+        assert!(!probe_hwnd_occluded(0));
     }
 }
 

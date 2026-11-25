@@ -1772,6 +1772,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::Occluded(occluded) => {
                 state.pacer.set_occluded(occluded);
+                let _ = self.runtime.set_window_occluded(occluded);
                 if !occluded {
                     self.frame_dropped = true;
                     state.pacer.request_immediate(Instant::now());
