@@ -2111,6 +2111,8 @@ pub enum WidgetSpec {
         /// 文本颜色令牌。
         color: unbound_theme::Token,
     },
+    /// Single-line colored `TextSpan` rich text widget.
+    RichTextLine(unbound_widgets::RichTextLineDesc),
     /// 容器或卡片表面背景、边框与阴影图元。
     BoxSurface {
         fill: u16,
@@ -3126,6 +3128,7 @@ impl<'a> ViewBuilder<'a> {
             WidgetSpec::Dock { .. }
             | WidgetSpec::Text { .. }
             | WidgetSpec::TextInline { .. }
+            | WidgetSpec::RichTextLine(_)
             | WidgetSpec::BoxSurface { .. }
             | WidgetSpec::InteractiveHit { .. }
             | WidgetSpec::ScrollScopeBegin { .. }
@@ -4924,6 +4927,55 @@ impl<'a> ViewBuilder<'a> {
         let mut style = TextStyle::sized(size);
         style.weight = weight;
         self.text_inline(key, text, style, unbound_theme::Token::PRIMARY)
+    }
+
+    /// Place a single-line rich text widget rendering colored [`unbound_text::TextSpan`] runs.
+    pub fn rich_text_line(&mut self, key: u64, desc: unbound_widgets::RichTextLineDesc) -> NodeId {
+        let mut node_desc = RawNodeDesc::container().key(key);
+        node_desc.flex_shrink = 0.0;
+        if desc.rect.width() > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        }
+        if desc.rect.height() > 0.0 {
+            node_desc = node_desc.height(Dim::px(desc.rect.height()));
+        }
+        let (effective_key, node) =
+            self.reconcile_node(key, node_desc, core::panic::Location::caller());
+        self.world.set_text(node, desc.text.clone());
+        self.pending.push(PendingWidget {
+            key: effective_key,
+            node,
+            spec: WidgetSpec::RichTextLine(desc),
+            z_base: self.z_base,
+        });
+        node
+    }
+
+    /// Place a single-line rich text widget from raw text, colored spans, and a base text style.
+    pub fn rich_text_spans(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        spans: Vec<unbound_text::TextSpan>,
+        base_style: TextStyle,
+    ) -> NodeId {
+        let desc = unbound_widgets::RichTextLineDesc::new(Rect::ZERO, text, spans)
+            .with_base_style(base_style);
+        self.rich_text_line(key, desc)
+    }
+
+    /// Place a monospace single-line rich text widget (for syntax-highlighted code or logs).
+    pub fn rich_text_line_mono(
+        &mut self,
+        key: u64,
+        text: impl Into<String>,
+        spans: Vec<unbound_text::TextSpan>,
+        font_size: f32,
+    ) -> NodeId {
+        let desc = unbound_widgets::RichTextLineDesc::new(Rect::ZERO, text, spans)
+            .with_base_style(TextStyle::monospace(font_size))
+            .with_monospace(true);
+        self.rich_text_line(key, desc)
     }
 
     /// 直接访问收集器，供需要追加变换或裁剪的控件使用。
@@ -7944,6 +7996,19 @@ impl<A: Application> AppRuntime<A> {
                             ))
                         }
                     }
+                    WidgetSpec::RichTextLine(desc) => {
+                        let base = desc.effective_base_style();
+                        let spans = desc.effective_spans();
+                        if desc.text.is_empty() {
+                            Some(Vec2::new(0.0, (base.font_size * 1.35).ceil()))
+                        } else {
+                            let measured = text_ctx.measure_rich_line(&desc.text, &base, &spans);
+                            Some(Vec2::new(
+                                measured.x.ceil() + 2.0,
+                                measured.y.max(base.font_size * 1.35).ceil(),
+                            ))
+                        }
+                    }
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
                     WidgetSpec::ExternalImage(desc) => {
@@ -9811,6 +9876,22 @@ impl<A: Application> AppRuntime<A> {
                                 ..Default::default()
                             },
                         );
+                    }
+                }
+                WidgetSpec::RichTextLine(desc) => {
+                    if !desc.text.is_empty() && rect.width() > 0.0 && rect.height() > 0.0 {
+                        let mut resolved = desc.clone();
+                        resolved.rect = rect;
+                        resolved.z = entry.z_base.saturating_add(705);
+                        let (colored_quads, decorations) = text_ctx.shape_rich_line(&resolved);
+                        let output = unbound_widgets::emit_rich_text_line(
+                            entry.key,
+                            &resolved,
+                            &colored_quads,
+                            &decorations,
+                            unbound_widgets::ControlState::default(),
+                        );
+                        self.collector.push(entry.key, output);
                     }
                 }
                 WidgetSpec::Text { text, style } => {

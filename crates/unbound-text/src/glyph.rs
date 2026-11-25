@@ -1413,6 +1413,104 @@ impl GlyphCache {
         out
     }
 
+    /// Rasterize a rich shaped line and return `(cluster_byte_offset, GlyphQuad)` pairs,
+    /// resolving per-span `weight` and `italic` attributes for each glyph cluster.
+    pub fn quads_for_spans(
+        &mut self,
+        engine: &mut TextEngine,
+        shaped: &ShapedText,
+        spans: &[crate::shaping::TextSpan],
+        origin: Vec2,
+        base_weight: u16,
+        base_italic: bool,
+    ) -> Vec<(u32, GlyphQuad)> {
+        let mut out = Vec::with_capacity(shaped.glyphs.len());
+        let mode = self.settings.phase_mode;
+        for range in cluster_ranges(&shaped.glyphs) {
+            let group = &shaped.glyphs[range];
+            let Some(first) = group.first() else {
+                continue;
+            };
+            let Some(face) = shaped.faces.get(first.face_index as usize).copied() else {
+                continue;
+            };
+            let cluster = first.cluster;
+            let (weight, italic) = spans
+                .iter()
+                .find(|s| s.range.contains(&(cluster as usize)))
+                .map_or((base_weight, base_italic), |s| {
+                    (s.style.weight, s.style.italic)
+                });
+            let pen = origin + Vec2::new(first.x, first.y);
+            let backend_before_fallback = self.settings.emoji_backend;
+            let mut force_cosmic = false;
+
+            if self.color_cluster_enabled() {
+                match self.resolve_color_cluster(engine, group, face, weight, italic) {
+                    ClusterResolution::Rendered(resolved) => {
+                        if resolved.size.x > 0.0 && resolved.size.y > 0.0 {
+                            out.push((
+                                cluster,
+                                GlyphQuad {
+                                    rect: Rect::new(
+                                        pen.x.round() + resolved.bearing.x,
+                                        pen.y.round() + resolved.bearing.y,
+                                        resolved.size.x,
+                                        resolved.size.y,
+                                    ),
+                                    uv: resolved.slot.uv,
+                                    layer: resolved.slot.layer,
+                                    color: resolved.color,
+                                    msdf: resolved.msdf,
+                                    phase: 0,
+                                },
+                            ));
+                        }
+                        continue;
+                    }
+                    ClusterResolution::NotColor => {}
+                    ClusterResolution::Fallback {
+                        force_cosmic: force,
+                    } => force_cosmic = force,
+                }
+            }
+
+            if force_cosmic {
+                self.settings.emoji_backend = crate::settings::EmojiBackend::Cosmic;
+            }
+            for g in group {
+                let Some(face) = shaped.faces.get(g.face_index as usize).copied() else {
+                    continue;
+                };
+                let pen = origin + Vec2::new(g.x, g.y);
+                if let Some(resolved) = self.resolve(engine, g, face, pen, weight, italic) {
+                    if resolved.size.x <= 0.0 || resolved.size.y <= 0.0 {
+                        continue;
+                    }
+                    let (base_x, phase) = mode.quantize_x(pen.x);
+                    out.push((
+                        g.cluster,
+                        GlyphQuad {
+                            rect: Rect::new(
+                                base_x + resolved.bearing.x,
+                                pen.y.round() + resolved.bearing.y,
+                                resolved.size.x,
+                                resolved.size.y,
+                            ),
+                            uv: resolved.slot.uv,
+                            layer: resolved.slot.layer,
+                            color: resolved.color,
+                            msdf: resolved.msdf,
+                            phase,
+                        },
+                    ));
+                }
+            }
+            self.settings.emoji_backend = backend_before_fallback;
+        }
+        out
+    }
+
     /// 丢弃所有已缓存字形（图集扩容或字体重载时调用）。
     pub fn clear(&mut self) {
         self.resolved.clear();

@@ -1871,6 +1871,53 @@ where
             ));
             crate::rich_text::emit_rich_text(node, &desc, &document, &layout, &glyphs, state)
         }
+        WidgetCatalogId::RichTextLine => {
+            let line = "let count: usize = 42;";
+            let base = unbound_text::TextStyle::monospace(13.0);
+            let spans = vec![
+                unbound_text::TextSpan {
+                    range: 0..3,
+                    style: base.clone(),
+                    color: Token::PRIMARY,
+                    underline: false,
+                    background: None,
+                    link_id: None,
+                },
+                unbound_text::TextSpan {
+                    range: 11..16,
+                    style: base.clone(),
+                    color: Token::SUCCESS,
+                    underline: false,
+                    background: Some(Token::CODE_BG),
+                    link_id: None,
+                },
+                unbound_text::TextSpan {
+                    range: 19..21,
+                    style: base.clone(),
+                    color: Token::WARNING,
+                    underline: false,
+                    background: None,
+                    link_id: None,
+                },
+            ];
+            let desc = crate::rich_text_line::RichTextLineDesc::new(rect, line, spans)
+                .with_base_style(base)
+                .with_monospace(true);
+            let raw_quads = shape(line, Vec2::new(o.x + 8.0, o.y + 8.0), 13.0);
+            let colored: Vec<crate::rich_text_line::ColoredGlyphQuad> = raw_quads
+                .into_iter()
+                .enumerate()
+                .map(|(idx, quad)| crate::rich_text_line::ColoredGlyphQuad {
+                    quad,
+                    color: desc.color_at(idx.min(line.len().saturating_sub(1))),
+                })
+                .collect();
+            let decorations = vec![crate::rich_text_line::SpanDecoration {
+                rect: Rect::new(o.x + 8.0, o.y + 6.0, 48.0, 18.0),
+                color: Token::CODE_BG,
+            }];
+            crate::rich_text_line::emit_rich_text_line(node, &desc, &colored, &decorations, state)
+        }
         WidgetCatalogId::Ruler => {
             let band = crate::ruler::RULER_BAND;
             let inner_vp = if rect.size.x > band * 2.0 && rect.size.y > band * 2.0 {

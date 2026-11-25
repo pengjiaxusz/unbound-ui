@@ -130,3 +130,7 @@ pub use unbound_widgets::{
 pub use unbound_world::{NodeId, TreeRow};
 
 pub use unbound_anim::{DurationToken, EasingToken, MotionPolicy, MotionToken, Tween};
+
+pub use unbound_widgets::{ColoredGlyphQuad, RichTextLineDesc, SpanDecoration};
+
+pub use unbound_text::TextSpan;

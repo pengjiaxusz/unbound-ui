@@ -56,6 +56,16 @@ impl TextStyle {
         }
     }
 
+    /// Create a monospace text style at the given font size.
+    #[must_use]
+    pub fn monospace(size: f32) -> Self {
+        Self {
+            font_size: size,
+            family: Some("monospace".to_owned()),
+            ..Default::default()
+        }
+    }
+
     /// 样式的默认度量（基于字号与行高推导）。
     #[must_use]
     pub fn metrics(&self) -> Metrics {
@@ -956,7 +966,12 @@ impl TextEngine {
             attrs = attrs.style(cosmic_text::Style::Italic);
         }
         if let Some(family) = &style.family {
-            attrs = attrs.family(Family::Name(family.as_str()));
+            let resolved = if family.eq_ignore_ascii_case("monospace") {
+                Family::Monospace
+            } else {
+                Family::Name(family.as_str())
+            };
+            attrs = attrs.family(resolved);
         }
         // 连字开关：若全局设置禁用连字，向 font_features 禁用标准、上下文与交替连字
         if !self.settings.ligatures {
