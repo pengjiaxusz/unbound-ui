@@ -100,7 +100,7 @@ pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Lo
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute,
+    run_multi_window, run_multi_window_with_config, BeforeRenderHook, CrossWindowDragRoute,
     CrossWindowDragTargetState, MultiWindowConfig, MultiWindowCoordinator, MultiWindowFactory,
     WindowContext, WindowCreatedHook, WindowGeometry,
 };
@@ -10835,7 +10835,7 @@ impl<A: Application> AppRuntime<A> {
         outcome
     }
 
-    fn mark(&mut self, flags: DirtyFlags) {
+    pub(crate) fn mark(&mut self, flags: DirtyFlags) {
         self.dirty = self.dirty.merge(flags);
         if flags.needs_rebuild() {
             self.force_rebuild = true;

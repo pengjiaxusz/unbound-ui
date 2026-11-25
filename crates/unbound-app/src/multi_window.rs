@@ -39,8 +39,9 @@ use unbound_theme::ThemeSet;
 use crate::appearance::{AppearanceCaps, AppearanceDiff, WindowAppearance};
 use crate::floating_host::FloatingHost;
 use crate::{
-    AppKey, AppRuntime, Application, Bc7GpuOp, ExternalTextureHandle, ExternalTextureOp, ImeUpdate,
-    Modifiers as AppModifiers, ThemeKind, VideoSurfaceOp, WindowCommand,
+    AppKey, AppRuntime, Application, Bc7GpuOp, DirtyFlags, ExternalTextureHandle,
+    ExternalTextureOp, ImeUpdate, Modifiers as AppModifiers, ThemeKind, VideoSurfaceOp,
+    WindowCommand,
 };
 
 /// 为新打开的窗口构造对应 [`Application`] 实例的工厂契约。
@@ -1024,22 +1025,38 @@ impl<A: Application> Drop for WindowContext<A> {
 /// 原生窗口创建完成时的可选宿主回调钩子（例如挂载系统托盘）。
 pub type WindowCreatedHook = Box<dyn FnMut(WindowId, &NativeWindow) + 'static>;
 
+/// 每扇窗口构建视图与提交 GPU 绘制前执行的可选宿主回调钩子。
+///
+/// 回调在 UI 线程上接收当前窗口的 [`WindowId`] 与对应 [`AppRuntime`] 可变引用，
+/// 可安全访问 `runtime.asset_hub_mut()`、`runtime.app_mut()` 与 `runtime.state_mut()`
+/// 完成外部纹理上传或帧前资产同步；返回的 [`DirtyFlags`] 用于指示本帧是否发生变更
+/// 并需要触发视图失效与下一帧唤醒。
+pub type BeforeRenderHook<A> = Box<dyn FnMut(WindowId, &mut AppRuntime<A>) -> DirtyFlags + 'static>;
+
 /// 多窗口运行器配置。
-#[derive(Default)]
-pub struct MultiWindowConfig {
+pub struct MultiWindowConfig<A: Application> {
     /// 主窗口初始配置。
     pub primary_config: WindowConfig,
     /// 每个主/辅助原生窗口创建完成后的可选回调钩子。
     pub on_window_created: Option<WindowCreatedHook>,
+    /// 每扇窗口每帧渲染前的可选回调钩子（用于外部纹理上传与帧前资产同步）。
+    pub on_before_render: Option<BeforeRenderHook<A>>,
 }
 
-impl MultiWindowConfig {
+impl<A: Application> Default for MultiWindowConfig<A> {
+    fn default() -> Self {
+        Self::new(WindowConfig::default())
+    }
+}
+
+impl<A: Application> MultiWindowConfig<A> {
     /// 基于主窗口配置构造默认多窗口配置。
     #[must_use]
     pub fn new(primary_config: WindowConfig) -> Self {
         Self {
             primary_config,
             on_window_created: None,
+            on_before_render: None,
         }
     }
 
@@ -1050,6 +1067,16 @@ impl MultiWindowConfig {
         hook: impl FnMut(WindowId, &NativeWindow) + 'static,
     ) -> Self {
         self.on_window_created = Some(Box::new(hook));
+        self
+    }
+
+    /// 绑定每帧渲染前回调钩子（主窗口、标准辅助窗口与浮动窗口均在渲染前触发）。
+    #[must_use]
+    pub fn with_on_before_render(
+        mut self,
+        hook: impl FnMut(WindowId, &mut AppRuntime<A>) -> DirtyFlags + 'static,
+    ) -> Self {
+        self.on_before_render = Some(Box::new(hook));
         self
     }
 }
@@ -1184,6 +1211,7 @@ pub struct MultiWindowCoordinator<A: Application> {
     primary_config: WindowConfig,
     factory: Box<dyn MultiWindowFactory<A>>,
     on_window_created: Option<WindowCreatedHook>,
+    on_before_render: Option<BeforeRenderHook<A>>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
     /// 多窗口共享主题过渡单调时钟基准。
     theme_clock_epoch: Instant,
@@ -1217,6 +1245,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
             primary_config,
             factory: Box::new(factory),
             on_window_created: None,
+            on_before_render: None,
             waker: None,
             theme_clock_epoch: Instant::now(),
             shared_theme_trigger: None,
@@ -1232,6 +1261,60 @@ impl<A: Application> MultiWindowCoordinator<A> {
     ) -> Self {
         self.on_window_created = Some(Box::new(hook));
         self
+    }
+
+    /// 绑定每扇窗口在视图构建与 GPU 绘制前的回调钩子。
+    #[must_use]
+    pub fn with_on_before_render(
+        mut self,
+        hook: impl FnMut(WindowId, &mut AppRuntime<A>) -> DirtyFlags + 'static,
+    ) -> Self {
+        self.on_before_render = Some(Box::new(hook));
+        self
+    }
+
+    /// 运行期替换每扇窗口的渲染前回调钩子。
+    pub fn set_on_before_render(
+        &mut self,
+        hook: impl FnMut(WindowId, &mut AppRuntime<A>) -> DirtyFlags + 'static,
+    ) {
+        self.on_before_render = Some(Box::new(hook));
+    }
+
+    fn invoke_before_render(
+        hook: &mut Option<BeforeRenderHook<A>>,
+        id: WindowId,
+        ctx: &mut WindowContext<A>,
+    ) -> DirtyFlags {
+        let Some(callback) = hook.as_mut() else {
+            return DirtyFlags::NONE;
+        };
+        let dirty = callback(id, &mut ctx.runtime);
+        if dirty != DirtyFlags::NONE {
+            ctx.runtime.mark(dirty);
+        }
+        dirty
+    }
+
+    /// 在无头模式下为指定窗口执行单帧渲染前钩子与运行时推进。
+    ///
+    /// 执行顺序与原生事件循环保持一致：检查暂停节流 → 调用 `on_before_render` 并合并
+    /// [`DirtyFlags`] → 执行 `runtime.tick(dt)` 与 `runtime.frame(0.0)`。
+    /// 若窗口不存在或当前处于暂停节流态，返回 `None`。
+    pub fn step_headless_frame(
+        &mut self,
+        id: WindowId,
+        dt: f32,
+    ) -> Option<(DirtyFlags, crate::FrameReport)> {
+        let ctx = self.registry.get_mut(id)?;
+        if ctx.should_skip_frame_for_throttle() {
+            return None;
+        }
+        let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
+
+        let _ = ctx.runtime.tick(dt);
+        let report = ctx.runtime.frame(0.0);
+        Some((before_render_dirty, report))
     }
 
     /// 借用多窗口注册表。
@@ -3343,6 +3426,8 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         ctx.runtime.context_mut().window_maximized = window.is_maximized();
         ctx.runtime.context_mut().window_always_on_top = window.is_always_on_top();
 
+        let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
+
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
         let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
@@ -3482,8 +3567,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         }
 
         let pointer_local = ctx.pointer;
-        let keep_animating =
-            ctx.runtime.context().scale_osd_remaining > 0.0 || report.dirty.needs_rebuild();
+        let keep_animating = ctx.runtime.context().scale_osd_remaining > 0.0
+            || report.dirty.needs_rebuild()
+            || before_render_dirty != DirtyFlags::NONE;
         ctx.pacer.set_animating(keep_animating);
         if keep_animating {
             window.request_redraw();
@@ -3519,12 +3605,12 @@ where
     run_multi_window_with_config(MultiWindowConfig::new(primary_config), factory)
 }
 
-/// 使用 [`MultiWindowConfig`] 启动多窗口共享设备应用（支持 `on_window_created` 钩子）。
+/// 使用 [`MultiWindowConfig`] 启动多窗口共享设备应用（支持 `on_window_created` 与 `on_before_render` 钩子）。
 ///
 /// # Errors
 /// 平台窗口创建或事件循环初始化失败时返回 [`PlatformError`]。
 pub fn run_multi_window_with_config<A, F>(
-    mut config: MultiWindowConfig,
+    mut config: MultiWindowConfig<A>,
     factory: F,
 ) -> Result<(), PlatformError>
 where
@@ -3535,6 +3621,7 @@ where
     let primary_config = config.primary_config.clone();
     let mut coordinator = MultiWindowCoordinator::new(primary_config.clone(), factory);
     coordinator.on_window_created = config.on_window_created;
+    coordinator.on_before_render = config.on_before_render;
     PlatformWindow::new(&primary_config)?.run(coordinator)
 }
 
@@ -4643,5 +4730,147 @@ mod tests {
             .runtime
             .context()
             .is_always_on_top());
+    }
+
+    #[test]
+    fn on_before_render_triggers_for_primary_secondary_and_floating_windows_with_asset_upload() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let primary_cfg = WindowConfig::default().with_title("Primary");
+        let secondary_cfg = WindowConfig::default().with_title("Secondary");
+        let ghost_cfg = WindowConfig::default()
+            .with_title("Ghost")
+            .with_role(WindowRole::Ghost);
+
+        let log: Rc<RefCell<Vec<(WindowId, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let uploaded_handles: Rc<RefCell<Vec<(WindowId, ExternalTextureHandle)>>> =
+            Rc::new(RefCell::new(Vec::new()));
+
+        let log_ref = Rc::clone(&log);
+        let handles_ref = Rc::clone(&uploaded_handles);
+
+        let config = MultiWindowConfig::<TaggedApp>::new(primary_cfg.clone())
+            .with_on_before_render(move |id, runtime| {
+                let mut entries = log_ref.borrow_mut();
+                let seq = entries.len() as u32 + 1;
+                entries.push((id, seq));
+                let handle = runtime.asset_hub_mut().upload_external_rgba8(
+                    2,
+                    2,
+                    true,
+                    vec![255u8; 2 * 2 * 4],
+                );
+                handles_ref.borrow_mut().push((id, handle));
+                DirtyFlags::PAINT
+            });
+        assert!(config.on_before_render.is_some());
+
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.on_before_render = config.on_before_render;
+
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        coord.register_headless_window(WindowId(2), secondary_cfg);
+        coord.register_headless_floating_window(WindowId(3), ghost_cfg);
+
+        // 主窗口、标准副窗与无焦点浮动窗口均在帧构建前触发钩子并产出外部纹理上传操作。
+        for expected_id in [WindowId(1), WindowId(2), WindowId(3)] {
+            let (hook_dirty, report) = coord
+                .step_headless_frame(expected_id, 1.0 / 60.0)
+                .expect("active window should step headless frame");
+            assert_eq!(hook_dirty, DirtyFlags::PAINT);
+            assert!(report.dirty.contains(DirtyFlags::PAINT));
+            assert!(
+                report.external_texture_ops.iter().any(|op| matches!(
+                    op,
+                    ExternalTextureOp::Upload {
+                        width: 2,
+                        height: 2,
+                        ..
+                    }
+                )),
+                "expected external texture upload op for {expected_id:?}"
+            );
+        }
+
+        assert_eq!(
+            *log.borrow(),
+            vec![(WindowId(1), 1), (WindowId(2), 2), (WindowId(3), 3)]
+        );
+        assert_eq!(uploaded_handles.borrow().len(), 3);
+    }
+
+    #[test]
+    fn on_before_render_propagates_dirty_flags_and_skips_suspended_windows() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let cfg = WindowConfig::default().with_title("DirtyCheck");
+        let calls = Rc::new(Cell::new(0u32));
+        let calls_ref = Rc::clone(&calls);
+
+        let mut coord =
+            MultiWindowCoordinator::new(cfg.clone(), |id: WindowId, _: &WindowConfig| TaggedApp {
+                window_id: id,
+                events: Vec::new(),
+            })
+            .with_on_before_render(move |id, _runtime| {
+                calls_ref.set(calls_ref.get() + 1);
+                if id == WindowId(1) {
+                    DirtyFlags::NONE
+                } else {
+                    DirtyFlags::LAYOUT
+                }
+            });
+
+        coord.register_headless_window(WindowId(1), cfg.clone());
+        coord.register_headless_window(WindowId(2), cfg);
+
+        // 先消费首帧初始化重建，使窗口进入干净空闲态。
+        let _ = coord.step_headless_frame(WindowId(1), 1.0 / 60.0).unwrap();
+        let (dirty_win1, report_win1) = coord.step_headless_frame(WindowId(1), 1.0 / 60.0).unwrap();
+        assert_eq!(dirty_win1, DirtyFlags::NONE);
+        assert_eq!(report_win1.dirty, DirtyFlags::NONE);
+
+        let (dirty_win2, report_win2) = coord.step_headless_frame(WindowId(2), 1.0 / 60.0).unwrap();
+        assert_eq!(dirty_win2, DirtyFlags::LAYOUT);
+        assert!(report_win2.dirty.contains(DirtyFlags::LAYOUT));
+
+        // 窗口 2 进入最小化暂停态后，不再触发渲染前钩子。
+        let before_suspended_calls = calls.get();
+        coord
+            .registry_mut()
+            .get_mut(WindowId(2))
+            .unwrap()
+            .pacer
+            .set_minimized(true);
+        assert!(coord.step_headless_frame(WindowId(2), 1.0 / 60.0).is_none());
+        assert_eq!(calls.get(), before_suspended_calls);
+    }
+
+    #[test]
+    fn multi_window_without_on_before_render_preserves_default_behavior() {
+        let cfg = WindowConfig::default().with_title("DefaultNoHook");
+        let config = MultiWindowConfig::<TaggedApp>::new(cfg.clone());
+        assert!(config.on_before_render.is_none());
+
+        let mut coord =
+            MultiWindowCoordinator::new(cfg.clone(), |id: WindowId, _: &WindowConfig| TaggedApp {
+                window_id: id,
+                events: Vec::new(),
+            });
+        coord.register_headless_window(WindowId(1), cfg);
+
+        let (dirty, report) = coord
+            .step_headless_frame(WindowId(1), 1.0 / 60.0)
+            .expect("window should render normally without hook");
+        assert_eq!(dirty, DirtyFlags::NONE);
+        assert!(report.external_texture_ops.is_empty());
     }
 }
