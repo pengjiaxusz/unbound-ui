@@ -90,15 +90,19 @@ pub use backdrop::{
     WindowBackdropController, MICA_READY_EVENT_ID,
 };
 pub use bc7_assets::{Bc7GpuOp, DEFAULT_BC7_VRAM_BUDGET_BYTES};
-pub use floating_host::{effective_policy, FloatingHost, FloatingHostState, FloatingWindowSpec};
+pub use floating_host::{
+    compute_drag_proxy_rect, effective_policy, DragProxyGhostState, FloatingHost,
+    FloatingHostState, FloatingWindowSpec, DEFAULT_DRAG_PROXY_CURSOR_OFFSET,
+};
 pub use form::{FormBindingStore, FormMutator, WidgetValue};
 pub use guest_bridge::GuestAppAdapter;
 pub use i18n::{global_locale, set_global_locale, I18nBundle, LayoutDirection, Locale};
 pub use inspector::{EventTrace, Inspector, InspectorNode, InspectorScene};
 pub use key_scope::KeyScope;
 pub use multi_window::{
-    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute, MultiWindowConfig,
-    MultiWindowCoordinator, MultiWindowFactory, WindowContext, WindowCreatedHook,
+    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute,
+    CrossWindowDragTargetState, MultiWindowConfig, MultiWindowCoordinator, MultiWindowFactory,
+    WindowContext, WindowCreatedHook, WindowGeometry,
 };
 pub use overlay_manager::OverlayManager;
 pub use router::{RouteEntry, RouterStack, TransitionDirection};
@@ -812,6 +816,16 @@ pub struct AppContext {
     tab_context_targets: Rc<RefCell<FxHashMap<u64, TabHitTarget>>>,
     /// 各上下文菜单待消费的最近一次左键点击激活项索引（按 `ViewBuilder::context_menu` 的 `key` 索引）。
     context_menu_activated: Rc<RefCell<FxHashMap<u64, usize>>>,
+    /// Platform identifier of the host window owning this runtime.
+    window_id: unbound_platform::WindowId,
+    /// Physical screen-space outer bounds of the host window.
+    window_outer_bounds: unbound_platform::ScreenRect,
+    /// Snapshot of physical screen geometries for all registered windows in this process.
+    all_window_geometries: Arc<Vec<WindowGeometry>>,
+    /// Live cross-window drag hover state routed to this window when it is the active drop target.
+    cross_window_drag_target: Option<CrossWindowDragTargetState>,
+    /// Candidate dock panes registered by this window for live cross-window drag routing.
+    dock_candidate_panes: Vec<unbound_widgets::DockCandidatePane>,
 }
 
 impl core::fmt::Debug for AppContext {
@@ -880,6 +894,16 @@ impl AppContext {
             tab_add_requests: Rc::new(RefCell::new(FxHashSet::default())),
             tab_context_targets: Rc::new(RefCell::new(FxHashMap::default())),
             context_menu_activated: Rc::new(RefCell::new(FxHashMap::default())),
+            window_id: unbound_platform::WindowId(0),
+            window_outer_bounds: unbound_platform::ScreenRect::new(
+                0,
+                0,
+                viewport.x.round().max(1.0) as u32,
+                viewport.y.round().max(1.0) as u32,
+            ),
+            all_window_geometries: Arc::new(Vec::new()),
+            cross_window_drag_target: None,
+            dock_candidate_panes: Vec::new(),
         }
     }
 
@@ -1638,6 +1662,121 @@ impl AppContext {
     pub fn close_floating_window(&mut self, id: unbound_platform::WindowId) {
         self.pending_window_commands
             .push(WindowCommand::CloseFloatingWindow(id));
+    }
+
+    /// Returns the platform window identifier associated with this runtime context.
+    #[must_use]
+    pub const fn window_id(&self) -> unbound_platform::WindowId {
+        self.window_id
+    }
+
+    /// Returns the host window outer top-left position in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_position(&self) -> (i32, i32) {
+        (self.window_outer_bounds.x, self.window_outer_bounds.y)
+    }
+
+    /// Returns the host window outer frame bounds in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_bounds(&self) -> unbound_platform::ScreenRect {
+        self.window_outer_bounds
+    }
+
+    /// Returns physical screen geometry snapshots for all registered windows in this process.
+    #[must_use]
+    pub fn all_window_geometries(&self) -> &[WindowGeometry] {
+        &self.all_window_geometries
+    }
+
+    /// Hit-tests all visible, non-click-through windows in this process at physical screen coordinates.
+    #[must_use]
+    pub fn window_at_screen_pos(
+        &self,
+        screen_x: i32,
+        screen_y: i32,
+    ) -> Option<unbound_platform::WindowId> {
+        if !self.all_window_geometries.is_empty() {
+            return self
+                .all_window_geometries
+                .iter()
+                .find(|geom| {
+                    geom.visible
+                        && !geom.click_through
+                        && geom.contains_screen_pos(screen_x, screen_y)
+                })
+                .map(|geom| geom.id);
+        }
+        let b = self.window_outer_bounds;
+        let in_x = i64::from(screen_x) >= i64::from(b.x)
+            && i64::from(screen_x) < i64::from(b.x) + i64::from(b.width);
+        let in_y = i64::from(screen_y) >= i64::from(b.y)
+            && i64::from(screen_y) < i64::from(b.y) + i64::from(b.height);
+        if in_x && in_y && !b.is_empty() {
+            Some(self.window_id)
+        } else {
+            None
+        }
+    }
+
+    /// Returns the active cross-window drag hover state routed to this window, if any.
+    #[must_use]
+    pub fn cross_window_drag_target(&self) -> Option<&CrossWindowDragTargetState> {
+        self.cross_window_drag_target.as_ref()
+    }
+
+    /// Updates candidate dock panes exposed by this window for live cross-window drag routing.
+    pub fn set_dock_candidate_panes(&mut self, panes: Vec<unbound_widgets::DockCandidatePane>) {
+        self.dock_candidate_panes = panes;
+    }
+
+    /// Returns candidate dock panes currently registered by this window.
+    #[must_use]
+    pub fn dock_candidate_panes(&self) -> &[unbound_widgets::DockCandidatePane] {
+        &self.dock_candidate_panes
+    }
+
+    /// Requests the multi-window coordinator to start live cross-window drag routing from this window.
+    pub fn begin_cross_window_drag(
+        &mut self,
+        source: unbound_widgets::DockDragSource,
+        title: impl Into<String>,
+        pointer_local: Vec2,
+        proxy_size: (u32, u32),
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::BeginCrossWindowDrag {
+                source,
+                title: title.into(),
+                pointer_local,
+                proxy_size,
+            });
+    }
+
+    /// Requests the multi-window coordinator to finish or cancel the active cross-window drag session.
+    pub fn end_cross_window_drag(&mut self, cancelled: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::EndCrossWindowDrag { cancelled });
+    }
+
+    /// Requests the coordinator to show, move, or hide the cross-screen drag proxy ghost window.
+    pub fn sync_drag_proxy_ghost(
+        &mut self,
+        title: impl Into<String>,
+        screen_rect: unbound_platform::ScreenRect,
+        visible: bool,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::SyncDragProxyGhost {
+                title: title.into(),
+                screen_rect,
+                visible,
+            });
+    }
+
+    /// Requests the coordinator to close the cross-screen drag proxy ghost window.
+    pub fn close_drag_proxy_ghost(&mut self) {
+        self.pending_window_commands
+            .push(WindowCommand::CloseDragProxyGhost);
     }
 }
 
@@ -4915,6 +5054,33 @@ pub enum WindowCommand {
     },
     /// 关闭指定标识的幽灵窗或悬浮浮岛。
     CloseFloatingWindow(unbound_platform::WindowId),
+    /// Starts live cross-window drag routing from the issuing source window.
+    BeginCrossWindowDrag {
+        /// Drag source descriptor (tab or shell).
+        source: unbound_widgets::DockDragSource,
+        /// Visible title for the cross-screen drag proxy.
+        title: String,
+        /// Initial pointer position in source-window logical coordinates.
+        pointer_local: Vec2,
+        /// Physical size of the cross-screen drag proxy ghost window.
+        proxy_size: (u32, u32),
+    },
+    /// Finishes or cancels the active cross-window drag routing session and cleans up proxies.
+    EndCrossWindowDrag {
+        /// Whether the drag session was cancelled rather than dropped.
+        cancelled: bool,
+    },
+    /// Synchronizes position and visibility of the cross-screen drag proxy ghost window.
+    SyncDragProxyGhost {
+        /// Visible title for the drag proxy ghost window.
+        title: String,
+        /// Target outer rectangle in physical screen coordinates.
+        screen_rect: unbound_platform::ScreenRect,
+        /// Whether the drag proxy ghost window should be visible.
+        visible: bool,
+    },
+    /// Closes the cross-screen drag proxy ghost window immediately.
+    CloseDragProxyGhost,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -7096,6 +7262,116 @@ impl<A: Application> AppRuntime<A> {
     ) {
         self.window_screen_origin = origin;
         self.window_owner_id = owner_id;
+        self.ctx.window_id = owner_id;
+        self.ctx.window_outer_bounds.x = origin.0;
+        self.ctx.window_outer_bounds.y = origin.1;
+    }
+
+    /// Synchronizes the host window outer bounds in physical screen coordinates into `AppContext`.
+    pub fn set_window_outer_bounds(&mut self, bounds: unbound_platform::ScreenRect) {
+        self.ctx.window_outer_bounds = bounds;
+    }
+
+    /// Synchronizes the in-process multi-window geometry snapshot into `AppContext`.
+    pub fn set_all_window_geometries(&mut self, geometries: Arc<Vec<WindowGeometry>>) {
+        self.ctx.all_window_geometries = geometries;
+    }
+
+    /// Returns the host window outer top-left position in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_position(&self) -> (i32, i32) {
+        self.ctx.outer_position()
+    }
+
+    /// Returns the host window outer frame bounds in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_bounds(&self) -> unbound_platform::ScreenRect {
+        self.ctx.outer_bounds()
+    }
+
+    /// Returns physical screen geometry snapshots for all registered windows in this process.
+    #[must_use]
+    pub fn all_window_geometries(&self) -> &[WindowGeometry] {
+        self.ctx.all_window_geometries()
+    }
+
+    /// Hit-tests all visible, non-click-through windows in this process at physical screen coordinates.
+    #[must_use]
+    pub fn window_at_screen_pos(
+        &self,
+        screen_x: i32,
+        screen_y: i32,
+    ) -> Option<unbound_platform::WindowId> {
+        self.ctx.window_at_screen_pos(screen_x, screen_y)
+    }
+
+    /// Updates the live cross-window drag hover state routed to this window and invalidates on change.
+    pub fn set_cross_window_drag_target(&mut self, target: Option<CrossWindowDragTargetState>) {
+        if self.ctx.cross_window_drag_target != target {
+            self.ctx.cross_window_drag_target = target;
+            self.invalidate();
+        }
+    }
+
+    /// Returns the active cross-window drag hover state routed to this window, if any.
+    #[must_use]
+    pub fn cross_window_drag_target(&self) -> Option<&CrossWindowDragTargetState> {
+        self.ctx.cross_window_drag_target()
+    }
+
+    /// Updates candidate dock panes exposed by this window for live cross-window drag routing.
+    pub fn set_dock_candidate_panes(&mut self, panes: Vec<unbound_widgets::DockCandidatePane>) {
+        self.ctx.set_dock_candidate_panes(panes);
+    }
+
+    /// Returns candidate dock panes currently registered by this window.
+    #[must_use]
+    pub fn dock_candidate_panes(&self) -> &[unbound_widgets::DockCandidatePane] {
+        self.ctx.dock_candidate_panes()
+    }
+
+    /// Queues a command to start live cross-window drag routing from this window.
+    pub fn begin_cross_window_drag(
+        &mut self,
+        source: unbound_widgets::DockDragSource,
+        title: impl Into<String>,
+        pointer_local: Vec2,
+        proxy_size: (u32, u32),
+    ) {
+        self.window_commands
+            .push(WindowCommand::BeginCrossWindowDrag {
+                source,
+                title: title.into(),
+                pointer_local,
+                proxy_size,
+            });
+    }
+
+    /// Queues a command to finish or cancel the active cross-window drag session.
+    pub fn end_cross_window_drag(&mut self, cancelled: bool) {
+        self.window_commands
+            .push(WindowCommand::EndCrossWindowDrag { cancelled });
+    }
+
+    /// Queues a command to show, move, or hide the cross-screen drag proxy ghost window.
+    pub fn sync_drag_proxy_ghost(
+        &mut self,
+        title: impl Into<String>,
+        screen_rect: unbound_platform::ScreenRect,
+        visible: bool,
+    ) {
+        self.window_commands
+            .push(WindowCommand::SyncDragProxyGhost {
+                title: title.into(),
+                screen_rect,
+                visible,
+            });
+    }
+
+    /// Queues a command to close the cross-screen drag proxy ghost window.
+    pub fn close_drag_proxy_ghost(&mut self) {
+        self.window_commands
+            .push(WindowCommand::CloseDragProxyGhost);
     }
 
     /// 将原生 OLE 向外文件拖出操作的结果回灌给应用运行时。

@@ -7,10 +7,14 @@ pub use crate::appearance::{
     WindowAppearance,
 };
 pub use crate::backdrop::{is_mica_ready_event, MicaBackdrop, MICA_READY_EVENT_ID};
+pub use crate::floating_host::{
+    compute_drag_proxy_rect, DragProxyGhostState, DEFAULT_DRAG_PROXY_CURSOR_OFFSET,
+};
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::multi_window::{
-    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute, MultiWindowConfig,
-    MultiWindowCoordinator, MultiWindowFactory, WindowContext, WindowCreatedHook,
+    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute,
+    CrossWindowDragTargetState, MultiWindowConfig, MultiWindowCoordinator, MultiWindowFactory,
+    WindowContext, WindowCreatedHook, WindowGeometry,
 };
 pub use crate::router::{RouteEntry, RouterStack, TransitionDirection};
 pub use crate::scheduler::{AppWaker, TimerRequest, TimerToken};

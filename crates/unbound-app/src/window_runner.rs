@@ -21,7 +21,7 @@ use unbound_platform::backend::{Flow, PlatformApp, PlatformWindow};
 use unbound_platform::win32_frame::{FrameHitMetrics, WindowBackdropMaterial};
 use unbound_platform::window::{
     ButtonState, ImeEvent, Modifiers, MouseButton, PlatformError, PlatformEvent, PlatformKey,
-    PlatformState, SurfaceAlpha, WindowConfig,
+    PlatformState, ScreenRect, SurfaceAlpha, WindowConfig, WindowPosition,
 };
 use unbound_platform::{
     begin_outbound_file_drag, NativeWindow, OutboundFileDragOutcome, PopupHostRegistry,
@@ -211,6 +211,8 @@ pub struct WindowedRunner<A: Application> {
     primary_window_id: Option<WindowId>,
     /// 主窗口客户区左上角在屏幕坐标系中的物理像素原点。
     main_screen_origin: (i32, i32),
+    /// Outer frame bounds of the primary window in physical screen coordinates.
+    outer_bounds: ScreenRect,
     /// 已创建的原生弹出窗 `WindowId -> popup_id` 映射。
     native_popup_windows: FxHashMap<WindowId, u64>,
     /// 越界原生弹出窗状态注册表。
@@ -230,7 +232,14 @@ impl<A: Application> WindowedRunner<A> {
     pub fn new(app: A, config: &WindowConfig) -> Self {
         let (w, h) = (config.width.max(1), config.height.max(1));
         let viewport = Vec2::new(w as f32, h as f32);
+        let initial_outer_bounds = match config.position {
+            WindowPosition::Physical { x, y } | WindowPosition::Logical { x, y } => {
+                ScreenRect::new(x, y, w, h)
+            }
+            _ => ScreenRect::new(0, 0, w, h),
+        };
         let mut runtime = AppRuntime::new(app, viewport);
+        runtime.set_window_outer_bounds(initial_outer_bounds);
         runtime.set_backdrop(config.backdrop);
         runtime.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
         let ctx = runtime.context();
@@ -278,7 +287,8 @@ impl<A: Application> WindowedRunner<A> {
             bc7_fallback_pages: FxHashMap::default(),
             bc7_fallback_standalone: FxHashMap::default(),
             primary_window_id: None,
-            main_screen_origin: (0, 0),
+            main_screen_origin: (initial_outer_bounds.x, initial_outer_bounds.y),
+            outer_bounds: initial_outer_bounds,
             native_popup_windows: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
             pending_popup_syncs: Vec::new(),
@@ -318,6 +328,79 @@ impl<A: Application> WindowedRunner<A> {
     /// 可变访问底层应用运行时。
     pub fn runtime_mut(&mut self) -> &mut AppRuntime<A> {
         &mut self.runtime
+    }
+
+    /// Returns the primary window outer top-left position in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_position(&self) -> (i32, i32) {
+        (self.outer_bounds.x, self.outer_bounds.y)
+    }
+
+    /// Returns the primary window outer bounds in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_bounds(&self) -> ScreenRect {
+        self.outer_bounds
+    }
+
+    /// Updates the cached physical outer bounds and synchronizes them to `AppRuntime` and `AppContext`.
+    pub fn set_outer_bounds(&mut self, bounds: ScreenRect) {
+        self.outer_bounds = bounds;
+        self.main_screen_origin = (bounds.x, bounds.y);
+        let id = self.primary_window_id.unwrap_or(WindowId(0));
+        self.runtime
+            .set_window_screen_origin(self.main_screen_origin, id);
+        self.runtime.set_window_outer_bounds(bounds);
+        self.sync_geometry_snapshot_to_runtime();
+    }
+
+    /// Returns physical screen geometry snapshots for all windows hosted by this runner.
+    #[must_use]
+    pub fn all_window_geometries(&self) -> Vec<crate::WindowGeometry> {
+        let id = self.primary_window_id.unwrap_or(WindowId(0));
+        vec![crate::WindowGeometry {
+            id,
+            role: unbound_platform::WindowRole::Standard,
+            outer_position: (self.outer_bounds.x, self.outer_bounds.y),
+            outer_bounds: self.outer_bounds,
+            client_origin: self.main_screen_origin,
+            effective_scale: self.runtime.context().effective_scale(),
+            visible: true,
+            click_through: false,
+        }]
+    }
+
+    /// Hit-tests the primary window in physical screen coordinates.
+    #[must_use]
+    pub fn window_at_screen_pos(&self, screen_x: i32, screen_y: i32) -> Option<WindowId> {
+        self.all_window_geometries()
+            .into_iter()
+            .find(|geom| {
+                geom.visible && !geom.click_through && geom.contains_screen_pos(screen_x, screen_y)
+            })
+            .map(|geom| geom.id)
+    }
+
+    fn sync_geometry_snapshot_to_runtime(&mut self) {
+        let snapshot = Arc::new(self.all_window_geometries());
+        self.runtime.set_all_window_geometries(snapshot);
+    }
+
+    fn sync_live_window_geometry(&mut self, window: &NativeWindow) {
+        let id = WindowId(window.id().0 as u64);
+        self.primary_window_id = Some(id);
+        let client_screen = window.client_rect_on_screen();
+        let size = window.inner_size();
+        let width = client_screen.width.max(size.width).max(1);
+        let height = client_screen.height.max(size.height).max(1);
+        let (outer_x, outer_y) = window
+            .outer_position()
+            .unwrap_or((client_screen.x, client_screen.y));
+        self.main_screen_origin = (client_screen.x, client_screen.y);
+        self.outer_bounds = ScreenRect::new(outer_x, outer_y, width, height);
+        self.runtime
+            .set_window_screen_origin(self.main_screen_origin, id);
+        self.runtime.set_window_outer_bounds(self.outer_bounds);
+        self.sync_geometry_snapshot_to_runtime();
     }
 
     /// 注册 3D 视口自定义渲染通道工厂（首次建窗与 GPU 设备恢复后自动重注册到渲染器）。
@@ -617,6 +700,14 @@ impl<A: Application> WindowedRunner<A> {
                 crate::WindowCommand::SnapFloatingWindow { .. } => {
                     eprintln!(
                         "[unbound-app] WindowCommand::SnapFloatingWindow requires MultiWindowCoordinator"
+                    );
+                }
+                crate::WindowCommand::BeginCrossWindowDrag { .. }
+                | crate::WindowCommand::EndCrossWindowDrag { .. }
+                | crate::WindowCommand::SyncDragProxyGhost { .. }
+                | crate::WindowCommand::CloseDragProxyGhost => {
+                    eprintln!(
+                        "[unbound-app] Cross-window drag commands require MultiWindowCoordinator"
                     );
                 }
             }
@@ -1293,9 +1384,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         if self.resolve_popup_id(window).is_some() || self.surface.is_some() {
             return;
         }
-        self.primary_window_id = Some(WindowId(window.id().0 as u64));
-        let client_screen = window.client_rect_on_screen();
-        self.main_screen_origin = (client_screen.x, client_screen.y);
+        self.sync_live_window_geometry(window);
         let os_scale = self.sync_os_scale(window);
         let size = window.inner_size();
         let (width, height) = (size.width.max(1), size.height.max(1));
@@ -1512,6 +1601,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                         os_scale,
                     );
                     self.swapchain_dirty = true;
+                    self.sync_live_window_geometry(window);
                 }
             }
             PlatformEvent::RecreateSwapchain(_) => {
@@ -1665,8 +1755,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             }
             PlatformEvent::Moved { x, y } => {
                 self.main_screen_origin = (x, y);
-                self.runtime
-                    .set_window_screen_origin((x, y), WindowId(window.id().0 as u64));
+                self.outer_bounds.x = x;
+                self.outer_bounds.y = y;
+                let id = WindowId(window.id().0 as u64);
+                self.primary_window_id = Some(id);
+                self.runtime.set_window_screen_origin((x, y), id);
+                self.runtime.set_window_outer_bounds(self.outer_bounds);
+                self.sync_geometry_snapshot_to_runtime();
             }
             PlatformEvent::PopupDismissed { id } => {
                 let _ = self.popup_host.close_popup(id);
@@ -1706,12 +1801,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
         if size.width == 0 || size.height == 0 {
             return Flow::Continue;
         }
-        let client_screen = window.client_rect_on_screen();
-        self.main_screen_origin = (client_screen.x, client_screen.y);
-        self.runtime.set_window_screen_origin(
-            (client_screen.x, client_screen.y),
-            WindowId(window.id().0 as u64),
-        );
+        self.sync_live_window_geometry(window);
         let (width, height) = (size.width.max(1), size.height.max(1));
         let os_scale = self.sync_os_scale(window);
         let now = Instant::now();
@@ -2126,5 +2216,37 @@ mod tests {
             Some(PointerButton::Forward)
         );
         assert_eq!(translate_pointer_button(MouseButton::Other(3)), None);
+    }
+
+    #[test]
+    fn window_runner_exposes_outer_geometry_and_screen_hit_testing() {
+        let config = WindowConfig {
+            width: 960,
+            height: 640,
+            position: WindowPosition::Physical { x: 120, y: 80 },
+            ..WindowConfig::default()
+        };
+        let mut runner = WindowedRunner::new(DummyApp, &config);
+        assert_eq!(runner.outer_position(), (120, 80));
+        assert_eq!(runner.outer_bounds(), ScreenRect::new(120, 80, 960, 640));
+
+        runner.primary_window_id = Some(WindowId(11));
+        runner.set_outer_bounds(ScreenRect::new(300, 200, 800, 500));
+
+        assert_eq!(runner.outer_position(), (300, 200));
+        assert_eq!(runner.outer_bounds(), ScreenRect::new(300, 200, 800, 500));
+        assert_eq!(runner.runtime().outer_position(), (300, 200));
+        assert_eq!(
+            runner.runtime().outer_bounds(),
+            ScreenRect::new(300, 200, 800, 500)
+        );
+        assert_eq!(runner.window_at_screen_pos(450, 350), Some(WindowId(11)));
+        assert_eq!(runner.window_at_screen_pos(299, 350), None);
+        assert_eq!(
+            runner.runtime().window_at_screen_pos(450, 350),
+            Some(WindowId(11))
+        );
+        assert_eq!(runner.all_window_geometries().len(), 1);
+        assert_eq!(runner.runtime().all_window_geometries().len(), 1);
     }
 }

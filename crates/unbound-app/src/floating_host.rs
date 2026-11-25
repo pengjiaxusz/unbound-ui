@@ -7,10 +7,11 @@
 //!   `AppRuntime`、`Surface`、`Swapchain` 与 `Renderer` 的顶层无激活幽灵窗与可拖拽浮岛。
 
 use rustc_hash::FxHashMap;
+use unbound_math::Vec2;
 use unbound_platform::{
     FloatingPlacementStrategy, FloatingWindowCapabilities, FloatingWindowPolicy,
     RelativeMonitorAnchor, ScreenRect, SurfaceAlpha, WindowBackdropMaterial, WindowConfig,
-    WindowId, WindowRole,
+    WindowId, WindowPosition, WindowRole,
 };
 
 /// 基于平台能力矩阵计算实际生效的浮窗策略。
@@ -52,11 +53,44 @@ pub struct FloatingHostState {
     pub last_snap_anchor: Option<RelativeMonitorAnchor>,
 }
 
+/// Default physical pixel offset applied from the pointer to a drag proxy ghost window.
+pub const DEFAULT_DRAG_PROXY_CURSOR_OFFSET: (i32, i32) = (12, 12);
+
+/// Computes the physical screen rectangle for a cross-screen drag proxy ghost window.
+#[must_use]
+pub fn compute_drag_proxy_rect(
+    screen_physical: Vec2,
+    size: (u32, u32),
+    cursor_offset: (i32, i32),
+) -> ScreenRect {
+    let x = screen_physical.x.round() as i32 + cursor_offset.0;
+    let y = screen_physical.y.round() as i32 + cursor_offset.1;
+    ScreenRect::new(x, y, size.0.max(1), size.1.max(1))
+}
+
+/// Runtime lifecycle state of the cross-screen ghost window used to render a tear-out drag proxy.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DragProxyGhostState {
+    /// Platform window identifier bound once the ghost window is created.
+    pub window_id: Option<WindowId>,
+    /// Source window that owns the active cross-window drag session.
+    pub source_window: WindowId,
+    /// Visible title rendered inside the drag proxy ghost window.
+    pub title: String,
+    /// Current physical screen outer rectangle of the drag proxy ghost window.
+    pub outer_rect: ScreenRect,
+    /// Whether the drag proxy ghost window is currently visible.
+    pub visible: bool,
+    /// Whether a native ghost window creation request is currently in flight.
+    pub spawn_pending: bool,
+}
+
 /// 管理所有已注册浮窗状态与平台能力的宿主控制器。
 #[derive(Clone, Debug)]
 pub struct FloatingHost {
     entries: FxHashMap<WindowId, FloatingHostState>,
     capabilities: FloatingWindowCapabilities,
+    drag_proxy: Option<DragProxyGhostState>,
 }
 
 impl Default for FloatingHost {
@@ -72,6 +106,7 @@ impl FloatingHost {
         Self {
             entries: FxHashMap::default(),
             capabilities,
+            drag_proxy: None,
         }
     }
 
@@ -125,6 +160,13 @@ impl FloatingHost {
 
     /// 注销并移除指定浮窗的状态记录。
     pub fn unregister(&mut self, id: WindowId) -> Option<FloatingHostState> {
+        if self
+            .drag_proxy
+            .as_ref()
+            .is_some_and(|proxy| proxy.window_id == Some(id))
+        {
+            self.drag_proxy = None;
+        }
         self.entries.remove(&id)
     }
 
@@ -236,6 +278,84 @@ impl FloatingHost {
         state.last_snap_anchor = anchor;
         true
     }
+
+    /// Returns the active cross-screen drag proxy ghost state, if any.
+    #[must_use]
+    pub fn drag_proxy(&self) -> Option<&DragProxyGhostState> {
+        self.drag_proxy.as_ref()
+    }
+
+    /// Starts or refreshes the cross-screen drag proxy ghost lifecycle state.
+    pub fn begin_drag_proxy(
+        &mut self,
+        source_window: WindowId,
+        title: impl Into<String>,
+        initial_rect: ScreenRect,
+        visible: bool,
+    ) -> &DragProxyGhostState {
+        let existing_window = self.drag_proxy.as_ref().and_then(|p| p.window_id);
+        let spawn_pending = existing_window.is_none();
+        self.drag_proxy = Some(DragProxyGhostState {
+            window_id: existing_window,
+            source_window,
+            title: title.into(),
+            outer_rect: initial_rect,
+            visible,
+            spawn_pending,
+        });
+        if let Some(win_id) = existing_window {
+            let _ = self.set_outer_rect(win_id, initial_rect);
+            let _ = self.set_visible(win_id, visible);
+        }
+        self.drag_proxy
+            .as_ref()
+            .expect("drag proxy state was just inserted")
+    }
+
+    /// Binds a newly created ghost window identifier to the pending drag proxy state.
+    pub fn bind_drag_proxy_window(&mut self, id: WindowId) -> bool {
+        let Some(proxy) = self.drag_proxy.as_mut() else {
+            return false;
+        };
+        if proxy.window_id.is_some() && proxy.window_id != Some(id) {
+            return false;
+        }
+        proxy.window_id = Some(id);
+        proxy.spawn_pending = false;
+        let rect = proxy.outer_rect;
+        let visible = proxy.visible;
+        let _ = self.set_outer_rect(id, rect);
+        let _ = self.set_visible(id, visible);
+        true
+    }
+
+    /// Updates the cross-screen drag proxy rectangle and visibility without recreating the window.
+    pub fn update_drag_proxy(
+        &mut self,
+        rect: ScreenRect,
+        visible: bool,
+    ) -> Option<(ScreenRect, bool, Option<WindowId>)> {
+        let proxy = self.drag_proxy.as_mut()?;
+        if self.capabilities.supports_global_positioning {
+            proxy.outer_rect = rect;
+        } else {
+            proxy.outer_rect.width = rect.width;
+            proxy.outer_rect.height = rect.height;
+        }
+        proxy.visible = visible;
+        let applied_rect = proxy.outer_rect;
+        let win_id = proxy.window_id;
+        if let Some(id) = win_id {
+            let _ = self.set_outer_rect(id, applied_rect);
+            let _ = self.set_visible(id, visible);
+        }
+        Some((applied_rect, visible, win_id))
+    }
+
+    /// Ends the cross-screen drag proxy lifecycle and returns the bound ghost window id to close.
+    pub fn end_drag_proxy(&mut self) -> Option<WindowId> {
+        self.drag_proxy.take().and_then(|proxy| proxy.window_id)
+    }
 }
 
 /// 幽灵窗与悬浮浮岛的声明式规格构建器。
@@ -265,6 +385,31 @@ impl FloatingWindowSpec {
             config,
             placement: None,
         }
+    }
+
+    /// Builds a non-activating, click-through, always-on-top ghost window spec for cross-screen drag proxies.
+    #[must_use]
+    pub fn drag_proxy_ghost(
+        title: impl Into<String>,
+        width: u32,
+        height: u32,
+        screen_pos: (i32, i32),
+    ) -> Self {
+        let mut spec = Self::ghost(title, width.max(1), height.max(1));
+        spec.config.role = WindowRole::Ghost;
+        spec.config.floating_policy = FloatingWindowPolicy {
+            no_activate: true,
+            always_on_top: true,
+            skip_taskbar: true,
+            click_through: true,
+            draggable: false,
+        };
+        spec.config.position = WindowPosition::Physical {
+            x: screen_pos.0,
+            y: screen_pos.1,
+        };
+        spec.config.visible = true;
+        spec
     }
 
     /// 构造默认悬浮浮岛（`FloatingIsland`）规格：无边框、预乘 Alpha、置顶可拖拽且不抢焦点。
@@ -430,5 +575,67 @@ mod tests {
             .set_outer_rect(id, ScreenRect::new(500, 400, 420, 260))
             .unwrap();
         assert_eq!(updated, ScreenRect::new(0, 0, 420, 260));
+    }
+
+    #[test]
+    fn drag_proxy_ghost_spec_enforces_no_activate_click_through_topmost() {
+        let spec = FloatingWindowSpec::drag_proxy_ghost("Tab Proxy", 220, 48, (-400, 120));
+        assert!(!spec.config.decorations);
+        assert!(!spec.config.resizable);
+        assert_eq!(spec.config.surface_alpha, SurfaceAlpha::PreMultiplied);
+        assert_eq!(spec.config.role, WindowRole::Ghost);
+        assert!(spec.config.visible);
+        assert!(spec.config.floating_policy.no_activate);
+        assert!(spec.config.floating_policy.always_on_top);
+        assert!(spec.config.floating_policy.skip_taskbar);
+        assert!(spec.config.floating_policy.click_through);
+        assert!(!spec.config.floating_policy.draggable);
+        assert_eq!(
+            spec.config.position,
+            WindowPosition::Physical { x: -400, y: 120 }
+        );
+    }
+
+    #[test]
+    fn drag_proxy_lifecycle_tracks_position_visibility_and_cleanup() {
+        let mut host = FloatingHost::new(FloatingWindowCapabilities::win32_full());
+        let source = WindowId(1);
+        let ghost = WindowId(77);
+        let initial = compute_drag_proxy_rect(
+            Vec2::new(640.0, 240.0),
+            (196, 44),
+            DEFAULT_DRAG_PROXY_CURSOR_OFFSET,
+        );
+        assert_eq!(initial, ScreenRect::new(652, 252, 196, 44));
+
+        let started = host.begin_drag_proxy(source, "Inspector", initial, true);
+        assert_eq!(started.source_window, source);
+        assert!(started.spawn_pending);
+        assert_eq!(started.window_id, None);
+
+        host.register(
+            ghost,
+            WindowRole::Ghost,
+            FloatingWindowPolicy::ghost_default(),
+            initial,
+            true,
+        );
+        assert!(host.bind_drag_proxy_window(ghost));
+        assert!(!host.drag_proxy().unwrap().spawn_pending);
+        assert_eq!(host.drag_proxy().unwrap().window_id, Some(ghost));
+
+        let moved = ScreenRect::new(-320, 180, 196, 44);
+        let updated = host.update_drag_proxy(moved, true).unwrap();
+        assert_eq!(updated, (moved, true, Some(ghost)));
+        assert_eq!(host.get(ghost).unwrap().outer_rect, moved);
+        assert_eq!(host.get(ghost).unwrap().generation, 1);
+
+        let hidden = host.update_drag_proxy(moved, false).unwrap();
+        assert_eq!(hidden, (moved, false, Some(ghost)));
+        assert!(!host.get(ghost).unwrap().visible);
+        assert_eq!(host.get(ghost).unwrap().generation, 1);
+
+        assert_eq!(host.end_drag_proxy(), Some(ghost));
+        assert!(host.drag_proxy().is_none());
     }
 }
