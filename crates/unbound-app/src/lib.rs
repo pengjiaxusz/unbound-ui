@@ -604,6 +604,10 @@ pub enum AppEvent {
     Ime { update: ImeUpdate },
     /// 窗口尺寸变更。
     Resize { size: Vec2 },
+    /// 窗口外框位置变更（屏幕物理像素坐标）。
+    Moved { x: i32, y: i32 },
+    /// 原生窗口关闭请求（如 `Alt+F4` 或任务栏关窗）；应用可选择拦截或显式调用关窗命令。
+    CloseRequested,
     /// 主题变更。
     Theme { kind: ThemeKind },
     /// 辅助技术请求执行动作。
@@ -827,8 +831,10 @@ pub struct AppContext {
     context_menu_activated: Rc<RefCell<FxHashMap<u64, usize>>>,
     /// Platform identifier of the host window owning this runtime.
     window_id: unbound_platform::WindowId,
-    /// Physical screen-space outer bounds of the host window.
+    /// 宿主窗口在屏幕物理坐标系中的外框矩形。
     window_outer_bounds: unbound_platform::ScreenRect,
+    /// 宿主窗口在非最大化普通状态下的外框矩形（供最大化退出后持久化恢复）。
+    window_normal_bounds: Option<unbound_platform::ScreenRect>,
     /// Snapshot of physical screen geometries for all registered windows in this process.
     all_window_geometries: Arc<Vec<WindowGeometry>>,
     /// Live cross-window drag hover state routed to this window when it is the active drop target.
@@ -911,6 +917,7 @@ impl AppContext {
                 viewport.x.round().max(1.0) as u32,
                 viewport.y.round().max(1.0) as u32,
             ),
+            window_normal_bounds: None,
             all_window_geometries: Arc::new(Vec::new()),
             cross_window_drag_target: None,
             dock_candidate_panes: Vec::new(),
@@ -1708,6 +1715,12 @@ impl AppContext {
     #[must_use]
     pub const fn outer_bounds(&self) -> unbound_platform::ScreenRect {
         self.window_outer_bounds
+    }
+
+    /// 返回宿主窗口在非最大化普通状态下的外框物理矩形（最大化前记录或来自 Win32 `GetWindowPlacement`）。
+    #[must_use]
+    pub const fn normal_bounds(&self) -> Option<unbound_platform::ScreenRect> {
+        self.window_normal_bounds
     }
 
     /// Returns physical screen geometry snapshots for all registered windows in this process.
@@ -5677,6 +5690,8 @@ pub struct AppRuntime<A: Application> {
     active_context_menus: Vec<ActiveContextMenu>,
     /// 主窗口客户区左上角在屏幕物理坐标系中的位置，用于换算越界原生弹出窗矩形。
     window_screen_origin: (i32, i32),
+    /// 最近一次已派发的窗口外框位置，用于对高频移动事件去重。
+    last_moved_pos: Option<(i32, i32)>,
     /// 归属的平台窗口标识（用于构造 `PopupWindowConfig::owner`）。
     window_owner_id: unbound_platform::WindowId,
     /// 当前已同步至原生弹出窗宿主的越界浮层集合：`overlay_key -> config`。
@@ -5777,6 +5792,7 @@ impl<A: Application> AppRuntime<A> {
             active_select_popups: Vec::new(),
             active_context_menus: Vec::new(),
             window_screen_origin: (0, 0),
+            last_moved_pos: None,
             window_owner_id: unbound_platform::WindowId(0),
             active_native_popups: FxHashMap::default(),
             tooltip_pending_indices: FxHashSet::default(),
@@ -7618,6 +7634,33 @@ impl<A: Application> AppRuntime<A> {
     /// Synchronizes the host window outer bounds in physical screen coordinates into `AppContext`.
     pub fn set_window_outer_bounds(&mut self, bounds: unbound_platform::ScreenRect) {
         self.ctx.window_outer_bounds = bounds;
+    }
+
+    /// 更新宿主窗口在非最大化普通状态下的外框矩形。
+    pub fn set_window_normal_bounds(&mut self, bounds: Option<unbound_platform::ScreenRect>) {
+        self.ctx.window_normal_bounds = bounds;
+    }
+
+    /// 返回宿主窗口在非最大化普通状态下的外框矩形。
+    #[must_use]
+    pub const fn normal_bounds(&self) -> Option<unbound_platform::ScreenRect> {
+        self.ctx.normal_bounds()
+    }
+
+    /// 向应用层派发 [`AppEvent::CloseRequested`]，由应用决定拦截或显式下发关闭命令。
+    pub fn request_close(&mut self) -> DirtyFlags {
+        self.dispatch(AppEvent::CloseRequested)
+    }
+
+    /// 同步窗口外框位置并去重派发 [`AppEvent::Moved`]；若坐标与上次相同则直接跳过。
+    pub fn window_moved(&mut self, x: i32, y: i32) -> DirtyFlags {
+        self.ctx.window_outer_bounds.x = x;
+        self.ctx.window_outer_bounds.y = y;
+        if self.last_moved_pos == Some((x, y)) {
+            return DirtyFlags::NONE;
+        }
+        self.last_moved_pos = Some((x, y));
+        self.dispatch(AppEvent::Moved { x, y })
     }
 
     /// Synchronizes the in-process multi-window geometry snapshot into `AppContext`.
@@ -12946,6 +12989,88 @@ mod tests {
         assert_eq!(
             rt.drain_window_commands(),
             vec![WindowCommand::SetAlwaysOnTop(false)]
+        );
+    }
+
+    #[test]
+    fn close_requested_can_be_intercepted_or_confirmed_and_moved_is_deduplicated() {
+        struct CloseAndMoveApp {
+            allow_close: bool,
+            close_requests: usize,
+            moved_positions: Vec<(i32, i32)>,
+        }
+
+        impl Application for CloseAndMoveApp {
+            type State = ();
+
+            fn init(&mut self, _: &mut AppContext) {}
+
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::Custom { id: 1, .. } => {
+                        self.allow_close = true;
+                        EventOutcome::new(DirtyFlags::NONE)
+                    }
+                    AppEvent::CloseRequested => {
+                        self.close_requests += 1;
+                        if self.allow_close {
+                            ctx.close_window(ctx.window_id());
+                        }
+                        EventOutcome::new(DirtyFlags::PAINT)
+                    }
+                    AppEvent::Moved { x, y } => {
+                        self.moved_positions.push((x, y));
+                        EventOutcome::new(DirtyFlags::PAINT)
+                    }
+                    _ => EventOutcome::new(DirtyFlags::NONE),
+                }
+            }
+
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut rt = AppRuntime::new(
+            CloseAndMoveApp {
+                allow_close: false,
+                close_requests: 0,
+                moved_positions: Vec::new(),
+            },
+            Vec2::new(800.0, 600.0),
+        );
+        rt.set_window_screen_origin((0, 0), unbound_platform::WindowId(42));
+        rt.set_window_normal_bounds(Some(unbound_platform::ScreenRect::new(100, 120, 800, 600)));
+
+        // 拦截关闭：派发 CloseRequested 后不产生关窗命令。
+        let _ = rt.request_close();
+        assert_eq!(rt.app().close_requests, 1);
+        assert!(rt.drain_window_commands().is_empty());
+
+        // 放行关闭：应用显式调用 close_window 后产生 CloseWindow 命令。
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 1,
+            payload: String::new(),
+        });
+        let _ = rt.request_close();
+        assert_eq!(rt.app().close_requests, 2);
+        assert_eq!(
+            rt.drain_window_commands(),
+            vec![WindowCommand::CloseWindow(unbound_platform::WindowId(42))]
+        );
+
+        // 移动事件去重：连续相同坐标仅派发一次。
+        let _ = rt.window_moved(240, 180);
+        let _ = rt.window_moved(240, 180);
+        let _ = rt.window_moved(320, 260);
+        assert_eq!(rt.app().moved_positions, vec![(240, 180), (320, 260)]);
+        assert_eq!(rt.outer_position(), (320, 260));
+        assert_eq!(
+            rt.normal_bounds(),
+            Some(unbound_platform::ScreenRect::new(100, 120, 800, 600))
         );
     }
 }
