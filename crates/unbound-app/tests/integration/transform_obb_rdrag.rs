@@ -317,7 +317,7 @@ fn right_button_drag_suppresses_context_menu_while_short_press_opens_it() {
                 NODE_DRAG_TARGET,
                 RawNodeDesc::container()
                     .size(300.0, 300.0)
-                    .with_flag(NodeFlags::INTERACTIVE),
+                    .flags(NodeFlags::INTERACTIVE),
                 |_| {},
             );
         }
