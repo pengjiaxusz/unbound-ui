@@ -341,6 +341,7 @@ impl WidgetCatalogId {
             | Self::AutoSuggestBox
             | Self::RichEditBox
             | Self::RichTextBlock
+            | Self::RichTextLine
             | Self::TagInput
             | Self::PinInput
             | Self::HotkeyInput
@@ -584,6 +585,7 @@ impl WidgetCatalogId {
             | Self::RadioButton
             | Self::RepeatButton
             | Self::RichTextBlock
+            | Self::RichTextLine
             | Self::SelectorBar
             | Self::ShortcutBar
             | Self::StatusBar
@@ -755,6 +757,7 @@ impl WidgetCatalogId {
             | Self::RatingControl
             | Self::RepeatButton
             | Self::RichTextBlock
+            | Self::RichTextLine
             | Self::ScrollView
             | Self::SelectorBar
             | Self::ComboBox
@@ -829,6 +832,7 @@ impl WidgetCatalogId {
             Self::RatingControl => "RatingControl",
             Self::RepeatButton => "RepeatButton",
             Self::RichTextBlock => "RichTextBlock",
+            Self::RichTextLine => "RichTextLine",
             Self::ScrollView => "ScrollView",
             Self::SelectorBar => "SelectorBar",
             Self::Slider => "Slider",
@@ -1053,7 +1057,7 @@ mod tests {
 
     #[test]
     fn capability_matrix_covers_all_134_variants_and_adr_0031_contracts() {
-        assert_eq!(WidgetCatalogId::COUNT, 134);
+        assert_eq!(WidgetCatalogId::COUNT, 135);
 
         assert_eq!(
             WidgetCatalogId::ScrollView.capabilities().overflow,

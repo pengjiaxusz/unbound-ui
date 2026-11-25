@@ -123,6 +123,10 @@ enum WaylandCommand {
     ClipboardWrite {
         text: String,
     },
+    ClipboardWriteFiles {
+        uri_list: String,
+        gnome_copied_files: String,
+    },
     SetImeAllowed {
         id: isize,
         allowed: bool,
@@ -547,6 +551,8 @@ impl HasDisplayHandle for WaylandWindowHandle {
 struct WaylandClipboardBridge {
     /// 最近一次读取或写入的缓存文本，供同步读路径无阻塞返回。
     cached_text: Arc<Mutex<Option<String>>>,
+    cached_files: Arc<Mutex<Vec<std::path::PathBuf>>>,
+    cached_file_effect: Arc<Mutex<Option<crate::clipboard::ClipboardFileDropEffect>>>,
     cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
     wake_signal: WakeSignal,
 }
@@ -564,6 +570,43 @@ impl WaylandClipboardBackend for WaylandClipboardBridge {
             let ok = tx
                 .send(WaylandCommand::ClipboardWrite {
                     text: text.to_owned(),
+                })
+                .is_ok();
+            if ok {
+                self.wake_signal.signal();
+            }
+            ok
+        } else {
+            false
+        }
+    }
+
+    fn read_file_paths(&self) -> Option<Vec<std::path::PathBuf>> {
+        self.cached_files.lock().ok().map(|g| g.clone())
+    }
+
+    fn read_file_drop_effect(&self) -> Option<crate::clipboard::ClipboardFileDropEffect> {
+        self.cached_file_effect.lock().ok().and_then(|g| *g)
+    }
+
+    fn write_file_paths(
+        &self,
+        paths: &[std::path::PathBuf],
+        effect: crate::clipboard::ClipboardFileDropEffect,
+        uri_list: &str,
+        gnome_copied_files: &str,
+    ) -> bool {
+        if let Ok(mut guard) = self.cached_files.lock() {
+            *guard = paths.to_vec();
+        }
+        if let Ok(mut guard) = self.cached_file_effect.lock() {
+            *guard = Some(effect);
+        }
+        if let Ok(tx) = self.cmd_tx.lock() {
+            let ok = tx
+                .send(WaylandCommand::ClipboardWriteFiles {
+                    uri_list: uri_list.to_owned(),
+                    gnome_copied_files: gnome_copied_files.to_owned(),
                 })
                 .is_ok();
             if ok {
@@ -678,6 +721,8 @@ struct WaylandState {
     data_device: Option<DataDevice>,
     clipboard_source: Option<CopyPasteSource>,
     clipboard_owned_text: String,
+    clipboard_owned_uri_list: String,
+    clipboard_owned_gnome_files: String,
     clipboard_cache: Arc<Mutex<Option<String>>>,
     dnd_source: Option<DragSource>,
     dnd_outbound_uri_list: String,
@@ -1083,6 +1128,25 @@ impl WaylandState {
                 if let (Some(ddm), Some(dd)) = (&self.data_device_manager, &self.data_device) {
                     let source =
                         ddm.create_copy_paste_source(qh, [WAYLAND_CLIPBOARD_MIME, "text/plain"]);
+                    let serial = self.last_key_serial.max(self.last_pointer_serial);
+                    source.set_selection(dd, serial);
+                    self.clipboard_source = Some(source);
+                }
+            }
+            WaylandCommand::ClipboardWriteFiles {
+                uri_list,
+                gnome_copied_files,
+            } => {
+                self.clipboard_owned_uri_list = uri_list;
+                self.clipboard_owned_gnome_files = gnome_copied_files;
+                if let (Some(ddm), Some(dd)) = (&self.data_device_manager, &self.data_device) {
+                    let source = ddm.create_copy_paste_source(
+                        qh,
+                        [
+                            crate::linux_dnd::URI_LIST_MIME,
+                            crate::clipboard::GNOME_COPIED_FILES_MIME,
+                        ],
+                    );
                     let serial = self.last_key_serial.max(self.last_pointer_serial);
                     source.set_selection(dd, serial);
                     self.clipboard_source = Some(source);
@@ -2068,12 +2132,22 @@ impl DataSourceHandler for WaylandState {
         &mut self,
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
-        _source: &WlDataSource,
+        source: &WlDataSource,
         mime: String,
         mut fd: WritePipe,
     ) {
-        let payload = if mime == crate::linux_dnd::URI_LIST_MIME {
-            self.dnd_outbound_uri_list.as_bytes().to_vec()
+        let is_dnd = self
+            .dnd_source
+            .as_ref()
+            .is_some_and(|s| s.inner() == source);
+        let payload = if mime == crate::clipboard::GNOME_COPIED_FILES_MIME {
+            self.clipboard_owned_gnome_files.as_bytes().to_vec()
+        } else if mime == crate::linux_dnd::URI_LIST_MIME {
+            if is_dnd {
+                self.dnd_outbound_uri_list.as_bytes().to_vec()
+            } else {
+                self.clipboard_owned_uri_list.as_bytes().to_vec()
+            }
         } else {
             self.clipboard_owned_text.as_bytes().to_vec()
         };
@@ -2220,6 +2294,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let wake_signal = wake_pipe.signal_handle();
     let (cmd_tx, cmd_rx) = mpsc::channel::<WaylandCommand>();
     let clipboard_cache = Arc::new(Mutex::new(None));
+    let clipboard_files_cache = Arc::new(Mutex::new(Vec::new()));
+    let clipboard_file_effect_cache = Arc::new(Mutex::new(None));
 
     // 注册全局 Wayland 剪贴板后端，使 `SystemClipboard` 在 Linux/WSLg 下透明读写。
     let _clipboard_guard = ClipboardRegistrationGuard;
@@ -2228,6 +2304,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     ));
     register_wayland_clipboard(Some(Arc::new(WaylandClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
+        cached_files: clipboard_files_cache,
+        cached_file_effect: clipboard_file_effect_cache,
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
@@ -2248,6 +2326,8 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         data_device: None,
         clipboard_source: None,
         clipboard_owned_text: String::new(),
+        clipboard_owned_uri_list: String::new(),
+        clipboard_owned_gnome_files: String::new(),
         clipboard_cache,
         dnd_source: None,
         dnd_outbound_uri_list: String::new(),

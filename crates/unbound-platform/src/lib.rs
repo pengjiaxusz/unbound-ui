@@ -61,7 +61,9 @@ pub use a11y_platform::PlatformA11y;
 pub use a11y_win32::Win32A11y;
 pub use backend::{Flow, PlatformApp, PlatformWindow};
 pub use clipboard::{
-    ClipboardError, ClipboardProvider, MemoryClipboard, SystemClipboard, MAX_CLIPBOARD_BYTES,
+    decode_gnome_copied_files, encode_gnome_copied_files, is_headless_clipboard_loopback_enabled,
+    set_headless_clipboard_loopback, ClipboardError, ClipboardFileDropEffect, ClipboardProvider,
+    MemoryClipboard, SystemClipboard, GNOME_COPIED_FILES_MIME, MAX_CLIPBOARD_BYTES,
 };
 pub use dialogs::{
     open_file, open_file_async, open_files, pick_folder, pick_folder_async, save_file,

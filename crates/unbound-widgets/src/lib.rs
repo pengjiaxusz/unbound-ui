@@ -212,6 +212,7 @@ define_widget_catalog! {
         rating,
         repeat_button,
         rich_text,
+        rich_text_line,
         ruler,
         schema_form,
         scroll,
@@ -350,6 +351,7 @@ define_widget_catalog! {
         RatingControl => rating,
         RepeatButton => repeat_button,
         RichTextBlock => rich_text,
+        RichTextLine => rich_text_line,
         Ruler => ruler,
         SchemaForm => schema_form,
         ScrollView => scroll,
@@ -703,6 +705,10 @@ pub use rating::{
 pub use rich_text::{
     emit_rich_text, parse_markdown, BlockKind, RichBlock, RichDocument, RichTextDesc,
     HEADING_SCALE, RICH_TEXT_SIZE,
+};
+pub use rich_text_line::{
+    emit_rich_text_line, ColoredGlyphQuad, RichTextLineDesc, SpanDecoration,
+    RICH_TEXT_LINE_DEFAULT_SIZE,
 };
 pub use ruler::{
     emit_rulers, nice_step, GuideAxis, GuideLine, RulerDesc, RulerOutput, RulerState, RULER_BAND,

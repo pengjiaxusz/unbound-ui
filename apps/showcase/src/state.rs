@@ -1449,6 +1449,7 @@ pub fn reduce_showcase_component(
         | WidgetCatalogId::Banner
         | WidgetCatalogId::FileDrop
         | WidgetCatalogId::RichTextBlock
+        | WidgetCatalogId::RichTextLine
         | WidgetCatalogId::Overlay
         | WidgetCatalogId::Image
         | WidgetCatalogId::ShortcutBar

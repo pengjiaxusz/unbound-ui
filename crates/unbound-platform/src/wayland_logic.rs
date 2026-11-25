@@ -65,6 +65,24 @@ pub trait WaylandClipboardBackend: Send + Sync {
     fn read_text(&self) -> Option<String>;
     /// 向 Wayland `wl_data_device` 发布 UTF-8 文本选择源。
     fn write_text(&self, text: &str) -> bool;
+    /// Read file paths from the active Linux clipboard selection.
+    fn read_file_paths(&self) -> Option<Vec<std::path::PathBuf>> {
+        None
+    }
+    /// Read the file drop effect from the active Linux clipboard selection.
+    fn read_file_drop_effect(&self) -> Option<crate::clipboard::ClipboardFileDropEffect> {
+        None
+    }
+    /// Publish file paths to the Linux clipboard as `text/uri-list` and `x-special/gnome-copied-files`.
+    fn write_file_paths(
+        &self,
+        _paths: &[std::path::PathBuf],
+        _effect: crate::clipboard::ClipboardFileDropEffect,
+        _uri_list: &str,
+        _gnome_copied_files: &str,
+    ) -> bool {
+        false
+    }
 }
 
 static WAYLAND_CLIPBOARD: OnceLock<Mutex<Option<std::sync::Arc<dyn WaylandClipboardBackend>>>> =
@@ -94,6 +112,38 @@ pub fn write_wayland_clipboard_text(text: &str) -> bool {
         return false;
     };
     backend.write_text(text)
+}
+
+/// Read file paths from the registered Linux clipboard backend.
+#[must_use]
+pub fn read_wayland_clipboard_file_paths() -> Option<Vec<std::path::PathBuf>> {
+    let lock = WAYLAND_CLIPBOARD.get_or_init(|| Mutex::new(None));
+    let backend = lock.lock().ok()?.clone()?;
+    backend.read_file_paths()
+}
+
+/// Read file drop effect from the registered Linux clipboard backend.
+#[must_use]
+pub fn read_wayland_clipboard_file_drop_effect() -> Option<crate::clipboard::ClipboardFileDropEffect>
+{
+    let lock = WAYLAND_CLIPBOARD.get_or_init(|| Mutex::new(None));
+    let backend = lock.lock().ok()?.clone()?;
+    backend.read_file_drop_effect()
+}
+
+/// Write file paths to the registered Linux clipboard backend (`text/uri-list` + `x-special/gnome-copied-files`).
+#[must_use]
+pub fn write_wayland_clipboard_file_paths(
+    paths: &[std::path::PathBuf],
+    effect: crate::clipboard::ClipboardFileDropEffect,
+    uri_list: &str,
+    gnome_copied_files: &str,
+) -> bool {
+    let lock = WAYLAND_CLIPBOARD.get_or_init(|| Mutex::new(None));
+    let Some(backend) = lock.lock().ok().and_then(|g| g.clone()) else {
+        return false;
+    };
+    backend.write_file_paths(paths, effect, uri_list, gnome_copied_files)
 }
 
 /// Wayland 可见性驱动节流状态机（ADR-0030 / ADR-0032）。

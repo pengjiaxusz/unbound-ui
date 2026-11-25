@@ -14,6 +14,118 @@
 /// 引擎可接受的最大剪贴板载荷（以 UTF-8 字节计）。
 pub const MAX_CLIPBOARD_BYTES: usize = 16 * 1024 * 1024;
 
+/// GNOME / Freedesktop clipboard MIME type for file copy/cut operations.
+pub const GNOME_COPIED_FILES_MIME: &str = "x-special/gnome-copied-files";
+
+/// File transfer semantics attached to clipboard file-list operations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ClipboardFileDropEffect {
+    /// Copy the referenced files to the paste destination.
+    #[default]
+    Copy,
+    /// Move (cut) the referenced files to the paste destination.
+    Move,
+}
+
+impl ClipboardFileDropEffect {
+    /// Map to Win32 `DROPEFFECT_*` bitmask (`DROPEFFECT_COPY = 1`, `DROPEFFECT_MOVE = 2`).
+    #[must_use]
+    pub const fn win32_drop_effect_mask(self) -> u32 {
+        match self {
+            Self::Copy => crate::ole_drag::DROPEFFECT_COPY_MASK,
+            Self::Move => crate::ole_drag::DROPEFFECT_MOVE_MASK,
+        }
+    }
+
+    /// Parse a Win32 `Preferred DropEffect` bitmask into [`ClipboardFileDropEffect`].
+    #[must_use]
+    pub const fn from_win32_drop_effect_mask(mask: u32) -> Option<Self> {
+        if (mask & crate::ole_drag::DROPEFFECT_MOVE_MASK) != 0 {
+            Some(Self::Move)
+        } else if (mask & crate::ole_drag::DROPEFFECT_COPY_MASK) != 0 {
+            Some(Self::Copy)
+        } else {
+            None
+        }
+    }
+
+    /// Return the action header token used by `x-special/gnome-copied-files`.
+    #[must_use]
+    pub const fn gnome_action_name(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+            Self::Move => "cut",
+        }
+    }
+}
+
+/// Encode file paths and drop effect into the `x-special/gnome-copied-files` format.
+///
+/// Format: `<copy|cut>\nfile:///path/one\nfile:///path/two`
+#[must_use]
+pub fn encode_gnome_copied_files(
+    paths: &[std::path::PathBuf],
+    effect: ClipboardFileDropEffect,
+) -> String {
+    let uri_list = crate::linux_dnd::encode_uri_list(paths);
+    let mut out = String::with_capacity(uri_list.len() + 8);
+    out.push_str(effect.gnome_action_name());
+    for line in uri_list.lines() {
+        let trimmed = line.trim();
+        if !trimmed.is_empty() {
+            out.push('\n');
+            out.push_str(trimmed);
+        }
+    }
+    out
+}
+
+/// Decode an `x-special/gnome-copied-files` payload into its drop effect and local file paths.
+#[must_use]
+pub fn decode_gnome_copied_files(
+    raw: &str,
+) -> Option<(ClipboardFileDropEffect, Vec<std::path::PathBuf>)> {
+    let mut lines = raw.lines();
+    let header = lines.next()?.trim();
+    let effect = match header {
+        "copy" => ClipboardFileDropEffect::Copy,
+        "cut" => ClipboardFileDropEffect::Move,
+        _ => return None,
+    };
+    let rest: String = lines.collect::<Vec<_>>().join("\n");
+    let paths = crate::linux_dnd::decode_uri_list(&rest);
+    Some((effect, paths))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct HeadlessFileClipboard {
+    paths: Vec<std::path::PathBuf>,
+    effect: ClipboardFileDropEffect,
+}
+
+static HEADLESS_FILE_LOOPBACK: std::sync::OnceLock<
+    std::sync::Mutex<Option<HeadlessFileClipboard>>,
+> = std::sync::OnceLock::new();
+
+/// Enable or disable the in-memory file clipboard loopback for headless and test environments.
+pub fn set_headless_clipboard_loopback(enabled: bool) {
+    let lock = HEADLESS_FILE_LOOPBACK.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = lock.lock() {
+        if enabled {
+            *guard = Some(HeadlessFileClipboard::default());
+        } else {
+            *guard = None;
+        }
+    }
+}
+
+/// Return whether the in-memory headless file clipboard loopback is currently enabled.
+#[must_use]
+pub fn is_headless_clipboard_loopback_enabled() -> bool {
+    let lock = HEADLESS_FILE_LOOPBACK.get_or_init(|| std::sync::Mutex::new(None));
+    lock.lock().ok().is_some_and(|guard| guard.is_some())
+}
+
 /// 剪贴板操作失败原因。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClipboardError {
@@ -62,6 +174,7 @@ pub struct MemoryClipboard {
     text: Option<String>,
     image: Option<(u32, u32, Vec<u8>)>,
     files: Vec<std::path::PathBuf>,
+    file_effect: ClipboardFileDropEffect,
     max_bytes: usize,
 }
 
@@ -78,6 +191,7 @@ impl MemoryClipboard {
             text: None,
             image: None,
             files: Vec::new(),
+            file_effect: ClipboardFileDropEffect::Copy,
             max_bytes: MAX_CLIPBOARD_BYTES,
         }
     }
@@ -91,6 +205,23 @@ impl MemoryClipboard {
     /// 在剪贴板中设置文件路径列表。
     pub fn write_file_paths(&mut self, paths: Vec<std::path::PathBuf>) {
         self.files = paths;
+        self.file_effect = ClipboardFileDropEffect::Copy;
+    }
+
+    /// Store file paths together with a copy/move drop effect in memory.
+    pub fn write_file_paths_with_effect(
+        &mut self,
+        paths: Vec<std::path::PathBuf>,
+        effect: ClipboardFileDropEffect,
+    ) {
+        self.files = paths;
+        self.file_effect = effect;
+    }
+
+    /// Read the stored file drop effect from the in-memory clipboard.
+    #[must_use]
+    pub const fn read_file_drop_effect(&self) -> ClipboardFileDropEffect {
+        self.file_effect
     }
 
     /// 读取已复制的 RGBA 图像。
@@ -111,6 +242,7 @@ impl MemoryClipboard {
             text: None,
             image: None,
             files: Vec::new(),
+            file_effect: ClipboardFileDropEffect::Copy,
             max_bytes,
         }
     }
@@ -158,15 +290,110 @@ impl SystemClipboard {
         }
     }
 
+    /// Create a system clipboard instance with a custom byte-size limit.
+    #[must_use]
+    pub const fn with_limit(max_bytes: usize) -> Self {
+        Self { max_bytes }
+    }
+
+    fn effective_limit(&self) -> usize {
+        if self.max_bytes == 0 {
+            MAX_CLIPBOARD_BYTES
+        } else {
+            self.max_bytes
+        }
+    }
+
     /// 从剪贴板读取文件路径列表（例如从文件资源管理器复制的文件）。
     pub fn read_file_paths(&self) -> Result<Vec<std::path::PathBuf>, ClipboardError> {
+        if let Some(lock) = HEADLESS_FILE_LOOPBACK.get() {
+            if let Ok(guard) = lock.lock() {
+                if let Some(loopback) = guard.as_ref() {
+                    return Ok(loopback.paths.clone());
+                }
+            }
+        }
         #[cfg(windows)]
         {
             win32::read_files()
         }
         #[cfg(not(windows))]
         {
-            Ok(Vec::new())
+            Ok(crate::wayland_logic::read_wayland_clipboard_file_paths().unwrap_or_default())
+        }
+    }
+
+    /// Read the preferred file drop effect (`Copy` or `Move`) associated with clipboard files.
+    pub fn read_file_drop_effect(&self) -> Result<Option<ClipboardFileDropEffect>, ClipboardError> {
+        if let Some(lock) = HEADLESS_FILE_LOOPBACK.get() {
+            if let Ok(guard) = lock.lock() {
+                if let Some(loopback) = guard.as_ref() {
+                    return Ok((!loopback.paths.is_empty()).then_some(loopback.effect));
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            win32::read_preferred_drop_effect()
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(crate::wayland_logic::read_wayland_clipboard_file_drop_effect())
+        }
+    }
+
+    /// Write file paths and their copy/move drop effect to the system clipboard.
+    ///
+    /// - **Windows**: writes `CF_HDROP` (`DROPFILES` UTF-16LE) and `Preferred DropEffect`.
+    /// - **Linux**: publishes `text/uri-list` and `x-special/gnome-copied-files` through the active Wayland/X11 clipboard bridge.
+    /// - **Headless loopback**: when [`set_headless_clipboard_loopback`] is enabled, stores paths and effect in memory for deterministic testing.
+    pub fn write_file_paths(
+        &self,
+        paths: &[std::path::PathBuf],
+        effect: ClipboardFileDropEffect,
+    ) -> Result<(), ClipboardError> {
+        let hdrop_payload =
+            crate::ole_drag::build_cf_hdrop_payload(paths).map_err(|_| ClipboardError::Os)?;
+        let limit = self.effective_limit();
+        if hdrop_payload.len() > limit {
+            return Err(ClipboardError::TooLarge {
+                bytes: hdrop_payload.len(),
+                limit,
+            });
+        }
+        if let Some(lock) = HEADLESS_FILE_LOOPBACK.get() {
+            if let Ok(mut guard) = lock.lock() {
+                if let Some(loopback) = guard.as_mut() {
+                    loopback.paths = paths.to_vec();
+                    loopback.effect = effect;
+                    return Ok(());
+                }
+            }
+        }
+        #[cfg(windows)]
+        {
+            win32::write_files(&hdrop_payload, effect)
+        }
+        #[cfg(not(windows))]
+        {
+            let uri_list = crate::linux_dnd::encode_uri_list(paths);
+            let gnome_payload = encode_gnome_copied_files(paths, effect);
+            if uri_list.len() > limit || gnome_payload.len() > limit {
+                return Err(ClipboardError::TooLarge {
+                    bytes: uri_list.len().max(gnome_payload.len()),
+                    limit,
+                });
+            }
+            if crate::wayland_logic::write_wayland_clipboard_file_paths(
+                paths,
+                effect,
+                &uri_list,
+                &gnome_payload,
+            ) {
+                Ok(())
+            } else {
+                Err(ClipboardError::Unavailable)
+            }
         }
     }
 
@@ -207,11 +434,12 @@ mod win32 {
     //!
     //! 句柄生命周期严格受限于每次打开/关闭剪贴板的作用域。
 
+    use ::windows::core::w;
     use ::windows::Win32::Foundation::{GlobalFree, HANDLE, HGLOBAL};
     use ::windows::Win32::Graphics::Gdi::{BITMAPINFOHEADER, BI_RGB};
     use ::windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
-        OpenClipboard, SetClipboardData,
+        OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
     };
     use ::windows::Win32::System::Memory::{
         GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
@@ -345,6 +573,109 @@ mod win32 {
             }
             let _ = CloseClipboard();
             Ok(out)
+        }
+    }
+
+    pub(super) fn read_preferred_drop_effect(
+    ) -> Result<Option<super::ClipboardFileDropEffect>, super::ClipboardError> {
+        unsafe {
+            let format = RegisterClipboardFormatW(w!("Preferred DropEffect"));
+            if format == 0 {
+                return Ok(None);
+            }
+            if OpenClipboard(None).is_err() {
+                return Err(super::ClipboardError::Unavailable);
+            }
+            if IsClipboardFormatAvailable(format).is_err() {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            let Ok(handle) = GetClipboardData(format) else {
+                let _ = CloseClipboard();
+                return Ok(None);
+            };
+            if handle.is_invalid() {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            let hglobal = HGLOBAL(handle.0);
+            if GlobalSize(hglobal) < core::mem::size_of::<u32>() {
+                let _ = CloseClipboard();
+                return Ok(None);
+            }
+            let pointer = GlobalLock(hglobal).cast::<u8>();
+            if pointer.is_null() {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let mut raw = [0u8; 4];
+            core::ptr::copy_nonoverlapping(pointer, raw.as_mut_ptr(), 4);
+            let _ = GlobalUnlock(hglobal);
+            let _ = CloseClipboard();
+            let mask = u32::from_le_bytes(raw);
+            Ok(super::ClipboardFileDropEffect::from_win32_drop_effect_mask(
+                mask,
+            ))
+        }
+    }
+
+    pub(super) fn write_files(
+        hdrop_payload: &[u8],
+        effect: super::ClipboardFileDropEffect,
+    ) -> Result<(), super::ClipboardError> {
+        unsafe {
+            if OpenClipboard(None).is_err() {
+                return Err(super::ClipboardError::Unavailable);
+            }
+            if EmptyClipboard().is_err() {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+
+            let Ok(hdrop_mem) = GlobalAlloc(GMEM_MOVEABLE, hdrop_payload.len()) else {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            };
+            let hdrop_dst = GlobalLock(hdrop_mem).cast::<u8>();
+            if hdrop_dst.is_null() {
+                let _ = GlobalFree(Some(hdrop_mem));
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            core::ptr::copy_nonoverlapping(hdrop_payload.as_ptr(), hdrop_dst, hdrop_payload.len());
+            let _ = GlobalUnlock(hdrop_mem);
+            if SetClipboardData(CF_HDROP, Some(HANDLE(hdrop_mem.0))).is_err() {
+                let _ = GlobalFree(Some(hdrop_mem));
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+
+            let preferred_fmt = RegisterClipboardFormatW(w!("Preferred DropEffect"));
+            if preferred_fmt == 0 {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            let effect_bytes = effect.win32_drop_effect_mask().to_le_bytes();
+            let Ok(effect_mem) = GlobalAlloc(GMEM_MOVEABLE, effect_bytes.len()) else {
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            };
+            let effect_dst = GlobalLock(effect_mem).cast::<u8>();
+            if effect_dst.is_null() {
+                let _ = GlobalFree(Some(effect_mem));
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+            core::ptr::copy_nonoverlapping(effect_bytes.as_ptr(), effect_dst, effect_bytes.len());
+            let _ = GlobalUnlock(effect_mem);
+            if SetClipboardData(preferred_fmt, Some(HANDLE(effect_mem.0))).is_err() {
+                let _ = GlobalFree(Some(effect_mem));
+                let _ = CloseClipboard();
+                return Err(super::ClipboardError::Os);
+            }
+
+            let _ = CloseClipboard();
+            Ok(())
         }
     }
 
@@ -608,5 +939,118 @@ mod tests {
         let rgba = vec![255, 0, 0, 255, 0, 255, 0, 255];
         clipboard.write_image_rgba(2, 1, rgba.clone());
         assert_eq!(clipboard.read_image_rgba(), Some((2, 1, rgba)));
+    }
+
+    #[test]
+    fn memory_clipboard_tracks_file_drop_effect() {
+        let mut clipboard = MemoryClipboard::new();
+        assert_eq!(
+            clipboard.read_file_drop_effect(),
+            ClipboardFileDropEffect::Copy
+        );
+        let files = vec![std::path::PathBuf::from("/tmp/example.txt")];
+        clipboard.write_file_paths_with_effect(files.clone(), ClipboardFileDropEffect::Move);
+        assert_eq!(clipboard.read_file_paths(), files);
+        assert_eq!(
+            clipboard.read_file_drop_effect(),
+            ClipboardFileDropEffect::Move
+        );
+    }
+
+    #[test]
+    fn system_clipboard_headless_loopback_round_trips_file_paths() {
+        static LOOPBACK_TEST_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOOPBACK_TEST_GUARD.lock().unwrap();
+        set_headless_clipboard_loopback(true);
+        assert!(is_headless_clipboard_loopback_enabled());
+
+        let clipboard = SystemClipboard::new();
+        assert_eq!(clipboard.read_file_paths(), Ok(Vec::new()));
+        assert_eq!(clipboard.read_file_drop_effect(), Ok(None));
+
+        let files = vec![
+            std::path::PathBuf::from("/workspace/alpha.rs"),
+            std::path::PathBuf::from("/workspace/beta file.txt"),
+        ];
+        clipboard
+            .write_file_paths(&files, ClipboardFileDropEffect::Copy)
+            .unwrap();
+        assert_eq!(clipboard.read_file_paths(), Ok(files.clone()));
+        assert_eq!(
+            clipboard.read_file_drop_effect(),
+            Ok(Some(ClipboardFileDropEffect::Copy))
+        );
+
+        clipboard
+            .write_file_paths(&files, ClipboardFileDropEffect::Move)
+            .unwrap();
+        assert_eq!(clipboard.read_file_paths(), Ok(files));
+        assert_eq!(
+            clipboard.read_file_drop_effect(),
+            Ok(Some(ClipboardFileDropEffect::Move))
+        );
+
+        // Empty file list is rejected before mutating clipboard state.
+        assert_eq!(
+            clipboard.write_file_paths(&[], ClipboardFileDropEffect::Copy),
+            Err(ClipboardError::Os)
+        );
+
+        // Oversized payload is rejected before writing.
+        let tiny = SystemClipboard::with_limit(16);
+        let oversized = tiny
+            .write_file_paths(
+                &[std::path::PathBuf::from("/very/long/path/example.bin")],
+                ClipboardFileDropEffect::Copy,
+            )
+            .unwrap_err();
+        assert!(matches!(
+            oversized,
+            ClipboardError::TooLarge { limit: 16, .. }
+        ));
+
+        set_headless_clipboard_loopback(false);
+        assert!(!is_headless_clipboard_loopback_enabled());
+    }
+
+    #[test]
+    fn gnome_copied_files_codec_round_trips_copy_and_move() {
+        let paths = vec![
+            std::path::PathBuf::from("/home/user/notes.md"),
+            std::path::PathBuf::from("/home/user/my file.txt"),
+        ];
+        let encoded_copy = encode_gnome_copied_files(&paths, ClipboardFileDropEffect::Copy);
+        assert!(encoded_copy.starts_with("copy\nfile:///home/user/notes.md\n"));
+        assert_eq!(
+            decode_gnome_copied_files(&encoded_copy),
+            Some((ClipboardFileDropEffect::Copy, paths.clone()))
+        );
+
+        let encoded_move = encode_gnome_copied_files(&paths, ClipboardFileDropEffect::Move);
+        assert!(encoded_move.starts_with("cut\nfile:///home/user/notes.md\n"));
+        assert_eq!(
+            decode_gnome_copied_files(&encoded_move),
+            Some((ClipboardFileDropEffect::Move, paths))
+        );
+
+        assert_eq!(decode_gnome_copied_files("invalid\nfile:///a"), None);
+    }
+
+    #[test]
+    fn drop_effect_win32_mask_mapping_matches_shell_constants() {
+        assert_eq!(ClipboardFileDropEffect::Copy.win32_drop_effect_mask(), 1);
+        assert_eq!(ClipboardFileDropEffect::Move.win32_drop_effect_mask(), 2);
+        assert_eq!(
+            ClipboardFileDropEffect::from_win32_drop_effect_mask(1),
+            Some(ClipboardFileDropEffect::Copy)
+        );
+        assert_eq!(
+            ClipboardFileDropEffect::from_win32_drop_effect_mask(2),
+            Some(ClipboardFileDropEffect::Move)
+        );
+        assert_eq!(
+            ClipboardFileDropEffect::from_win32_drop_effect_mask(0),
+            None
+        );
     }
 }

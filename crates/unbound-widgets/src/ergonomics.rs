@@ -260,6 +260,148 @@ impl TextCtx<'_> {
         quads
     }
 
+    /// Measure a single rich text line with styled [`unbound_text::TextSpan`] runs (in logical pixels).
+    pub fn measure_rich_line(
+        &mut self,
+        text: &str,
+        base: &unbound_text::TextStyle,
+        spans: &[unbound_text::TextSpan],
+    ) -> Vec2 {
+        let min_h = base.font_size.max(1.0) * 1.35;
+        if text.is_empty() {
+            return Vec2::new(0.0, min_h);
+        }
+        let scale = self.effective_raster_scale();
+        let mut scaled_base = base.clone();
+        scaled_base.font_size *= scale;
+        if scaled_base.line_height > 0.0 {
+            scaled_base.line_height *= scale;
+        }
+        let scaled_spans: Vec<unbound_text::TextSpan> = spans
+            .iter()
+            .cloned()
+            .map(|mut span| {
+                span.style.font_size *= scale;
+                if span.style.line_height > 0.0 {
+                    span.style.line_height *= scale;
+                }
+                span
+            })
+            .collect();
+        let shaped = self
+            .engine
+            .shape_rich(text, &scaled_base, &scaled_spans, None);
+        Vec2::new(shaped.width / scale, (shaped.height / scale).max(min_h))
+    }
+
+    /// Shape and rasterize a [`crate::rich_text_line::RichTextLineDesc`] into per-span colored glyph quads
+    /// and optional span decorations (background highlights and underlines), with zero monochrome fallback.
+    pub fn shape_rich_line(
+        &mut self,
+        desc: &crate::rich_text_line::RichTextLineDesc,
+    ) -> (
+        Vec<crate::rich_text_line::ColoredGlyphQuad>,
+        Vec<crate::rich_text_line::SpanDecoration>,
+    ) {
+        if desc.text.is_empty() || desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
+            return (Vec::new(), Vec::new());
+        }
+        let scale = self.effective_raster_scale();
+        let effective_base = desc.effective_base_style();
+        let effective_spans = desc.effective_spans();
+
+        let mut scaled_base = effective_base.clone();
+        scaled_base.font_size *= scale;
+        if scaled_base.line_height > 0.0 {
+            scaled_base.line_height *= scale;
+        }
+        let scaled_spans: Vec<unbound_text::TextSpan> = effective_spans
+            .iter()
+            .cloned()
+            .map(|mut span| {
+                span.style.font_size *= scale;
+                if span.style.line_height > 0.0 {
+                    span.style.line_height *= scale;
+                }
+                span
+            })
+            .collect();
+
+        let shaped = self
+            .engine
+            .shape_rich(&desc.text, &scaled_base, &scaled_spans, None);
+        let logical_w = (shaped.width / scale).ceil();
+        let logical_h = (shaped.height / scale).max(effective_base.font_size);
+        let x = match desc.align_x {
+            AlignX::Left => desc.rect.origin.x,
+            AlignX::Center => {
+                let center_x =
+                    desc.rect.origin.x + ((desc.rect.width() - logical_w) * 0.5).max(0.0);
+                (center_x * scale).round() / scale
+            }
+            AlignX::Right => (desc.rect.max().x - logical_w).max(desc.rect.origin.x),
+        };
+        let y = match desc.align_y {
+            AlignY::Top => desc.rect.origin.y,
+            AlignY::Middle => {
+                desc.rect.origin.y + ((desc.rect.height() - logical_h) * 0.5).max(0.0) - 1.0
+            }
+            AlignY::Bottom => (desc.rect.max().y - logical_h).max(desc.rect.origin.y),
+        };
+
+        let mut clustered = self.cache.quads_for_spans(
+            self.engine,
+            &shaped,
+            &scaled_spans,
+            Vec2::new(x * scale, y * scale),
+            scaled_base.weight,
+            scaled_base.italic,
+        );
+        if (scale - 1.0).abs() > 1e-6 {
+            for (_, quad) in &mut clustered {
+                quad.rect.origin.x /= scale;
+                quad.rect.origin.y /= scale;
+                quad.rect.size.x /= scale;
+                quad.rect.size.y /= scale;
+            }
+        }
+
+        let colored_quads = desc.resolve_colored_quads(&clustered);
+        let mut decorations = Vec::new();
+        for span in &desc.spans {
+            if span.background.is_none() && !span.underline {
+                continue;
+            }
+            let mut min_x = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            for g in &shaped.glyphs {
+                if span.range.contains(&(g.cluster as usize)) {
+                    let gx = x + g.x / scale;
+                    let gw = (g.w / scale).max(0.0);
+                    min_x = min_x.min(gx);
+                    max_x = max_x.max(gx + gw);
+                }
+            }
+            if !min_x.is_finite() || max_x <= min_x {
+                continue;
+            }
+            if let Some(bg) = span.background {
+                decorations.push(crate::rich_text_line::SpanDecoration {
+                    rect: Rect::new(min_x, y, max_x - min_x, logical_h),
+                    color: bg,
+                });
+            }
+            if span.underline {
+                decorations.push(crate::rich_text_line::SpanDecoration {
+                    rect: Rect::new(min_x, y + logical_h - 1.0, max_x - min_x, 1.0),
+                    color: span.color,
+                });
+            }
+        }
+
+        (colored_quads, decorations)
+    }
+
     /// 返回当前平台与策略下解析出的可用符号字体族名称；不可用或被禁用时返回 `None`。
     #[must_use]
     pub fn symbol_font_family(&self) -> Option<&str> {

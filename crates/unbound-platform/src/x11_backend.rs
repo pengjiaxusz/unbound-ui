@@ -115,6 +115,10 @@ enum X11Command {
     ClipboardWrite {
         text: String,
     },
+    ClipboardWriteFiles {
+        uri_list: String,
+        gnome_copied_files: String,
+    },
     ThemeChanged {
         dark: bool,
     },
@@ -531,6 +535,8 @@ impl HasDisplayHandle for X11WindowHandle {
 /// X11 剪贴板跨线程桥接实现。
 struct X11ClipboardBridge {
     cached_text: Arc<Mutex<Option<String>>>,
+    cached_files: Arc<Mutex<Vec<std::path::PathBuf>>>,
+    cached_file_effect: Arc<Mutex<Option<crate::clipboard::ClipboardFileDropEffect>>>,
     cmd_tx: Mutex<mpsc::Sender<X11Command>>,
     wake_signal: X11WakeSignal,
 }
@@ -548,6 +554,43 @@ impl WaylandClipboardBackend for X11ClipboardBridge {
             let ok = tx
                 .send(X11Command::ClipboardWrite {
                     text: text.to_owned(),
+                })
+                .is_ok();
+            if ok {
+                self.wake_signal.signal();
+            }
+            ok
+        } else {
+            false
+        }
+    }
+
+    fn read_file_paths(&self) -> Option<Vec<std::path::PathBuf>> {
+        self.cached_files.lock().ok().map(|g| g.clone())
+    }
+
+    fn read_file_drop_effect(&self) -> Option<crate::clipboard::ClipboardFileDropEffect> {
+        self.cached_file_effect.lock().ok().and_then(|g| *g)
+    }
+
+    fn write_file_paths(
+        &self,
+        paths: &[std::path::PathBuf],
+        effect: crate::clipboard::ClipboardFileDropEffect,
+        uri_list: &str,
+        gnome_copied_files: &str,
+    ) -> bool {
+        if let Ok(mut guard) = self.cached_files.lock() {
+            *guard = paths.to_vec();
+        }
+        if let Ok(mut guard) = self.cached_file_effect.lock() {
+            *guard = Some(effect);
+        }
+        if let Ok(tx) = self.cmd_tx.lock() {
+            let ok = tx
+                .send(X11Command::ClipboardWriteFiles {
+                    uri_list: uri_list.to_owned(),
+                    gnome_copied_files: gnome_copied_files.to_owned(),
                 })
                 .is_ok();
             if ok {
@@ -705,6 +748,7 @@ struct X11Atoms {
     xdnd_selection: Atom,
     xdnd_action_copy: Atom,
     uri_list: Atom,
+    gnome_copied_files: Atom,
     xdnd_prop: Atom,
 }
 
@@ -746,6 +790,7 @@ impl X11Atoms {
             xdnd_selection: intern(b"XdndSelection")?,
             xdnd_action_copy: intern(b"XdndActionCopy")?,
             uri_list: intern(b"text/uri-list")?,
+            gnome_copied_files: intern(b"x-special/gnome-copied-files")?,
             xdnd_prop: intern(b"UNBOUND_XDND_PROP")?,
         })
     }
@@ -1004,13 +1049,20 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
     let wake_signal = wake_pipe.signal_handle();
     let (cmd_tx, cmd_rx) = mpsc::channel::<X11Command>();
     let clipboard_cache = Arc::new(Mutex::new(None));
+    let clipboard_files_cache = Arc::new(Mutex::new(Vec::new()));
+    let clipboard_file_effect_cache = Arc::new(Mutex::new(None));
     let mut clipboard_owned_text = String::new();
+    let mut clipboard_owned_uri_list = String::new();
+    let mut clipboard_owned_gnome_files = String::new();
+    let mut clipboard_has_files = false;
     let mut xdnd_outbound_uri_list = String::new();
 
     let _session_guard = X11SessionGuard;
     set_active_linux_backend(Some(LinuxBackendKind::X11));
     register_wayland_clipboard(Some(Arc::new(X11ClipboardBridge {
         cached_text: Arc::clone(&clipboard_cache),
+        cached_files: clipboard_files_cache,
+        cached_file_effect: clipboard_file_effect_cache,
         cmd_tx: Mutex::new(cmd_tx.clone()),
         wake_signal: wake_signal.clone(),
     })));
@@ -1489,7 +1541,12 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                         property = ev.target;
                     }
                     if ev.target == atoms.targets {
-                        let supported = [atoms.targets, atoms.utf8_string, AtomEnum::STRING.into()];
+                        let mut supported: Vec<u32> =
+                            vec![atoms.targets, atoms.utf8_string, AtomEnum::STRING.into()];
+                        if ev.selection == atoms.clipboard && clipboard_has_files {
+                            supported.push(atoms.uri_list);
+                            supported.push(atoms.gnome_copied_files);
+                        }
                         let _ = conn.change_property32(
                             PropMode::REPLACE,
                             ev.requestor,
@@ -1504,6 +1561,28 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             property,
                             ev.target,
                             xdnd_outbound_uri_list.as_bytes(),
+                        );
+                    } else if ev.selection == atoms.clipboard
+                        && clipboard_has_files
+                        && ev.target == atoms.uri_list
+                    {
+                        let _ = conn.change_property8(
+                            PropMode::REPLACE,
+                            ev.requestor,
+                            property,
+                            ev.target,
+                            clipboard_owned_uri_list.as_bytes(),
+                        );
+                    } else if ev.selection == atoms.clipboard
+                        && clipboard_has_files
+                        && ev.target == atoms.gnome_copied_files
+                    {
+                        let _ = conn.change_property8(
+                            PropMode::REPLACE,
+                            ev.requestor,
+                            property,
+                            ev.target,
+                            clipboard_owned_gnome_files.as_bytes(),
                         );
                     } else if ev.target == atoms.utf8_string
                         || ev.target == Atom::from(AtomEnum::STRING)
@@ -1751,6 +1830,22 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 }
                 X11Command::ClipboardWrite { text } => {
                     clipboard_owned_text = text;
+                    clipboard_has_files = false;
+                    if let Some(first) = windows.first() {
+                        let _ = conn.set_selection_owner(
+                            first.xid,
+                            atoms.clipboard,
+                            x11rb::CURRENT_TIME,
+                        );
+                    }
+                }
+                X11Command::ClipboardWriteFiles {
+                    uri_list,
+                    gnome_copied_files,
+                } => {
+                    clipboard_owned_uri_list = uri_list;
+                    clipboard_owned_gnome_files = gnome_copied_files;
+                    clipboard_has_files = true;
                     if let Some(first) = windows.first() {
                         let _ = conn.set_selection_owner(
                             first.xid,

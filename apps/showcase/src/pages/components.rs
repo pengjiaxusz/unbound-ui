@@ -214,6 +214,7 @@ pub const fn knobs_for_id(id: WidgetCatalogId) -> &'static [KnobSpec] {
         | WidgetCatalogId::FlipView
         | WidgetCatalogId::PersonPicture
         | WidgetCatalogId::RichTextBlock
+        | WidgetCatalogId::RichTextLine
         | WidgetCatalogId::ScrollView
         | WidgetCatalogId::Overlay
         | WidgetCatalogId::Viewport3D => KNOBS_VISUAL,
@@ -297,6 +298,7 @@ pub const fn declarative_code_for_id(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::RadioButton => "view.add(ui_key!(\"rad\"), RadioGroupDesc::new(rect, options));",
         WidgetCatalogId::RatingControl => "view.add(ui_key!(\"rtg\"), RatingDesc::new(rect, 5).value(4.5));",
         WidgetCatalogId::RichTextBlock => "view.add(ui_key!(\"rt\"), RichTextDesc::new(rect, markdown));",
+        WidgetCatalogId::RichTextLine => "view.rich_text_line_mono(ui_key!(\"rtl\"), code, spans, 13.0);",
         WidgetCatalogId::Ruler => "view.add(ui_key!(\"rlr\"), RulerDesc::new(rect));",
         WidgetCatalogId::ScrollView => "view.scroll_view(ui_key!(\"sc\"), true, |ui| { /* content */ });",
         WidgetCatalogId::SelectorBar => "view.add(ui_key!(\"seg\"), SegmentedDesc::new(rect, options));",
@@ -476,6 +478,7 @@ define_showcase_components! {
     PropertyGrid => "Property grid", "Sectioned inspector rows with reset points.", 320.0,
     RadioButton => "RadioButton", "A single-choice row in a group.", 240.0,
     RichTextBlock => "RichTextBlock", "Markdown parsed into styled runs.", 320.0,
+    RichTextLine => "RichTextLine", "Single-line colored TextSpan renderer with monospace support.", 320.0,
     Ruler => "Ruler", "Canvas rulers with draggable guides.", 320.0,
     ScrollView => "ScrollView", "A scrollable viewport with a real scrollbar.", 320.0,
     SelectorBar => "SelectorBar", "An unselected slot of a single-choice pill.", 240.0,
@@ -656,6 +659,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::RatingControl => "评分控件 (RatingControl)",
         WidgetCatalogId::RepeatButton => "长按重复按钮 (Repeat Button)",
         WidgetCatalogId::RichTextBlock => "富文本块 (RichTextBlock)",
+        WidgetCatalogId::RichTextLine => "RichTextLine (Colored TextSpan Line)",
         WidgetCatalogId::Ruler => "标尺参考线 (Ruler)",
         WidgetCatalogId::SchemaForm => "Schema 表单 (Schema Form)",
         WidgetCatalogId::ScrollView => "滚动视图 (ScrollView)",
@@ -771,6 +775,7 @@ pub const fn component_description_localized(
         WidgetCatalogId::PropertyGrid => "支持分组与属性重置点的检视器属性网格。",
         WidgetCatalogId::RadioButton => "单选组内的单行互斥单选按钮。",
         WidgetCatalogId::RichTextBlock => "将 Markdown 解析为多样式文本段的富文本块。",
+        WidgetCatalogId::RichTextLine => "Single-line colored TextSpan widget with monospace support and zero monochrome fallback.",
         WidgetCatalogId::Ruler => "带可拖拽辅助参考线的画布标尺。",
         WidgetCatalogId::ScrollView => "配备真实可拖拽滚动条的可滚动视口。",
         WidgetCatalogId::SelectorBar => "单选分段胶囊中的未选中槽位控件。",
@@ -950,6 +955,7 @@ pub const fn component_search_keywords(id: WidgetCatalogId) -> &'static str {
         WidgetCatalogId::RatingControl => "评分控件 星级评分 rating control",
         WidgetCatalogId::RepeatButton => "长按重复按钮 连续触发 repeat button",
         WidgetCatalogId::RichTextBlock => "富文本块 Markdown渲染 rich text block",
+        WidgetCatalogId::RichTextLine => "rich text line textspan syntax highlight monospace",
         WidgetCatalogId::Ruler => "标尺 辅助参考线 ruler",
         WidgetCatalogId::SchemaForm => "声明式配置表单 属性检查器 schema form",
         WidgetCatalogId::ScrollView => "滚动视图 平滑滚轮 scroll view",
