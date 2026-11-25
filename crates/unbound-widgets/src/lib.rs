@@ -616,8 +616,8 @@ pub use form::{
     FORM_INPUT_HEIGHT, FORM_LABEL_GAP, FORM_LINE, FORM_MESSAGE_GAP,
 };
 pub use gizmo::{
-    emit_gizmo, grip_rect_for, GizmoDesc, GizmoOutput, GRIP_SIZE, ROTATE_GRIP, ROTATE_OFFSET,
-    SIZE_BUBBLE,
+    emit_gizmo, grip_rect_for, grip_rect_rotated, GizmoDesc, GizmoOutput, GRIP_SIZE, ROTATE_GRIP,
+    ROTATE_OFFSET, SIZE_BUBBLE,
 };
 pub use hotkey_input::{emit_hotkey_input, HotkeyInputDesc, HotkeyInputState};
 pub use hover_card::{
@@ -1243,7 +1243,7 @@ pub struct SceneCollector {
     /// 当前激活的裁剪作用域：`(clip index, screen-space bounds)`。
     clip_stack: Vec<(u32, Rect)>,
     /// 当前激活的变换作用域：`(transform index, cumulative translation)`。
-    transform_stack: Vec<(u32, Vec2)>,
+    transform_stack: Vec<(u32, unbound_math::Affine2)>,
 }
 
 /// 将裁剪槽位的 `(centre, half-extent)` 形式还原为矩形。
@@ -1429,18 +1429,21 @@ impl SceneCollector {
     ///
     /// 作用域平移量为所有激活作用域之和，因此子节点只需引用最内层变换索引。
     /// 表的槽位 `0` 始终为单位变换。
-    pub fn push_transform(&mut self, mut transform: GpuTransform) -> u32 {
+    pub fn push_transform(&mut self, transform: GpuTransform) -> u32 {
         if self.transforms.is_empty() {
             self.transforms.push(GpuTransform::IDENTITY);
         }
-        if let Some(&(_, parent_offset)) = self.transform_stack.last() {
-            transform.translation[0] += parent_offset.x;
-            transform.translation[1] += parent_offset.y;
-        }
-        let offset = Vec2::new(transform.translation[0], transform.translation[1]);
+        let flags = transform.flags;
+        let composed = if let Some(&(_, parent_affine)) = self.transform_stack.last() {
+            parent_affine.then(&transform.to_affine())
+        } else {
+            transform.to_affine()
+        };
+        let mut gpu = GpuTransform::from_affine(composed);
+        gpu.flags = flags;
         let index = u32::try_from(self.transforms.len()).unwrap_or(CLIP_NONE - 1);
-        self.transforms.push(transform);
-        self.transform_stack.push((index, offset));
+        self.transforms.push(gpu);
+        self.transform_stack.push((index, composed));
         index
     }
 
@@ -1454,7 +1457,15 @@ impl SceneCollector {
     pub fn active_offset(&self) -> Vec2 {
         self.transform_stack
             .last()
-            .map_or(Vec2::ZERO, |&(_, offset)| offset)
+            .map_or(Vec2::ZERO, |&(_, affine)| Vec2::new(affine.tx, affine.ty))
+    }
+
+    /// Return the composed 2D affine transform of the active transform scope.
+    #[must_use]
+    pub fn active_transform(&self) -> unbound_math::Affine2 {
+        self.transform_stack
+            .last()
+            .map_or(unbound_math::Affine2::IDENTITY, |&(_, affine)| affine)
     }
 
     /// 追加单个控件的输出，并预留固定数量的图元槽位，使动态字形串不会导致后续控件的区间偏移。
@@ -1516,14 +1527,14 @@ impl SceneCollector {
     /// 追加单个控件的输出并记录其拥有的图元区间。
     pub fn push(&mut self, key: u64, mut output: WidgetOutput) {
         let active_transform = self.transform_stack.last().copied();
-        if let Some((transform_idx, offset)) = active_transform {
+        if let Some((transform_idx, affine)) = active_transform {
             for primitive in &mut output.primitives {
                 if primitive.transform_idx == 0 {
                     primitive.transform_idx = transform_idx;
                 }
             }
             if let Some(node) = output.a11y.as_mut() {
-                node.bounds = node.bounds.translate(offset);
+                node.bounds = affine.transform_rect_bounds(&node.bounds);
             }
         }
 
@@ -1595,8 +1606,8 @@ impl SceneCollector {
             self.upsert_semantic(key, node);
         }
         for (sub_key, mut sub_node) in output.sub_a11y {
-            if let Some((_, offset)) = active_transform {
-                sub_node.bounds = sub_node.bounds.translate(offset);
+            if let Some((_, affine)) = active_transform {
+                sub_node.bounds = affine.transform_rect_bounds(&sub_node.bounds);
             }
             if let Some((_, clip_rect)) = self.clip_stack.last().copied() {
                 sub_node.bounds = sub_node.bounds.intersect(&clip_rect);
@@ -1620,10 +1631,10 @@ impl SceneCollector {
 
     /// 将当前激活的变换与裁剪作用域折叠进命中区域边界。
     fn scope_hit(&self, hit: &mut HitRegion) {
-        if let Some(&(_, offset)) = self.transform_stack.last() {
-            hit.bounds = hit.bounds.translate(offset);
+        if let Some(&(_, affine)) = self.transform_stack.last() {
+            hit.bounds = affine.transform_rect_bounds(&hit.bounds);
             if let Some(clip) = hit.clip.as_mut() {
-                clip.rect = clip.rect.translate(offset);
+                clip.rect = affine.transform_rect_bounds(&clip.rect);
             }
         }
         if let Some(&(_, clip_rect)) = self.clip_stack.last() {

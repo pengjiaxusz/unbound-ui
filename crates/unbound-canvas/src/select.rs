@@ -88,12 +88,49 @@ impl Handle {
         }
     }
 
+    /// World-space position of this handle on an oriented bounding box rotated clockwise
+    /// by `rotation` radians around `bounds.center()`.
+    #[must_use]
+    pub fn position_rotated(self, bounds: Rect, rotation: f32, rotate_offset: f32) -> Vec2 {
+        let unrotated = self.position(bounds, rotate_offset);
+        if rotation.abs() < 1e-6 || !rotation.is_finite() {
+            return unrotated;
+        }
+        let center = bounds.center();
+        let (sin, cos) = rotation.sin_cos();
+        center + (unrotated - center).rotate(cos, sin)
+    }
+
+    /// World-space corners `[NW, NE, SE, SW]` of an oriented bounding box rotated clockwise
+    /// by `rotation` radians around `bounds.center()`.
+    #[must_use]
+    pub fn obb_corners(bounds: Rect, rotation: f32) -> [Vec2; 4] {
+        [
+            Self::NorthWest.position_rotated(bounds, rotation, 0.0),
+            Self::NorthEast.position_rotated(bounds, rotation, 0.0),
+            Self::SouthEast.position_rotated(bounds, rotation, 0.0),
+            Self::SouthWest.position_rotated(bounds, rotation, 0.0),
+        ]
+    }
+
     /// 查找 `point` 命中的控制柄（若有）。`radius` 单位为世界单位。
     #[must_use]
     pub fn hit(bounds: Rect, point: Vec2, radius: f32, rotate_offset: f32) -> Option<Self> {
+        Self::hit_rotated(bounds, 0.0, point, radius, rotate_offset)
+    }
+
+    /// Find the closest handle on an oriented bounding box hit by `point` within `radius`.
+    #[must_use]
+    pub fn hit_rotated(
+        bounds: Rect,
+        rotation: f32,
+        point: Vec2,
+        radius: f32,
+        rotate_offset: f32,
+    ) -> Option<Self> {
         let mut best: Option<(f32, Self)> = None;
         for handle in Self::ALL {
-            let delta = Self::position(handle, bounds, rotate_offset) - point;
+            let delta = Self::position_rotated(handle, bounds, rotation, rotate_offset) - point;
             let distance = delta.length_squared();
             if distance <= radius * radius && best.is_none_or(|(d, _)| distance < d) {
                 best = Some((distance, handle));
@@ -374,6 +411,8 @@ impl Transform2 {
 pub struct HandleDrag {
     handle: Handle,
     start_bounds: Rect,
+    /// Initial clockwise OBB rotation in radians around `start_bounds.center()`.
+    start_rotation: f32,
     start_pointer: Vec2,
     /// 允许的最小尺寸（世界单位；文档中的 24 px 目标适用于命中区域，
     /// 此处是防止矩形翻转的几何下限）。
@@ -386,13 +425,36 @@ impl HandleDrag {
     /// 在 `pointer` 处开始拖拽 `handle`。
     #[must_use]
     pub fn new(handle: Handle, start_bounds: Rect, pointer: Vec2, rotate_offset: f32) -> Self {
+        Self::new_rotated(handle, start_bounds, 0.0, pointer, rotate_offset)
+    }
+
+    /// Start dragging `handle` on an oriented bounding box with `start_rotation` radians.
+    #[must_use]
+    pub fn new_rotated(
+        handle: Handle,
+        start_bounds: Rect,
+        start_rotation: f32,
+        pointer: Vec2,
+        rotate_offset: f32,
+    ) -> Self {
         Self {
             handle,
             start_bounds,
+            start_rotation: if start_rotation.is_finite() {
+                start_rotation
+            } else {
+                0.0
+            },
             start_pointer: pointer,
             min_size: 1.0,
             rotate_offset,
         }
+    }
+
+    /// Initial OBB rotation angle in radians recorded when the drag started.
+    #[must_use]
+    pub fn start_rotation(&self) -> f32 {
+        self.start_rotation
     }
 
     #[must_use]
@@ -433,8 +495,17 @@ impl HandleDrag {
             }
         };
 
-        let start_vec = self.start_pointer - anchor;
-        let now_vec = pointer - anchor;
+        let (start_local, now_local) = if self.start_rotation.abs() > 1e-6 {
+            let (sin, cos) = (-self.start_rotation).sin_cos();
+            (
+                centre + (self.start_pointer - centre).rotate(cos, sin),
+                centre + (pointer - centre).rotate(cos, sin),
+            )
+        } else {
+            (self.start_pointer, pointer)
+        };
+        let start_vec = start_local - anchor;
+        let now_vec = now_local - anchor;
         let mut scale = Vec2::ONE;
         // 零跨度轴（细线）保持其缩放：没有可缩放的长度，除以零会污染变换。
         //
@@ -783,5 +854,59 @@ mod tests {
             }),
             SelectionMode::Toggle
         );
+    }
+
+    #[test]
+    fn obb_handle_positions_and_hit_testing_follow_rotation() {
+        let bounds = rect(100.0, 100.0, 200.0, 100.0);
+        let center = bounds.center();
+        let angle = core::f32::consts::FRAC_PI_2;
+        let rotate_offset = 20.0;
+
+        // Rotating 90 deg CW sends North (0, -50) to (+50, 0) relative to center.
+        let north = Handle::North.position_rotated(bounds, angle, rotate_offset);
+        assert!((north.x - (center.x + 50.0)).abs() < 1e-4);
+        assert!((north.y - center.y).abs() < 1e-4);
+
+        // Rotate handle sits 20 px beyond North along the rotated local -Y axis.
+        let rot = Handle::Rotate.position_rotated(bounds, angle, rotate_offset);
+        assert!((rot.x - (center.x + 70.0)).abs() < 1e-4);
+        assert!((rot.y - center.y).abs() < 1e-4);
+
+        // Hit-testing with rotation finds the rotated Rotate and SouthEast handles.
+        assert_eq!(
+            Handle::hit_rotated(
+                bounds,
+                angle,
+                rot + Vec2::new(2.0, -1.0),
+                8.0,
+                rotate_offset
+            ),
+            Some(Handle::Rotate)
+        );
+        let se = Handle::SouthEast.position_rotated(bounds, angle, rotate_offset);
+        assert_eq!(
+            Handle::hit_rotated(bounds, angle, se + Vec2::new(-2.0, 2.0), 8.0, rotate_offset),
+            Some(Handle::SouthEast)
+        );
+        // Unrotated North position should no longer hit North after 90 deg rotation.
+        let unrotated_north = Handle::North.position(bounds, rotate_offset);
+        assert_ne!(
+            Handle::hit_rotated(bounds, angle, unrotated_north, 8.0, rotate_offset),
+            Some(Handle::North)
+        );
+    }
+
+    #[test]
+    fn obb_handle_drag_scales_along_rotated_local_axes() {
+        let bounds = rect(100.0, 100.0, 200.0, 100.0);
+        let angle = core::f32::consts::FRAC_PI_2;
+        let start = Handle::East.position_rotated(bounds, angle, 20.0);
+        // At 90 deg CW, local +X points toward world +Y.
+        let mut drag = HandleDrag::new_rotated(Handle::East, bounds, angle, start, 20.0);
+        assert!((drag.start_rotation() - angle).abs() < 1e-6);
+        let tf = drag.update(start + Vec2::new(0.0, 100.0), Modifiers::NONE);
+        assert!((tf.scale.x - 1.5).abs() < 1e-4);
+        assert!((tf.scale.y - 1.0).abs() < 1e-4);
     }
 }

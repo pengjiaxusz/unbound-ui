@@ -174,6 +174,7 @@ impl Application for GalleryApp {
             | AppEvent::ExternalFileDragFinished(_)
             | AppEvent::NativePopupDismissed { .. }
             | AppEvent::OverlayDismissed { .. }
+            | AppEvent::DragEnd { .. }
             | AppEvent::Custom { .. } => {}
         }
 

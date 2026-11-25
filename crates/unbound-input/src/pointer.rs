@@ -46,6 +46,16 @@ impl Buttons {
             PointerButton::Forward => self.forward = pressed,
         }
     }
+
+    fn is_pressed(&self, button: PointerButton) -> bool {
+        match button {
+            PointerButton::Left => self.left,
+            PointerButton::Right => self.right,
+            PointerButton::Middle => self.middle,
+            PointerButton::Back => self.back,
+            PointerButton::Forward => self.forward,
+        }
+    }
 }
 
 /// 输入层向外发送的所有指针事件。
@@ -70,6 +80,12 @@ pub enum PointerEvent {
         target: u64,
         position: Vec2,
         delta: Vec2,
+    },
+    /// Emitted when a pointer drag gesture finishes on button release.
+    DragEnd {
+        target: u64,
+        position: Vec2,
+        button: PointerButton,
     },
     Up {
         target: Option<u64>,
@@ -101,6 +117,7 @@ impl PointerEvent {
             }
             Self::DragStart { target, .. }
             | Self::Drag { target, .. }
+            | Self::DragEnd { target, .. }
             | Self::Click { target, .. }
             | Self::DoubleClick { target, .. }
             | Self::CaptureLost { target } => Some(*target),
@@ -216,10 +233,17 @@ impl PointerState {
         ) {
             // 次键与导航侧键不得干扰左键双击计时器：先右键或侧键再左键属于不同手势。
             // 若主键拖拽已在进行中，则保留原捕获，次键/侧键仅上报自身事件。
-            let primary_active = matches!(
-                self.press_button,
-                Some(PointerButton::Left | PointerButton::Middle)
-            );
+            let primary_active = if button == PointerButton::Right {
+                matches!(
+                    self.press_button,
+                    Some(PointerButton::Left | PointerButton::Middle)
+                )
+            } else {
+                matches!(
+                    self.press_button,
+                    Some(PointerButton::Left | PointerButton::Middle | PointerButton::Right)
+                )
+            };
             if !primary_active {
                 self.down_position = position;
                 self.pressed = target;
@@ -271,11 +295,11 @@ impl PointerState {
         self.position = position;
         if let Some(target) = self.pressed {
             if !self.dragging {
-                // 只有拥有拖拽手势的按键才能跨越移动阈值：
-                // 次键在释放前始终保持按压状态。
+                // Left, middle, and right buttons can cross the drag threshold;
+                // navigation side buttons stay non-draggable.
                 let draggable = matches!(
                     self.press_button,
-                    Some(PointerButton::Left | PointerButton::Middle)
+                    Some(PointerButton::Left | PointerButton::Middle | PointerButton::Right)
                 );
                 if draggable && (position - self.down_position).length() >= self.config.drag_slop {
                     self.dragging = true;
@@ -287,7 +311,10 @@ impl PointerState {
                     target: Some(target),
                 });
             }
-            if self.buttons.left || self.buttons.middle {
+            if self
+                .press_button
+                .is_some_and(|button| self.buttons.is_pressed(button))
+            {
                 return Some(PointerEvent::Drag {
                     target,
                     position,
@@ -336,6 +363,15 @@ impl PointerState {
             position,
             button,
         }];
+        if dragged {
+            if let Some(target) = target {
+                events.push(PointerEvent::DragEnd {
+                    target,
+                    position,
+                    button,
+                });
+            }
+        }
         if button == PointerButton::Left && !dragged {
             if let Some(target) = target {
                 events.push(PointerEvent::Click {
@@ -445,8 +481,20 @@ mod tests {
             } if (delta.x - 4.0).abs() < 1e-6
         ));
         let events = p.on_up(Vec2::new(9.0, 0.0), PointerButton::Left, 0.2);
-        assert_eq!(events.len(), 1, "a drag must not synthesise a click");
+        assert_eq!(
+            events.len(),
+            2,
+            "a drag must emit Up and DragEnd without a click"
+        );
         assert!(matches!(events[0], PointerEvent::Up { .. }));
+        assert!(matches!(
+            events[1],
+            PointerEvent::DragEnd {
+                target: 3,
+                button: PointerButton::Left,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -516,12 +564,80 @@ mod tests {
     }
 
     #[test]
-    fn the_right_button_never_starts_a_drag() {
+    fn the_right_button_drags_past_slop_and_emits_drag_end() {
         let mut p = state();
         p.on_down(Some(1), Vec2::new(0.0, 0.0), PointerButton::Right, 0.0);
-        let event = p.on_move(Vec2::new(100.0, 0.0)).unwrap();
-        assert!(matches!(event, PointerEvent::Move { .. }));
+        // Sub-slop movement stays a Move so short presses remain context-menu clicks.
+        let sub = p.on_move(Vec2::new(1.5, 0.0)).unwrap();
+        assert!(matches!(
+            sub,
+            PointerEvent::Move {
+                target: Some(1),
+                ..
+            }
+        ));
         assert!(!p.is_dragging());
+
+        // Crossing the drag slop starts a right-button drag stream.
+        let start = p.on_move(Vec2::new(10.0, 0.0)).unwrap();
+        assert!(matches!(start, PointerEvent::DragStart { target: 1, .. }));
+        assert!(p.is_dragging());
+
+        let drag = p.on_move(Vec2::new(24.0, 6.0)).unwrap();
+        assert!(matches!(
+            drag,
+            PointerEvent::Drag {
+                target: 1,
+                delta,
+                ..
+            } if (delta.x - 14.0).abs() < 1e-6 && (delta.y - 6.0).abs() < 1e-6
+        ));
+
+        let events = p.on_up(Vec2::new(24.0, 6.0), PointerButton::Right, 0.2);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[0],
+            PointerEvent::Up {
+                target: Some(1),
+                button: PointerButton::Right,
+                ..
+            }
+        ));
+        assert!(matches!(
+            events[1],
+            PointerEvent::DragEnd {
+                target: 1,
+                button: PointerButton::Right,
+                ..
+            }
+        ));
+        assert!(!p.is_dragging());
+        assert_eq!(p.capture(), None);
+    }
+
+    #[test]
+    fn sub_slop_right_press_releases_without_drag_events() {
+        let mut p = state();
+        p.on_down(Some(4), Vec2::new(10.0, 10.0), PointerButton::Right, 0.0);
+        let mv = p.on_move(Vec2::new(11.0, 10.5)).unwrap();
+        assert!(matches!(
+            mv,
+            PointerEvent::Move {
+                target: Some(4),
+                ..
+            }
+        ));
+        assert!(!p.is_dragging());
+        let events = p.on_up(Vec2::new(11.0, 10.5), PointerButton::Right, 0.05);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            PointerEvent::Up {
+                target: Some(4),
+                button: PointerButton::Right,
+                ..
+            }
+        ));
     }
 
     /// 次键按下会被捕获以便释放时拥有目标，但它不产生点击：
@@ -569,7 +685,15 @@ mod tests {
         let drag = p.on_move(Vec2::new(20.0, 0.0)).unwrap();
         assert!(matches!(drag, PointerEvent::Drag { target: 2, .. }));
         let events = p.on_up(Vec2::new(20.0, 0.0), PointerButton::Middle, 0.1);
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[1],
+            PointerEvent::DragEnd {
+                target: 2,
+                button: PointerButton::Middle,
+                ..
+            }
+        ));
         assert!(!events
             .iter()
             .any(|event| matches!(event, PointerEvent::Click { .. })));

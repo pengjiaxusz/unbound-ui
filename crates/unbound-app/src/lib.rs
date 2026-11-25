@@ -576,6 +576,12 @@ pub enum AppEvent {
     DragStart { node: u64, pos: Vec2 },
     /// 拖拽移动了 `delta`。
     Drag { node: u64, pos: Vec2, delta: Vec2 },
+    /// Emitted when a pointer drag gesture ends on button release.
+    DragEnd {
+        node: u64,
+        pos: Vec2,
+        button: PointerButton,
+    },
     /// 滚轮在 `target` 上滚动。
     Wheel {
         pos: Vec2,
@@ -646,7 +652,8 @@ impl AppEvent {
             | AppEvent::DoubleClick { node, .. }
             | AppEvent::ContextMenu { node, .. }
             | AppEvent::DragStart { node, .. }
-            | AppEvent::Drag { node, .. } => Some(*node),
+            | AppEvent::Drag { node, .. }
+            | AppEvent::DragEnd { node, .. } => Some(*node),
             AppEvent::PointerDown { target, .. }
             | AppEvent::PointerUp { target, .. }
             | AppEvent::Wheel { target, .. } => *target,
@@ -1915,6 +1922,173 @@ struct TreeViewScrollSync {
 ///
 /// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
 /// 控件本身从不猜测自身几何。
+/// Descriptor for an externally-managed RGBA8 texture image widget supporting
+/// normalized `sample_uv`, pixel-space `crop_rect`, and 2D rotation/flip transforms.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExternalTextureDesc {
+    /// Handle to the externally-managed texture.
+    pub handle: ExternalTextureHandle,
+    /// Target layout size in logical pixels.
+    pub size: Vec2,
+    /// Object fit mode inside the layout box.
+    pub fit: unbound_widgets::ObjectFit,
+    /// Optional explicit normalized sampling UV rectangle in `[0, 1]`.
+    pub sample_uv: Option<Rect>,
+    /// Optional local crop rectangle in source texture pixel coordinates.
+    pub crop_rect: Option<Rect>,
+    /// Clockwise 2D rotation angle in radians around the image center.
+    pub rotation: f32,
+    /// Whether to mirror horizontally around the image center.
+    pub flip_x: bool,
+    /// Whether to mirror vertically around the image center.
+    pub flip_y: bool,
+    /// Corner radii `[top-left, top-right, bottom-right, bottom-left]`.
+    pub radius: [f32; 4],
+    /// Border stroke width in logical pixels (`0.0` disables border).
+    pub border_width: f32,
+    /// Border color token.
+    pub border_color: unbound_theme::Token,
+    /// Optional tint color token (`Token::NONE` preserves texture colors).
+    pub tint: unbound_theme::Token,
+    /// Local draw order offset.
+    pub z: u16,
+    /// Whether the image accepts pointer clicks.
+    pub interactive: bool,
+}
+
+impl ExternalTextureDesc {
+    /// Create a descriptor with default UV, zero rotation, and no flip.
+    #[must_use]
+    pub const fn new(
+        handle: ExternalTextureHandle,
+        size: Vec2,
+        fit: unbound_widgets::ObjectFit,
+    ) -> Self {
+        Self {
+            handle,
+            size,
+            fit,
+            sample_uv: None,
+            crop_rect: None,
+            rotation: 0.0,
+            flip_x: false,
+            flip_y: false,
+            radius: [4.0; 4],
+            border_width: 0.0,
+            border_color: unbound_theme::Token::NONE,
+            tint: unbound_theme::Token::NONE,
+            z: 690,
+            interactive: false,
+        }
+    }
+
+    /// Set an explicit normalized sampling UV sub-rectangle.
+    #[must_use]
+    pub const fn with_sample_uv(mut self, uv: Rect) -> Self {
+        self.sample_uv = Some(uv);
+        self
+    }
+
+    /// Set a local crop rectangle in texture pixel coordinates.
+    #[must_use]
+    pub const fn with_crop_rect(mut self, crop: Rect) -> Self {
+        self.crop_rect = Some(crop);
+        self
+    }
+
+    /// Set clockwise 2D rotation angle in radians around the image center.
+    #[must_use]
+    pub fn with_rotation(mut self, radians: f32) -> Self {
+        self.rotation = if radians.is_finite() { radians } else { 0.0 };
+        self
+    }
+
+    /// Set horizontal mirror flag.
+    #[must_use]
+    pub const fn with_flip_x(mut self, flip: bool) -> Self {
+        self.flip_x = flip;
+        self
+    }
+
+    /// Set vertical mirror flag.
+    #[must_use]
+    pub const fn with_flip_y(mut self, flip: bool) -> Self {
+        self.flip_y = flip;
+        self
+    }
+
+    /// Set horizontal and vertical mirror flags.
+    #[must_use]
+    pub const fn with_flip(mut self, flip_x: bool, flip_y: bool) -> Self {
+        self.flip_x = flip_x;
+        self.flip_y = flip_y;
+        self
+    }
+
+    /// Set uniform corner radius.
+    #[must_use]
+    pub const fn with_radius(mut self, radius: f32) -> Self {
+        self.radius = [radius; 4];
+        self
+    }
+
+    /// Set per-corner radii `[top-left, top-right, bottom-right, bottom-left]`.
+    #[must_use]
+    pub const fn with_radii(mut self, radii: [f32; 4]) -> Self {
+        self.radius = radii;
+        self
+    }
+
+    /// Set border width and color token.
+    #[must_use]
+    pub const fn with_border(mut self, width: f32, color: unbound_theme::Token) -> Self {
+        self.border_width = width;
+        self.border_color = color;
+        self
+    }
+
+    /// Set tint color token.
+    #[must_use]
+    pub const fn with_tint(mut self, tint: unbound_theme::Token) -> Self {
+        self.tint = tint;
+        self
+    }
+
+    /// Set local draw order offset.
+    #[must_use]
+    pub const fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
+    }
+
+    /// Set whether this image accepts pointer clicks.
+    #[must_use]
+    pub const fn with_interactive(mut self, interactive: bool) -> Self {
+        self.interactive = interactive;
+        self
+    }
+}
+
+/// Convert a finite non-identity `RawNodeDesc::transform` array into an `Affine2`.
+fn raw_transform_to_affine(m: [f32; 6]) -> Option<unbound_math::Affine2> {
+    if !m.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let affine = unbound_math::Affine2 {
+        m00: m[0],
+        m10: m[1],
+        m01: m[2],
+        m11: m[3],
+        tx: m[4],
+        ty: m[5],
+    };
+    if affine.is_identity() {
+        None
+    } else {
+        Some(affine)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum WidgetSpec {
     /// 实现自动固有尺寸测量与发射的声明式 [`UiWidget`]。
@@ -1978,15 +2152,18 @@ pub enum WidgetSpec {
     Alert(AlertDesc),
     /// 图像控件（支持图集层与异步资产解析）。
     Image(unbound_widgets::ImageDesc),
-    /// 外部托管 RGBA8 纹理图像控件（未就绪时绘制等尺寸占位框）。
-    ExternalImage {
-        /// 外部纹理逻辑句柄。
-        handle: ExternalTextureHandle,
-        /// 布局占位与绘制目标尺寸。
-        size: Vec2,
-        /// 图像适应方式。
-        fit: unbound_widgets::ObjectFit,
+    /// Externally managed RGBA8 texture image widget with optional UV/crop and 2D transform.
+    ExternalImage(ExternalTextureDesc),
+    /// Transform gizmo widget with optional OBB rotation and drag preview.
+    Gizmo {
+        desc: unbound_widgets::GizmoDesc,
+        preview: Option<(unbound_canvas::Handle, Rect)>,
+        guides: Vec<unbound_canvas::SnapGuide>,
     },
+    /// Begin a 2D affine transform scope for a container and its descendants.
+    TransformScopeBegin { transform: [f32; 6] },
+    /// End the innermost 2D affine transform scope.
+    TransformScopeEnd,
     /// 声明式视频表面控件（未就绪或被驱逐时绘制受控圆角占位图元，就绪后采样绑定槽位）。
     VideoSurface(VideoSurfaceDesc),
     /// 3D 视口控件（绑定离屏 Vulkan 渲染目标或软件降级外部纹理）。
@@ -2800,7 +2977,18 @@ impl<'a> ViewBuilder<'a> {
         } else {
             self.z_base
         };
+        let has_transform = raw_transform_to_affine(desc.transform).is_some();
         let (effective_key, node) = self.reconcile_node(key, desc, core::panic::Location::caller());
+        if has_transform {
+            self.pending.push(PendingWidget {
+                key: 0,
+                node,
+                spec: WidgetSpec::TransformScopeBegin {
+                    transform: desc.transform,
+                },
+                z_base: next_z_base,
+            });
+        }
         if is_interactive && effective_key != 0 {
             let depth_z = (80u16.saturating_add(self.depth.saturating_mul(6))).min(480);
             let hit_z = next_z_base.saturating_add(depth_z);
@@ -2842,6 +3030,14 @@ impl<'a> ViewBuilder<'a> {
         self.depth = self.depth.saturating_add(1);
         self.z_base = next_z_base;
         build(self);
+        if has_transform {
+            self.pending.push(PendingWidget {
+                key: 0,
+                node,
+                spec: WidgetSpec::TransformScopeEnd,
+                z_base: next_z_base,
+            });
+        }
         self.depth = prev_depth;
         self.z_base = prev_z_base;
         self.parent = parent;
@@ -2887,7 +3083,10 @@ impl<'a> ViewBuilder<'a> {
             )),
             WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
-            WidgetSpec::ExternalImage { size, .. } => Some(*size),
+            WidgetSpec::ExternalImage(desc) => {
+                Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
+            }
+            WidgetSpec::Gizmo { desc, .. } => Some(desc.bounds.size),
             WidgetSpec::VideoSurface(desc) => {
                 Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
             }
@@ -2930,7 +3129,9 @@ impl<'a> ViewBuilder<'a> {
             | WidgetSpec::BoxSurface { .. }
             | WidgetSpec::InteractiveHit { .. }
             | WidgetSpec::ScrollScopeBegin { .. }
-            | WidgetSpec::ScrollScopeEnd => None,
+            | WidgetSpec::ScrollScopeEnd
+            | WidgetSpec::TransformScopeBegin { .. }
+            | WidgetSpec::TransformScopeEnd => None,
         };
         if let Some(size) = intrinsic {
             desc = desc.size(size.x, size.y);
@@ -3309,11 +3510,48 @@ impl<'a> ViewBuilder<'a> {
         size: Vec2,
         fit: unbound_widgets::ObjectFit,
     ) -> NodeId {
-        let node_desc = RawNodeDesc::container().size(size.x.max(0.0), size.y.max(0.0));
+        self.image_external_with(key, ExternalTextureDesc::new(handle, size, fit))
+    }
+
+    /// Declarative external texture image widget with full UV, crop, and 2D transform options.
+    pub fn image_external_with(&mut self, key: u64, desc: ExternalTextureDesc) -> NodeId {
+        let node_desc = RawNodeDesc::container().size(desc.size.x.max(0.0), desc.size.y.max(0.0));
+        self.image_external_with_layout(key, node_desc, desc)
+    }
+
+    /// Declarative external texture image widget with custom layout descriptor and UV/transform options.
+    pub fn image_external_with_layout(
+        &mut self,
+        key: u64,
+        node_desc: RawNodeDesc,
+        desc: ExternalTextureDesc,
+    ) -> NodeId {
+        self.widget(key, node_desc, WidgetSpec::ExternalImage(desc))
+    }
+
+    /// Declarative transform gizmo supporting axis-aligned or rotated OBB handles.
+    pub fn gizmo(&mut self, key: u64, desc: unbound_widgets::GizmoDesc) -> NodeId {
+        self.gizmo_with_preview(key, desc, None, Vec::new())
+    }
+
+    /// Declarative transform gizmo with an active drag preview and snap guides.
+    pub fn gizmo_with_preview(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::GizmoDesc,
+        preview: Option<(unbound_canvas::Handle, Rect)>,
+        guides: Vec<unbound_canvas::SnapGuide>,
+    ) -> NodeId {
+        let node_desc = RawNodeDesc::container()
+            .size(desc.bounds.width().max(0.0), desc.bounds.height().max(0.0));
         self.widget(
             key,
             node_desc,
-            WidgetSpec::ExternalImage { handle, size, fit },
+            WidgetSpec::Gizmo {
+                desc,
+                preview,
+                guides,
+            },
         )
     }
 
@@ -5364,6 +5602,7 @@ pub struct AppRuntime<A: Application> {
     overlays: OverlayManager,
     scroll_regions: Vec<(u64, Rect, Vec2, bool)>,
     last_pointer_down_target: Option<u64>,
+    suppress_context_menu_on_up: bool,
     /// 按下那刻展开的冒泡路径，供释放时校验目标一致性（路径不再随帧间树变化漂移）。
     last_pointer_down_path: Vec<u64>,
     /// 本帧注册的标题栏根容器及其控制按钮映射。
@@ -5474,6 +5713,7 @@ impl<A: Application> AppRuntime<A> {
             overlays: OverlayManager::new(),
             scroll_regions: Vec::new(),
             last_pointer_down_target: None,
+            suppress_context_menu_on_up: false,
             last_pointer_down_path: Vec::new(),
             title_bar_bindings: FxHashMap::default(),
             window_commands: Vec::new(),
@@ -6266,10 +6506,20 @@ impl<A: Application> AppRuntime<A> {
         let _ = self.viewport_3d_tracker.on_pointer_up(button);
         let events = self.router.pointer_up_button(pos, button, self.time);
         self.ctx.pointer = pos;
+        self.suppress_context_menu_on_up = events.iter().any(|event| {
+            matches!(
+                event,
+                PointerEvent::DragEnd {
+                    button: PointerButton::Right,
+                    ..
+                }
+            )
+        });
         let mut flags = DirtyFlags::PAINT;
         for event in events {
             flags = flags.merge(self.reduce_pointer(event));
         }
+        self.suppress_context_menu_on_up = false;
         self.sync_router_context();
         self.mark(flags);
         flags
@@ -7696,7 +7946,10 @@ impl<A: Application> AppRuntime<A> {
                     }
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
-                    WidgetSpec::ExternalImage { size, .. } => Some(*size),
+                    WidgetSpec::ExternalImage(desc) => {
+                        Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
+                    }
+                    WidgetSpec::Gizmo { desc, .. } => Some(desc.bounds.size),
                     WidgetSpec::VideoSurface(desc) => {
                         Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
                     }
@@ -7741,7 +7994,9 @@ impl<A: Application> AppRuntime<A> {
                     | WidgetSpec::BoxSurface { .. }
                     | WidgetSpec::InteractiveHit { .. }
                     | WidgetSpec::ScrollScopeBegin { .. }
-                    | WidgetSpec::ScrollScopeEnd => None,
+                    | WidgetSpec::ScrollScopeEnd
+                    | WidgetSpec::TransformScopeBegin { .. }
+                    | WidgetSpec::TransformScopeEnd => None,
                 };
                 if let Some(size) = intrinsic {
                     if let Some(data) = self.world.get_mut(entry.node) {
@@ -7804,6 +8059,7 @@ impl<A: Application> AppRuntime<A> {
         self.viewport_3d_frame_resize_count = 0;
         self.viewport_3d_scale_dirty = false;
         let pending = core::mem::take(&mut self.pending);
+        let mut active_transform_nodes: Vec<NodeId> = Vec::new();
         for (entry_idx, entry) in pending.iter().enumerate() {
             let is_tooltip_entry = self.tooltip_pending_indices.contains(&entry_idx);
             let regions_before = self.collector.regions.len();
@@ -7851,6 +8107,29 @@ impl<A: Application> AppRuntime<A> {
                 }
                 out
             };
+            let is_scope_spec = matches!(
+                entry.spec,
+                WidgetSpec::TransformScopeBegin { .. }
+                    | WidgetSpec::TransformScopeEnd
+                    | WidgetSpec::ScrollScopeBegin { .. }
+                    | WidgetSpec::ScrollScopeEnd
+            );
+            let node_transform_pushed =
+                if !is_scope_spec && !active_transform_nodes.contains(&entry.node) {
+                    if let Some(affine) = self
+                        .world
+                        .get(entry.node)
+                        .and_then(|node| raw_transform_to_affine(node.desc.transform))
+                    {
+                        self.collector
+                            .push_transform(unbound_gpu::GpuTransform::from_affine(affine));
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
             match &entry.spec {
                 WidgetSpec::UiWidget(widget) => {
                     let scrolled_rect = rect.translate(self.collector.active_offset());
@@ -8064,32 +8343,124 @@ impl<A: Application> AppRuntime<A> {
                     );
                     self.collector.push(entry.key, out);
                 }
-                WidgetSpec::ExternalImage { handle, size, fit } => {
+                WidgetSpec::ExternalImage(ext) => {
                     let draw_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
                         rect
                     } else {
-                        Rect::new(rect.origin.x, rect.origin.y, size.x, size.y)
+                        Rect::new(rect.origin.x, rect.origin.y, ext.size.x, ext.size.y)
                     };
-                    let mut desc =
-                        if let Some((slot, w, h)) = self.asset_hub.external_texture_slot(*handle) {
-                            unbound_widgets::ImageDesc::new(
-                                draw_rect,
-                                Vec2::new(w as f32, h as f32),
-                                slot,
-                            )
-                        } else {
-                            unbound_widgets::ImageDesc::new(draw_rect, *size, 0)
-                                .with_asset(unbound_asset::AssetId(0))
-                        };
-                    desc.fit = *fit;
-                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let resolved_slot = self.asset_hub.external_texture_slot(ext.handle);
+                    let mut desc = if let Some((slot, w, h)) = resolved_slot {
+                        unbound_widgets::ImageDesc::new(
+                            draw_rect,
+                            Vec2::new(w as f32, h as f32),
+                            slot,
+                        )
+                    } else {
+                        unbound_widgets::ImageDesc::new(draw_rect, ext.size, 0)
+                            .with_asset(unbound_asset::AssetId(0))
+                    };
+                    desc.fit = ext.fit;
+                    desc.radius = ext.radius;
+                    desc.border_width = ext.border_width;
+                    desc.border_color = ext.border_color;
+                    desc.tint = ext.tint;
+                    desc.interactive = ext.interactive;
+                    desc.sample_uv = ext.sample_uv.or_else(|| {
+                        let crop = ext.crop_rect?;
+                        let (_, w, h) = resolved_slot?;
+                        if w == 0 || h == 0 {
+                            return None;
+                        }
+                        Some(Rect::new(
+                            crop.origin.x / w as f32,
+                            crop.origin.y / h as f32,
+                            crop.size.x / w as f32,
+                            crop.size.y / h as f32,
+                        ))
+                    });
+                    desc.z = entry.z_base.saturating_add(ext.z);
                     let out = unbound_widgets::emit_image_with_assets(
                         entry.key,
                         &desc,
                         state,
                         &self.asset_hub,
                     );
+                    let has_local_tf = (ext.rotation.abs() > 1e-6 && ext.rotation.is_finite())
+                        || ext.flip_x
+                        || ext.flip_y;
+                    if has_local_tf {
+                        let scale = Vec2::new(
+                            if ext.flip_x { -1.0 } else { 1.0 },
+                            if ext.flip_y { -1.0 } else { 1.0 },
+                        );
+                        let affine = unbound_math::Affine2::around(
+                            draw_rect.center(),
+                            scale,
+                            ext.rotation,
+                            Vec2::ZERO,
+                        );
+                        self.collector
+                            .push_transform(unbound_gpu::GpuTransform::from_affine(affine));
+                    }
                     self.collector.push(entry.key, out);
+                    if has_local_tf {
+                        self.collector.pop_transform();
+                    }
+                }
+                WidgetSpec::Gizmo {
+                    desc,
+                    preview,
+                    guides,
+                } => {
+                    let mut resolved = *desc;
+                    resolved.z = entry.z_base.saturating_add(desc.z);
+                    let active_bounds = preview.map_or(resolved.bounds, |(_, b)| b);
+                    let size_glyphs = if resolved.show_size {
+                        let label =
+                            format!("{:.0} x {:.0}", active_bounds.size.x, active_bounds.size.y);
+                        let bubble = resolved.size_bubble_rect(96.0);
+                        text_ctx.shape_line(
+                            &label,
+                            bubble,
+                            11.0,
+                            unbound_text::TextStyle::default().weight,
+                            unbound_widgets::AlignX::Center,
+                            unbound_widgets::AlignY::Middle,
+                        )
+                    } else {
+                        Vec::new()
+                    };
+                    let mut gizmo_out = unbound_widgets::emit_gizmo(
+                        entry.key,
+                        &resolved,
+                        *preview,
+                        guides,
+                        &size_glyphs,
+                        state,
+                    );
+                    gizmo_out
+                        .output
+                        .sub_hits
+                        .extend(gizmo_out.hits.into_iter().map(|(_, hit)| hit));
+                    let output = apply_z_base(gizmo_out.output, entry.z_base);
+                    self.collector.push(entry.key, output);
+                }
+                WidgetSpec::TransformScopeBegin { transform } => {
+                    let raw = self
+                        .world
+                        .get(entry.node)
+                        .map(|node| node.desc.transform)
+                        .unwrap_or(*transform);
+                    let affine =
+                        raw_transform_to_affine(raw).unwrap_or(unbound_math::Affine2::IDENTITY);
+                    self.collector
+                        .push_transform(unbound_gpu::GpuTransform::from_affine(affine));
+                    active_transform_nodes.push(entry.node);
+                }
+                WidgetSpec::TransformScopeEnd => {
+                    self.collector.pop_transform();
+                    active_transform_nodes.pop();
                 }
                 WidgetSpec::VideoSurface(desc) => {
                     // 零宽或零高退化布局矩形直接安全跳过，避免产生除零或退化图元。
@@ -9494,6 +9865,9 @@ impl<A: Application> AppRuntime<A> {
                     }
                 }
             }
+            if node_transform_pushed {
+                self.collector.pop_transform();
+            }
             if is_tooltip_entry {
                 // 强制守住 ADR-0030 纯展示契约：Tooltip 浮层及其所有富内容子组件
                 // 绝不拦截指针命中、绝不进入键盘焦点顺序。
@@ -9637,6 +10011,15 @@ impl<A: Application> AppRuntime<A> {
                     delta,
                 })
             }
+            PointerEvent::DragEnd {
+                target,
+                position,
+                button,
+            } => self.dispatch(AppEvent::DragEnd {
+                node: target,
+                pos: position,
+                button,
+            }),
             PointerEvent::Up {
                 target,
                 position,
@@ -9695,7 +10078,7 @@ impl<A: Application> AppRuntime<A> {
                 };
                 // 仅当释放位置仍在被按下的节点上时，辅助点击才打开菜单。
                 //
-                if button == PointerButton::Right {
+                if button == PointerButton::Right && !self.suppress_context_menu_on_up {
                     if let Some(node) = target {
                         if self.router.hover() == Some(node) {
                             if let Some((tabs_key, hit_target)) =

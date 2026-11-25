@@ -500,7 +500,11 @@ mod tests {
         let drag = r.pointer_move(Vec2::new(40.0, 10.0)).unwrap();
         assert!(matches!(drag, PointerEvent::Drag { target: 1, .. }));
         let up = r.pointer_up(Vec2::new(40.0, 10.0), 0.3);
-        assert_eq!(up.len(), 1, "a drag must not emit a click");
+        assert_eq!(up.len(), 2, "a drag release emits DragEnd and Up");
+        assert!(
+            !up.iter().any(|e| matches!(e, PointerEvent::Click { .. })),
+            "a drag must not emit a click"
+        );
     }
 
     #[test]

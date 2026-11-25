@@ -19,5 +19,6 @@ mod runtime_headless;
 mod runtime_subsystems;
 mod settings_and_select;
 mod tooltip_rich;
+mod transform_obb_rdrag;
 mod video_surface;
 mod viewport_3d;
