@@ -1922,7 +1922,6 @@ struct TreeViewScrollSync {
 ///
 /// 控件在第二遍发射，待布局引擎解析出其矩形后再绘制；
 /// 控件本身从不猜测自身几何。
-#[derive(Clone, Debug)]
 /// Descriptor for an externally-managed RGBA8 texture image widget supporting
 /// normalized `sample_uv`, pixel-space `crop_rect`, and 2D rotation/flip transforms.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2090,6 +2089,7 @@ fn raw_transform_to_affine(m: [f32; 6]) -> Option<unbound_math::Affine2> {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum WidgetSpec {
     /// 实现自动固有尺寸测量与发射的声明式 [`UiWidget`]。
     UiWidget(Arc<dyn ErasedUiWidget>),
@@ -8424,7 +8424,7 @@ impl<A: Application> AppRuntime<A> {
                             &label,
                             bubble,
                             11.0,
-                            unbound_text::FontWeight::REGULAR,
+                            unbound_text::TextStyle::default().weight,
                             unbound_widgets::AlignX::Center,
                             unbound_widgets::AlignY::Middle,
                         )
