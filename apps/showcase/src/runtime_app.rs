@@ -177,6 +177,7 @@ impl Application for GalleryApp {
             | AppEvent::DragEnd { .. }
             | AppEvent::Moved { .. }
             | AppEvent::CloseRequested
+            | AppEvent::Occluded(_)
             | AppEvent::Custom { .. } => {}
         }
 

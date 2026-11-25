@@ -608,6 +608,8 @@ pub enum AppEvent {
     Moved { x: i32, y: i32 },
     /// 原生窗口关闭请求（如 `Alt+F4` 或任务栏关窗）；应用可选择拦截或显式调用关窗命令。
     CloseRequested,
+    /// 窗口遮挡状态变更（`true` 表示窗口完全不可见/被遮挡，可跳过高耗渲染与后台动画）。
+    Occluded(bool),
     /// 主题变更。
     Theme { kind: ThemeKind },
     /// 辅助技术请求执行动作。
@@ -764,6 +766,8 @@ pub struct AppContext {
     pub window_focused: bool,
     /// Whether the current native window is pinned above other windows (synced by the runner).
     pub window_always_on_top: bool,
+    /// 当前原生窗口是否被完全遮挡或虚拟桌面隐藏（由窗口运行器自动同步）。
+    pub window_occluded: bool,
     /// 操作系统物理显示 DPI 缩放比（第 1 层缩放，默认 `1.0`）。
     pub os_scale: f32,
     /// 全局 7 档 UI 逻辑缩放因子（第 2 层缩放，默认 `1.0`，范围 `0.75..=2.0`）。
@@ -879,6 +883,7 @@ impl AppContext {
             window_maximized: false,
             window_focused: true,
             window_always_on_top: false,
+            window_occluded: false,
             os_scale: 1.0,
             ui_scale: 1.0,
             physical_viewport: viewport,
@@ -1703,6 +1708,12 @@ impl AppContext {
     #[must_use]
     pub const fn window_id(&self) -> unbound_platform::WindowId {
         self.window_id
+    }
+
+    /// 返回当前窗口是否处于完全遮挡态（例如被其他不透明窗口覆盖或被虚拟桌面隐藏）。
+    #[must_use]
+    pub const fn is_window_occluded(&self) -> bool {
+        self.window_occluded
     }
 
     /// Returns the host window outer top-left position in physical screen coordinates.
@@ -7787,6 +7798,15 @@ impl<A: Application> AppRuntime<A> {
         flags
     }
 
+    /// 同步窗口遮挡状态并在状态变化时向应用派发 [`AppEvent::Occluded`]。
+    pub fn set_window_occluded(&mut self, occluded: bool) -> DirtyFlags {
+        if self.ctx.window_occluded == occluded {
+            return DirtyFlags::NONE;
+        }
+        self.ctx.window_occluded = occluded;
+        self.dispatch(AppEvent::Occluded(occluded))
+    }
+
     /// 同步原生窗口激活聚焦状态，并在变化时触发重绘以更新标题栏失焦视觉。
     pub fn set_window_focused(&mut self, focused: bool) {
         if self.ctx.window_focused != focused {
@@ -13025,7 +13045,7 @@ mod tests {
                     }
                     AppEvent::Moved { x, y } => {
                         self.moved_positions.push((x, y));
-                        EventOutcome::new(DirtyFlags::PAINT)
+                        EventOutcome::new(DirtyFlags::NONE)
                     }
                     _ => EventOutcome::new(DirtyFlags::NONE),
                 }
@@ -13072,5 +13092,48 @@ mod tests {
             rt.normal_bounds(),
             Some(unbound_platform::ScreenRect::new(100, 120, 800, 600))
         );
+    }
+
+    #[test]
+    fn window_occluded_dispatches_only_on_state_transition() {
+        struct OcclusionApp {
+            transitions: Vec<bool>,
+        }
+
+        impl Application for OcclusionApp {
+            type State = ();
+
+            fn init(&mut self, _: &mut AppContext) {}
+
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                if let AppEvent::Occluded(occluded) = event {
+                    self.transitions.push(occluded);
+                    return EventOutcome::new(DirtyFlags::PAINT);
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut rt = AppRuntime::new(
+            OcclusionApp {
+                transitions: Vec::new(),
+            },
+            Vec2::new(640.0, 480.0),
+        );
+        assert!(!rt.context().is_window_occluded());
+        assert_eq!(rt.set_window_occluded(false), DirtyFlags::NONE);
+        assert_ne!(rt.set_window_occluded(true), DirtyFlags::NONE);
+        assert!(rt.context().is_window_occluded());
+        assert_eq!(rt.set_window_occluded(true), DirtyFlags::NONE);
+        assert_ne!(rt.set_window_occluded(false), DirtyFlags::NONE);
+        assert!(!rt.context().is_window_occluded());
+        assert_eq!(rt.app().transitions, vec![true, false]);
     }
 }

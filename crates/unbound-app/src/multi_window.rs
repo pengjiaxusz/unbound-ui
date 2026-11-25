@@ -3323,6 +3323,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             }
             PlatformEvent::Occluded(occluded) => {
                 ctx.pacer.set_occluded(occluded);
+                let _ = ctx.runtime.set_window_occluded(occluded);
                 if !occluded {
                     ctx.frame_dropped = true;
                     ctx.pacer.request_immediate(Instant::now());

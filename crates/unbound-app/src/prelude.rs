@@ -49,15 +49,17 @@ pub use unbound_gpu::{
 pub use unbound_input::{CursorKind, KeyChord, KeyName, PointerButton, PointerEvent};
 pub use unbound_math::{Affine2, Color, Rect, Vec2};
 pub use unbound_platform::{
-    active_tray_menu_items, enumerate_monitor_work_areas, is_tray_heartbeat_stalled, open_file,
-    open_file_async, open_files, poll_tray_events, read_system_accent_color, reattach_tray_icon,
-    save_file, save_file_async, set_taskbar_progress, set_tray_icon, set_tray_menu,
-    set_tray_rescue_menu, show_tray_balloon, system_accent_color, update_tray_heartbeat,
-    DisplayWorkArea, FileDialogConfig, FileDragEffect, FrameHitMetrics, MonitorWorkArea,
-    OutboundFileDragOutcome, OutboundFileDragRequest, PlatformError, PopupWindowConfig,
-    RenderThrottlePolicy, RenderThrottleState, ScreenRect, SurfaceAlpha, TaskbarProgressState,
-    TrayEvent, TrayMenuItem, TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig,
-    WindowId, WindowPlacement, WindowPosition,
+    active_tray_menu_items, clear_tray_rescue_callbacks, enumerate_monitor_work_areas,
+    is_tray_heartbeat_stalled, open_file, open_file_async, open_files, poll_tray_events,
+    probe_hwnd_occluded, read_system_accent_color, reattach_tray_icon, rects_cover,
+    register_tray_rescue_callback, save_file, save_file_async, set_taskbar_progress, set_tray_icon,
+    set_tray_menu, set_tray_rescue_menu, show_tray_balloon, system_accent_color,
+    unregister_tray_rescue_callback, update_tray_heartbeat, DisplayWorkArea, FileDialogConfig,
+    FileDragEffect, FrameHitMetrics, MonitorWorkArea, OcclusionMonitor, OutboundFileDragOutcome,
+    OutboundFileDragRequest, PlatformError, PopupWindowConfig, RenderThrottlePolicy,
+    RenderThrottleState, ScreenRect, SurfaceAlpha, SystemTray, TaskbarProgressState, TrayEvent,
+    TrayMenuItem, TrayNotificationSeverity, WindowBackdropMaterial, WindowConfig, WindowId,
+    WindowPlacement, WindowPosition,
 };
 pub use unbound_text::{
     global_pinyin_config, global_shuangpin_scheme, set_global_pinyin_config,

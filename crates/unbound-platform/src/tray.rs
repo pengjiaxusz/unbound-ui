@@ -5,12 +5,15 @@
 //! - 系统通知托盘图标（`Shell_NotifyIconW`），支持应用图标加载、气泡通知、悬停提示、
 //!   右键弹出菜单、急救菜单心跳切换、Explorer 重启后 `TaskbarCreated` 自动重挂以及点击事件队列。
 
-use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 /// 托盘图标回调窗口消息号（避开 `win32_window::WM_APP_WAKE = 0x8001`）。
 pub const WM_APP_TRAY: u32 = 0x8002;
+/// 独立托盘消息线程的内部命令投递消息号。
+#[cfg(windows)]
+const WM_APP_TRAY_CMD: u32 = 0x8003;
 
 /// 任务栏进度指示器的状态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -79,6 +82,60 @@ fn tray_state() -> &'static Mutex<TrayRuntimeState> {
     STATE.get_or_init(|| Mutex::new(TrayRuntimeState::default()))
 }
 
+type RescueCallback = Arc<dyn Fn() + Send + Sync>;
+
+/// 独立的托盘急救回调注册表（与 GUI 主线程状态锁完全隔离，确保主线程卡死时零阻塞响应）。
+fn rescue_callbacks() -> &'static Mutex<HashMap<u32, RescueCallback>> {
+    static CALLBACKS: OnceLock<Mutex<HashMap<u32, RescueCallback>>> = OnceLock::new();
+    CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 注册无需经过 GUI 主线程即可立即执行的同步急救回调（如强制退出或外部诊断转储）。
+pub fn register_tray_rescue_callback(command_id: u32, callback: impl Fn() + Send + Sync + 'static) {
+    let mut map = rescue_callbacks()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.insert(command_id, Arc::new(callback));
+}
+
+/// 注销指定命令 ID 对应的同步急救回调。
+pub fn unregister_tray_rescue_callback(command_id: u32) -> bool {
+    let mut map = rescue_callbacks()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.remove(&command_id).is_some()
+}
+
+/// 清空所有已注册的托盘急救回调（供进程退出或单元测试复位使用）。
+pub fn clear_tray_rescue_callbacks() {
+    let mut map = rescue_callbacks()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    map.clear();
+}
+
+/// 分发一条托盘菜单命令：若命中急救回调则在当前线程无锁立即执行并返回 `true`，
+/// 否则投递常规 [`TrayEvent::MenuCommand`] 至主线程异步队列并返回 `false`。
+pub(crate) fn dispatch_tray_menu_command(command_id: u32) -> bool {
+    let callback = {
+        let map = rescue_callbacks()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        map.get(&command_id).cloned()
+    };
+    if let Some(cb) = callback {
+        cb();
+        return true;
+    }
+    push_tray_event(TrayEvent::MenuCommand(command_id));
+    false
+}
+
+/// 测试辅助：模拟用户在托盘右键菜单选中指定命令 ID，返回是否触发了同步急救回调。
+pub fn dispatch_tray_menu_command_for_test(command_id: u32) -> bool {
+    dispatch_tray_menu_command(command_id)
+}
+
 /// 向托盘事件队列推入一条事件。
 pub(crate) fn push_tray_event(ev: TrayEvent) {
     let mut state = tray_state()
@@ -93,21 +150,27 @@ mod win32 {
     use core::ffi::c_void;
     use std::os::windows::ffi::OsStrExt;
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+
     use ::windows::core::{w, PCWSTR};
-    use ::windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+    use ::windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
     use ::windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
     };
+    use ::windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use ::windows::Win32::UI::Shell::{
         ExtractIconExW, ITaskbarList3, Shell_NotifyIconW, TaskbarList, NIF_ICON, NIF_INFO,
         NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
         NOTIFYICONDATAW, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED,
     };
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        AppendMenuW, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos, LoadIconW,
-        PostMessageW, RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, HICON,
-        IDI_APPLICATION, MF_GRAYED, MF_SEPARATOR, MF_STRING, TPM_NONOTIFY, TPM_RETURNCMD,
-        TPM_RIGHTBUTTON, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP,
+        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyMenu,
+        DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, PostMessageW, RegisterClassW,
+        RegisterWindowMessageW, SetForegroundWindow, TrackPopupMenu, TranslateMessage, HICON,
+        HWND_MESSAGE, IDI_APPLICATION, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, TPM_NONOTIFY,
+        TPM_RETURNCMD, TPM_RIGHTBUTTON, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CONTEXTMENU,
+        WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
     };
 
     #[inline]
@@ -294,10 +357,238 @@ mod win32 {
                 let _ = unsafe { DestroyMenu(hmenu) };
                 let _ = unsafe { PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0)) };
                 if cmd.0 > 0 {
-                    push_tray_event(TrayEvent::MenuCommand(cmd.0 as u32));
+                    let _ = dispatch_tray_menu_command(cmd.0 as u32);
                 }
             }
             _ => {}
+        }
+    }
+
+    enum TrayThreadCommand {
+        SetIcon {
+            tooltip: String,
+            visible: bool,
+        },
+        ShowBalloon {
+            title: String,
+            message: String,
+            severity: TrayNotificationSeverity,
+        },
+        Reattach {
+            tooltip: String,
+        },
+    }
+
+    struct TrayThreadHandle {
+        hwnd: isize,
+        tx: mpsc::Sender<TrayThreadCommand>,
+    }
+
+    static TRAY_THREAD_RUNNING: AtomicBool = AtomicBool::new(false);
+    static TRAY_THREAD_RX: OnceLock<Mutex<Option<mpsc::Receiver<TrayThreadCommand>>>> =
+        OnceLock::new();
+
+    unsafe extern "system" fn tray_wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let taskbar_created = taskbar_created_message();
+        if taskbar_created != 0 && msg == taskbar_created {
+            let _ = super::reattach_tray_icon(hwnd.0 as isize);
+            return LRESULT(0);
+        }
+        match msg {
+            WM_APP_TRAY => {
+                handle_tray_callback(hwnd.0 as isize, lparam.0);
+                LRESULT(0)
+            }
+            WM_APP_TRAY_CMD => {
+                if let Some(lock) = TRAY_THREAD_RX.get() {
+                    let mut cmds = Vec::new();
+                    if let Ok(guard) = lock.lock() {
+                        if let Some(rx) = guard.as_ref() {
+                            while let Ok(cmd) = rx.try_recv() {
+                                cmds.push(cmd);
+                            }
+                        }
+                    }
+                    for cmd in cmds {
+                        match cmd {
+                            TrayThreadCommand::SetIcon { tooltip, visible } => {
+                                let _ = set_tray_icon(hwnd.0 as isize, &tooltip, visible);
+                            }
+                            TrayThreadCommand::ShowBalloon {
+                                title,
+                                message,
+                                severity,
+                            } => {
+                                let _ =
+                                    show_tray_balloon(hwnd.0 as isize, &title, &message, severity);
+                            }
+                            TrayThreadCommand::Reattach { tooltip } => {
+                                if set_tray_icon(hwnd.0 as isize, &tooltip, true) {
+                                    push_tray_event(TrayEvent::Reattached);
+                                }
+                            }
+                        }
+                    }
+                }
+                LRESULT(0)
+            }
+            _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        }
+    }
+
+    /// 惰性启动专用后台 OS 线程与 `HWND_MESSAGE` 隐藏消息窗口，运行独立 Win32 托盘消息循环。
+    fn ensure_tray_thread() -> Option<&'static TrayThreadHandle> {
+        static HANDLE: OnceLock<Option<TrayThreadHandle>> = OnceLock::new();
+        HANDLE
+            .get_or_init(|| {
+                let (tx, rx) = mpsc::channel::<TrayThreadCommand>();
+                let _ = TRAY_THREAD_RX.set(Mutex::new(Some(rx)));
+                let (ready_tx, ready_rx) = mpsc::sync_channel::<isize>(1);
+                let spawned = std::thread::Builder::new()
+                    .name("unbound-tray".to_owned())
+                    .spawn(move || {
+                        let class_name = w!("UnboundTrayMessageWindow");
+                        let hinstance = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+                        let wc = WNDCLASSW {
+                            lpfnWndProc: Some(tray_wnd_proc),
+                            hInstance: hinstance.into(),
+                            lpszClassName: class_name,
+                            ..Default::default()
+                        };
+                        unsafe {
+                            let _ = RegisterClassW(&wc);
+                        }
+                        let hwnd = unsafe {
+                            CreateWindowExW(
+                                WINDOW_EX_STYLE::default(),
+                                class_name,
+                                w!("UnboundTray"),
+                                WINDOW_STYLE::default(),
+                                0,
+                                0,
+                                0,
+                                0,
+                                Some(HWND_MESSAGE),
+                                None,
+                                Some(hinstance.into()),
+                                None,
+                            )
+                        };
+                        let Ok(hwnd) = hwnd else {
+                            let _ = ready_tx.send(0);
+                            return;
+                        };
+                        TRAY_THREAD_RUNNING.store(true, Ordering::Release);
+                        let _ = ready_tx.send(hwnd.0 as isize);
+                        let mut msg = MSG::default();
+                        while unsafe { GetMessageW(&mut msg, None, 0, 0) }.as_bool() {
+                            unsafe {
+                                let _ = TranslateMessage(&msg);
+                                let _ = DispatchMessageW(&msg);
+                            }
+                        }
+                        TRAY_THREAD_RUNNING.store(false, Ordering::Release);
+                    });
+                if spawned.is_err() {
+                    return None;
+                }
+                let raw_hwnd = ready_rx.recv().unwrap_or(0);
+                if raw_hwnd == 0 {
+                    return None;
+                }
+                Some(TrayThreadHandle { hwnd: raw_hwnd, tx })
+            })
+            .as_ref()
+    }
+
+    pub fn is_tray_thread_running() -> bool {
+        TRAY_THREAD_RUNNING.load(Ordering::Acquire)
+    }
+
+    pub fn set_tray_icon_threaded(fallback_hwnd: isize, tooltip: &str, visible: bool) -> bool {
+        if let Some(handle) = ensure_tray_thread() {
+            if handle
+                .tx
+                .send(TrayThreadCommand::SetIcon {
+                    tooltip: tooltip.to_owned(),
+                    visible,
+                })
+                .is_ok()
+            {
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd_from_isize(handle.hwnd)),
+                        WM_APP_TRAY_CMD,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                };
+                return true;
+            }
+        }
+        set_tray_icon(fallback_hwnd, tooltip, visible)
+    }
+
+    pub fn show_tray_balloon_threaded(
+        fallback_hwnd: isize,
+        title: &str,
+        message: &str,
+        severity: TrayNotificationSeverity,
+    ) -> bool {
+        if let Some(handle) = ensure_tray_thread() {
+            if handle
+                .tx
+                .send(TrayThreadCommand::ShowBalloon {
+                    title: title.to_owned(),
+                    message: message.to_owned(),
+                    severity,
+                })
+                .is_ok()
+            {
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd_from_isize(handle.hwnd)),
+                        WM_APP_TRAY_CMD,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                };
+                return true;
+            }
+        }
+        show_tray_balloon(fallback_hwnd, title, message, severity)
+    }
+
+    pub fn reattach_tray_icon_threaded(fallback_hwnd: isize, tooltip: &str) -> bool {
+        if let Some(handle) = ensure_tray_thread() {
+            if handle
+                .tx
+                .send(TrayThreadCommand::Reattach {
+                    tooltip: tooltip.to_owned(),
+                })
+                .is_ok()
+            {
+                let _ = unsafe {
+                    PostMessageW(
+                        Some(hwnd_from_isize(handle.hwnd)),
+                        WM_APP_TRAY_CMD,
+                        WPARAM(0),
+                        LPARAM(0),
+                    )
+                };
+                return true;
+            }
+        }
+        if set_tray_icon(fallback_hwnd, tooltip, true) {
+            push_tray_event(TrayEvent::Reattached);
+            true
+        } else {
+            false
         }
     }
 }
@@ -378,7 +669,7 @@ pub fn set_tray_icon(hwnd: isize, tooltip: &str, visible: bool) -> bool {
 
     #[cfg(windows)]
     {
-        win32::set_tray_icon(hwnd, tooltip, visible)
+        win32::set_tray_icon_threaded(hwnd, tooltip, visible)
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
@@ -485,16 +776,15 @@ pub fn reattach_tray_icon(hwnd: isize) -> bool {
     }
     let target_hwnd = if hwnd != 0 { hwnd } else { cached_hwnd };
     #[cfg(windows)]
-    let ok = win32::set_tray_icon(target_hwnd, &tooltip, true);
-    #[cfg(not(windows))]
-    let ok = {
-        let _ = (target_hwnd, tooltip);
-        true
-    };
-    if ok {
-        push_tray_event(TrayEvent::Reattached);
+    {
+        win32::reattach_tray_icon_threaded(target_hwnd, &tooltip)
     }
-    ok
+    #[cfg(not(windows))]
+    {
+        let _ = (target_hwnd, tooltip);
+        push_tray_event(TrayEvent::Reattached);
+        true
+    }
 }
 
 /// 排空并返回自上次轮询以来积累的所有托盘事件。
@@ -515,7 +805,7 @@ pub fn show_tray_balloon(
 ) -> bool {
     #[cfg(windows)]
     {
-        win32::show_tray_balloon(hwnd, title, message, severity)
+        win32::show_tray_balloon_threaded(hwnd, title, message, severity)
     }
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     {
@@ -529,6 +819,88 @@ pub fn show_tray_balloon(
     {
         let _ = (hwnd, title, message, severity);
         false
+    }
+}
+
+/// 独立 OS 线程原生系统托盘句柄：封装托盘图标、常规/急救菜单、零锁急救回调与事件轮询。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SystemTray {
+    owner_hwnd: isize,
+}
+
+impl SystemTray {
+    /// 创建绑定到指定宿主窗口句柄（无头或非 Windows 下可传 `0`）的系统托盘句柄。
+    #[must_use]
+    pub const fn new(owner_hwnd: isize) -> Self {
+        Self { owner_hwnd }
+    }
+
+    /// 显示或隐藏系统托盘图标（Windows 下自动由独立 `HWND_MESSAGE` 后台线程承载）。
+    pub fn set_icon(&self, tooltip: &str, visible: bool) -> bool {
+        set_tray_icon(self.owner_hwnd, tooltip, visible)
+    }
+
+    /// 配置托盘右键常规菜单项列表。
+    pub fn set_menu(&self, items: &[TrayMenuItem]) {
+        set_tray_menu(self.owner_hwnd, items);
+    }
+
+    /// 配置主线程卡死时自动切换展示的急救菜单项列表。
+    pub fn set_rescue_menu(&self, items: &[TrayMenuItem]) {
+        set_tray_rescue_menu(self.owner_hwnd, items);
+    }
+
+    /// 注册无需经过 GUI 主线程即可立即执行的原生急救回调。
+    pub fn register_rescue_callback(
+        &self,
+        command_id: u32,
+        callback: impl Fn() + Send + Sync + 'static,
+    ) {
+        register_tray_rescue_callback(command_id, callback);
+    }
+
+    /// 注销指定命令 ID 的原生急救回调。
+    pub fn unregister_rescue_callback(&self, command_id: u32) -> bool {
+        unregister_tray_rescue_callback(command_id)
+    }
+
+    /// 上报 GUI 主线程心跳时间戳。
+    pub fn heartbeat(&self) {
+        update_tray_heartbeat(self.owner_hwnd);
+    }
+
+    /// 显示系统托盘气泡通知。
+    pub fn show_balloon(
+        &self,
+        title: &str,
+        message: &str,
+        severity: TrayNotificationSeverity,
+    ) -> bool {
+        show_tray_balloon(self.owner_hwnd, title, message, severity)
+    }
+
+    /// 在 Explorer 重启或显式请求时重新挂载托盘图标。
+    pub fn reattach(&self) -> bool {
+        reattach_tray_icon(self.owner_hwnd)
+    }
+
+    /// 排空自上次轮询以来积累的常规托盘事件。
+    #[must_use]
+    pub fn poll_events(&self) -> Vec<TrayEvent> {
+        poll_tray_events()
+    }
+
+    /// 返回 Windows 独立托盘消息线程是否处于运行态（非 Windows 平台恒为 `false`）。
+    #[must_use]
+    pub fn is_background_thread_running() -> bool {
+        #[cfg(windows)]
+        {
+            win32::is_tray_thread_running()
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 }
 
@@ -642,5 +1014,36 @@ mod tests {
         let _ = set_tray_icon(0, "Unbound UI", true);
         let _ = show_tray_balloon(0, "Notice", "Body", TrayNotificationSeverity::Info);
         let _ = set_tray_icon(0, "", false);
+    }
+
+    #[test]
+    fn rescue_callback_executes_synchronously_without_queuing_regular_event() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let _lock = test_guard();
+        clear_tray_rescue_callbacks();
+        let _ = poll_tray_events();
+
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_clone = Arc::clone(&hits);
+        let tray = SystemTray::new(0);
+        tray.register_rescue_callback(9901, move || {
+            hits_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        // 命中急救命令 ID：同步执行回调且不阻塞/不进入主线程常规队列。
+        assert!(dispatch_tray_menu_command_for_test(9901));
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(tray.poll_events().is_empty());
+
+        // 未注册急救回调的常规菜单项仍投递至异步 TrayEvent 队列。
+        assert!(!dispatch_tray_menu_command_for_test(1002));
+        assert_eq!(tray.poll_events(), vec![TrayEvent::MenuCommand(1002)]);
+
+        // 注销急救回调后退回常规事件队列。
+        assert!(tray.unregister_rescue_callback(9901));
+        assert!(!dispatch_tray_menu_command_for_test(9901));
+        assert_eq!(tray.poll_events(), vec![TrayEvent::MenuCommand(9901)]);
+        clear_tray_rescue_callbacks();
     }
 }
