@@ -1311,7 +1311,6 @@ impl<A: Application> MultiWindowCoordinator<A> {
             return None;
         }
         let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
-        let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
 
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
@@ -3427,6 +3426,8 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         ctx.runtime.context_mut().window_maximized = window.is_maximized();
         ctx.runtime.context_mut().window_always_on_top = window.is_always_on_top();
 
+        let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
+
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
         let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
@@ -4843,13 +4844,12 @@ mod tests {
 
         // 窗口 2 进入最小化暂停态后，不再触发渲染前钩子。
         let before_suspended_calls = calls.get();
-        let policy = RenderThrottlePolicy::default();
         coord
             .registry_mut()
             .get_mut(WindowId(2))
             .unwrap()
             .pacer
-            .set_minimized(true, policy);
+            .set_minimized(true);
         assert!(coord.step_headless_frame(WindowId(2), 1.0 / 60.0).is_none());
         assert_eq!(calls.get(), before_suspended_calls);
     }
