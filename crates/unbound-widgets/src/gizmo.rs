@@ -13,7 +13,7 @@ use unbound_math::{Rect, Vec2};
 use unbound_text::GlyphQuad;
 use unbound_theme::Token;
 
-use crate::primitive::{focus_ring, glyphs, instance, surface};
+use crate::primitive::{curve_stroke, focus_ring, glyphs, instance, surface};
 use crate::switch::CONTROL_LAYER;
 use crate::{ControlState, WidgetOutput};
 
@@ -35,6 +35,8 @@ pub struct GizmoDesc {
     pub zoom: f32,
     /// 旋转手柄偏移距离。
     pub rotate_offset: f32,
+    /// Clockwise OBB rotation angle in radians around `bounds.center()`.
+    pub rotation: f32,
     /// 是否绘制尺寸气泡。
     pub show_size: bool,
     /// 绘制顺序键。
@@ -48,9 +50,24 @@ impl GizmoDesc {
             bounds,
             zoom: if zoom > 0.0 { zoom } else { 1.0 },
             rotate_offset: ROTATE_OFFSET,
+            rotation: 0.0,
             show_size: true,
             z: 900,
         }
+    }
+
+    /// Set the clockwise OBB rotation angle in radians around `bounds.center()`.
+    #[must_use]
+    pub fn with_rotation(mut self, radians: f32) -> Self {
+        self.rotation = if radians.is_finite() { radians } else { 0.0 };
+        self
+    }
+
+    /// Set the draw order key.
+    #[must_use]
+    pub fn with_z(mut self, z: u16) -> Self {
+        self.z = z;
+        self
     }
 
     /// 隐藏尺寸气泡的同款操纵器。
@@ -69,21 +86,35 @@ impl GizmoDesc {
     /// 静息状态下单个手柄的矩形区域。
     #[must_use]
     pub fn grip_rect(&self, handle: Handle) -> Rect {
-        grip_rect_for(self.bounds, self.rotate_offset, handle)
+        grip_rect_rotated(self.bounds, self.rotation, self.rotate_offset, handle)
     }
 
     /// 在 `radius` 范围内查找 `point` 命中的手柄。
     #[must_use]
     pub fn grip_at(&self, point: Vec2, radius: f32) -> Option<Handle> {
-        Handle::hit(self.bounds, point, radius, self.rotate_offset)
+        Handle::hit_rotated(
+            self.bounds,
+            self.rotation,
+            point,
+            radius,
+            self.rotate_offset,
+        )
     }
 
     /// 尺寸气泡矩形。
     #[must_use]
     pub fn size_bubble_rect(&self, width: f32) -> Rect {
+        let max_y = if self.rotation.abs() > 1e-6 {
+            Handle::obb_corners(self.bounds, self.rotation)
+                .into_iter()
+                .map(|c| c.y)
+                .fold(self.bounds.max().y, f32::max)
+        } else {
+            self.bounds.max().y
+        };
         Rect::new(
             self.bounds.center().x - width * 0.5,
-            self.bounds.max().y + 12.0,
+            max_y + 12.0,
             width,
             SIZE_BUBBLE,
         )
@@ -93,7 +124,13 @@ impl GizmoDesc {
 /// `bounds` 周围 `handle` 对应的手柄矩形。
 #[must_use]
 pub fn grip_rect_for(bounds: Rect, rotate_offset: f32, handle: Handle) -> Rect {
-    let centre = handle.position(bounds, rotate_offset);
+    grip_rect_rotated(bounds, 0.0, rotate_offset, handle)
+}
+
+/// Screen-space grip rectangle for `handle` on an OBB rotated by `rotation` radians.
+#[must_use]
+pub fn grip_rect_rotated(bounds: Rect, rotation: f32, rotate_offset: f32, handle: Handle) -> Rect {
+    let centre = handle.position_rotated(bounds, rotation, rotate_offset);
     let size = if handle == Handle::Rotate {
         ROTATE_GRIP
     } else {
@@ -128,17 +165,48 @@ pub fn emit_gizmo(
 ) -> GizmoOutput {
     let width = desc.line_width();
     let bounds = preview.map_or(desc.bounds, |(_, bounds)| bounds);
-    let mut primitives: Vec<GpuPrimitiveInstance> = vec![instance(
-        bounds,
-        [0.0; 4],
-        Token::NONE,
-        Token::PRIMARY,
-        width,
-        0.0,
-        PrimType::Stroke,
-        SubElement::FocusRing,
-        desc.z,
-    )];
+    let mut primitives: Vec<GpuPrimitiveInstance> = Vec::new();
+    let mut payloads = Vec::new();
+    let is_rotated = desc.rotation.abs() > 1e-6 && desc.rotation.is_finite();
+    if is_rotated {
+        let corners = Handle::obb_corners(bounds, desc.rotation);
+        for edge in 0..4 {
+            let start = corners[edge];
+            let end = corners[(edge + 1) % 4];
+            curve_stroke(
+                [start.x, start.y],
+                [end.x, end.y],
+                width,
+                Token::PRIMARY,
+                desc.z,
+                &mut primitives,
+                &mut payloads,
+            );
+        }
+        let north = Handle::North.position_rotated(bounds, desc.rotation, desc.rotate_offset);
+        let rotate_pos = Handle::Rotate.position_rotated(bounds, desc.rotation, desc.rotate_offset);
+        curve_stroke(
+            [north.x, north.y],
+            [rotate_pos.x, rotate_pos.y],
+            width,
+            Token::PRIMARY,
+            desc.z,
+            &mut primitives,
+            &mut payloads,
+        );
+    } else {
+        primitives.push(instance(
+            bounds,
+            [0.0; 4],
+            Token::NONE,
+            Token::PRIMARY,
+            width,
+            0.0,
+            PrimType::Stroke,
+            SubElement::FocusRing,
+            desc.z,
+        ));
+    }
 
     for guide in guides {
         let rect = match guide.axis {
@@ -160,7 +228,7 @@ pub fn emit_gizmo(
 
     let mut hits = Vec::with_capacity(Handle::ALL.len());
     for handle in Handle::ALL {
-        let grip = grip_rect_for(bounds, desc.rotate_offset, handle);
+        let grip = grip_rect_rotated(bounds, desc.rotation, desc.rotate_offset, handle);
         let radius = grip.size.x * 0.5;
         primitives.push(surface(grip, radius, Token::SURFACE_RAISED, desc.z + 1));
         let ink = if preview.is_some_and(|(active, _)| active == handle) {
@@ -187,7 +255,6 @@ pub fn emit_gizmo(
         ));
     }
 
-    let mut payloads = Vec::new();
     let bubble = desc.show_size.then(|| {
         let rect = desc.size_bubble_rect(96.0);
         primitives.push(surface(rect, 6.0, Token::HUD_BG, desc.z + 2));
@@ -333,5 +400,39 @@ mod tests {
             counts.windows(2).all(|pair| pair[0] == pair[1]),
             "{counts:?}"
         );
+    }
+
+    #[test]
+    fn rotated_obb_gizmo_places_grips_hits_and_edges_at_rotated_coords() {
+        let angle = core::f32::consts::FRAC_PI_2;
+        let desc = desc().with_rotation(angle);
+        let center = desc.bounds.center();
+
+        // 90 deg CW sends North (0, -50) to (+50, 0) and Rotate to (+50 + rotate_offset, 0).
+        let rot_grip = desc.grip_rect(Handle::Rotate);
+        assert!((rot_grip.center().x - (center.x + 50.0 + desc.rotate_offset)).abs() < 1e-4);
+        assert!((rot_grip.center().y - center.y).abs() < 1e-4);
+        assert_eq!(
+            desc.grip_at(rot_grip.center() + Vec2::new(1.0, -1.0), 8.0),
+            Some(Handle::Rotate)
+        );
+
+        let output = emit_gizmo(7, &desc, None, &[], &[], ControlState::default());
+        assert_eq!(output.hits.len(), Handle::ALL.len());
+        let rot_hit = output
+            .hits
+            .iter()
+            .find(|(h, _)| *h == Handle::Rotate)
+            .expect("rotate hit");
+        assert!((rot_hit.1.bounds.center().x - rot_grip.center().x).abs() < 1e-4);
+        assert!((rot_hit.1.bounds.center().y - rot_grip.center().y).abs() < 1e-4);
+        // 4 OBB edges + 1 rotate stem emitted as curve strokes.
+        let curve_count = output
+            .output
+            .primitives
+            .iter()
+            .filter(|prim| prim.prim_type() == PrimType::Curve)
+            .count();
+        assert_eq!(curve_count, 5);
     }
 }
