@@ -751,6 +751,8 @@ pub struct AppContext {
     pub window_maximized: bool,
     /// 当前原生窗口是否处于激活聚焦状态（由窗口运行器自动同步）。
     pub window_focused: bool,
+    /// Whether the current native window is pinned above other windows (synced by the runner).
+    pub window_always_on_top: bool,
     /// 操作系统物理显示 DPI 缩放比（第 1 层缩放，默认 `1.0`）。
     pub os_scale: f32,
     /// 全局 7 档 UI 逻辑缩放因子（第 2 层缩放，默认 `1.0`，范围 `0.75..=2.0`）。
@@ -863,6 +865,7 @@ impl AppContext {
             theme_transition_remaining_secs: 0.0,
             window_maximized: false,
             window_focused: true,
+            window_always_on_top: false,
             os_scale: 1.0,
             ui_scale: 1.0,
             physical_viewport: viewport,
@@ -1552,6 +1555,12 @@ impl AppContext {
             .push(WindowCommand::ActivateForeground);
     }
 
+    /// Sets the current native window outer top-left position in physical screen pixels.
+    pub fn set_window_outer_position(&mut self, x: i32, y: i32) {
+        self.pending_window_commands
+            .push(WindowCommand::SetOuterPosition { x, y });
+    }
+
     /// 同步设置当前原生窗口外框位置与客户区尺寸（物理像素）。
     pub fn set_window_bounds(&mut self, x: i32, y: i32, width: u32, height: u32) {
         self.pending_window_commands
@@ -1564,6 +1573,18 @@ impl AppContext {
     pub fn set_window_maximized(&mut self, maximized: bool) {
         self.pending_window_commands
             .push(WindowCommand::SetMaximized(maximized));
+    }
+
+    /// Requests toggling runtime always-on-top for the current window (standard or floating).
+    pub fn set_always_on_top(&mut self, topmost: bool) {
+        self.pending_window_commands
+            .push(WindowCommand::SetAlwaysOnTop(topmost));
+    }
+
+    /// Returns whether the current window is pinned above other windows.
+    #[must_use]
+    pub const fn is_always_on_top(&self) -> bool {
+        self.window_always_on_top
     }
 
     /// 更新当前窗口的任务栏进度条状态与进度值。
@@ -1814,6 +1835,8 @@ pub struct ViewContext {
     pub window_maximized: bool,
     /// 窗口当前是否处于激活聚焦状态（决定标题栏失焦降对比度视觉）。
     pub window_focused: bool,
+    /// Whether the current window is pinned above other windows.
+    pub window_always_on_top: bool,
     /// 当前激活的标准语言区域。
     pub locale: Locale,
     /// 当前激活区域的阅读布局方向（LTR / RTL）。
@@ -1829,6 +1852,12 @@ pub struct ViewContext {
 }
 
 impl ViewContext {
+    /// Returns whether the current window is pinned above other windows.
+    #[must_use]
+    pub const fn is_always_on_top(&self) -> bool {
+        self.window_always_on_top
+    }
+
     /// 基于悬停 / 按下 / 聚焦解析出的键控控件状态。
     #[must_use]
     pub fn control_state(&self, key: u64, disabled: bool, selected: bool) -> ControlState {
@@ -2561,6 +2590,7 @@ impl<'a> ViewBuilder<'a> {
                 minimize_id: desc.minimize_id,
                 maximize_id: desc.maximize_id,
                 close_id: desc.close_id,
+                software_drag: desc.software_drag,
             },
         );
         let bar_desc = RawNodeDesc::container()
@@ -4995,6 +5025,8 @@ pub enum WindowCommand {
     SetInnerSize { width: u32, height: u32 },
     /// 设置当前原生窗口最大化或还原状态。
     SetMaximized(bool),
+    /// Toggles runtime always-on-top for the current window (standard or floating).
+    SetAlwaysOnTop(bool),
     /// 更新当前原生窗口任务栏进度指示器。
     SetTaskbarProgress {
         completed: u64,
@@ -5088,6 +5120,7 @@ struct TitleBarBinding {
     minimize_id: u64,
     maximize_id: u64,
     close_id: u64,
+    software_drag: bool,
 }
 
 /// 事件是否继续沿命中路径向上冒泡。
@@ -6872,6 +6905,7 @@ impl<A: Application> AppRuntime<A> {
             force: self.force_rebuild,
             window_maximized: self.ctx.window_maximized,
             window_focused: self.ctx.window_focused,
+            window_always_on_top: self.ctx.window_always_on_top,
             locale: self.ctx.i18n.borrow().active_locale_enum(),
             direction: self.ctx.i18n.borrow().direction(),
             os_scale: self.ctx.os_scale,
@@ -7207,7 +7241,19 @@ impl<A: Application> AppRuntime<A> {
             .push(WindowCommand::SetWindowVisibleNoActivate { id, visible });
     }
 
-    /// 请求热切换指定浮窗的置顶状态。
+    /// Requests setting the current native window outer top-left position in physical pixels.
+    pub fn set_window_outer_position(&mut self, x: i32, y: i32) {
+        self.window_commands
+            .push(WindowCommand::SetOuterPosition { x, y });
+    }
+
+    /// Requests toggling runtime always-on-top for the current window (standard or floating).
+    pub fn set_always_on_top(&mut self, topmost: bool) {
+        self.window_commands
+            .push(WindowCommand::SetAlwaysOnTop(topmost));
+    }
+
+    /// Requests toggling runtime always-on-top for the specified window (standard or floating).
     pub fn set_window_always_on_top(&mut self, id: unbound_platform::WindowId, topmost: bool) {
         self.window_commands
             .push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
@@ -7407,6 +7453,21 @@ impl<A: Application> AppRuntime<A> {
             self.force_rebuild = true;
             self.mark(DirtyFlags::PAINT);
         }
+    }
+
+    /// Synchronizes the runtime always-on-top state snapshot and triggers a rebuild on change.
+    pub fn sync_window_always_on_top(&mut self, topmost: bool) {
+        if self.ctx.window_always_on_top != topmost {
+            self.ctx.window_always_on_top = topmost;
+            self.force_rebuild = true;
+            self.mark(DirtyFlags::PAINT);
+        }
+    }
+
+    /// Returns whether the current window is pinned above other windows.
+    #[must_use]
+    pub const fn is_always_on_top(&self) -> bool {
+        self.ctx.window_always_on_top
     }
 
     /// 返回当前激活标题栏的（最小化、最大化、关闭）按钮节点键，供平台同步原生热区。
@@ -9872,7 +9933,7 @@ impl<A: Application> AppRuntime<A> {
                         } => {
                             if click_count >= 2 {
                                 self.window_commands.push(WindowCommand::ToggleMaximize);
-                            } else {
+                            } else if !binding.software_drag {
                                 self.window_commands.push(WindowCommand::StartDrag);
                             }
                         }
@@ -12246,5 +12307,181 @@ mod tests {
         });
         assert_eq!(rt.context().pressed, None);
         assert_eq!(rt.router().pointer().pressed(), None);
+    }
+
+    #[test]
+    fn title_bar_software_drag_suppresses_start_drag_and_dispatches_drag_events() {
+        #[derive(Default)]
+        struct DragLog {
+            pointer_down_on_bar: bool,
+            drag_started: bool,
+            drag_deltas: Vec<Vec2>,
+            pointer_up: bool,
+        }
+
+        struct SoftwareDragApp;
+        impl Application for SoftwareDragApp {
+            type State = DragLog;
+            fn init(&mut self, _: &mut AppContext) -> DragLog {
+                DragLog::default()
+            }
+            fn reduce(
+                &mut self,
+                state: &mut DragLog,
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::PointerDown {
+                        target: Some(unbound_widgets::TITLE_BAR_DRAG_ID),
+                        button: PointerButton::Left,
+                        click_count: 1,
+                        ..
+                    } => {
+                        state.pointer_down_on_bar = true;
+                    }
+                    AppEvent::DragStart { .. } => {
+                        state.drag_started = true;
+                    }
+                    AppEvent::Drag { delta, .. } => {
+                        state.drag_deltas.push(delta);
+                        ctx.set_window_outer_position(
+                            100 + delta.x.round() as i32,
+                            50 + delta.y.round() as i32,
+                        );
+                    }
+                    AppEvent::PointerUp { .. } => {
+                        state.pointer_up = true;
+                    }
+                    _ => {}
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &DragLog, v: &mut ViewBuilder<'_>) {
+                v.title_bar_with(
+                    unbound_widgets::TitleBarDesc::new("Software Drag").software_drag(true),
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(SoftwareDragApp, Vec2::new(640.0, 360.0));
+        let _ = rt.frame(0.0);
+
+        // Press inside the title bar drag region and drag across the threshold.
+        let _ = rt.pointer_down(Vec2::new(120.0, 14.0), PointerButton::Left);
+        let cmds_after_down = rt.drain_window_commands();
+        assert!(
+            !cmds_after_down.contains(&WindowCommand::StartDrag),
+            "software_drag title bar must not emit WindowCommand::StartDrag"
+        );
+        assert!(rt.state().pointer_down_on_bar);
+
+        let _ = rt.pointer_move(Vec2::new(150.0, 24.0));
+        assert!(rt.state().drag_started);
+
+        let _ = rt.pointer_move(Vec2::new(180.0, 44.0));
+        assert!(!rt.state().drag_deltas.is_empty());
+
+        let drag_cmds = rt.drain_window_commands();
+        assert!(
+            drag_cmds
+                .iter()
+                .any(|c| matches!(c, WindowCommand::SetOuterPosition { .. })),
+            "app must be able to drive SetOuterPosition during software drag"
+        );
+
+        let _ = rt.pointer_up(Vec2::new(180.0, 44.0), PointerButton::Left);
+        assert!(rt.state().pointer_up);
+
+        // Double-click on the drag region still emits ToggleMaximize.
+        let _ = rt.pointer_down(Vec2::new(120.0, 14.0), PointerButton::Left);
+        let _ = rt.pointer_up(Vec2::new(120.0, 14.0), PointerButton::Left);
+        let _ = rt.drain_window_commands();
+        let _ = rt.pointer_down(Vec2::new(120.0, 14.0), PointerButton::Left);
+        assert_eq!(
+            rt.drain_window_commands(),
+            vec![WindowCommand::ToggleMaximize]
+        );
+    }
+
+    #[test]
+    fn title_bar_default_mode_preserves_start_drag_command() {
+        struct DefaultBarApp;
+        impl Application for DefaultBarApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(&mut self, _: &mut (), _: AppEvent, _: &mut AppContext) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                v.title_bar("Default Drag");
+            }
+        }
+
+        let mut rt = AppRuntime::new(DefaultBarApp, Vec2::new(640.0, 360.0));
+        let _ = rt.frame(0.0);
+
+        let _ = rt.pointer_down(Vec2::new(120.0, 14.0), PointerButton::Left);
+        assert_eq!(rt.drain_window_commands(), vec![WindowCommand::StartDrag]);
+    }
+
+    #[test]
+    fn app_context_always_on_top_query_and_command_roundtrip() {
+        struct PinApp {
+            observed_in_view: bool,
+        }
+        impl Application for PinApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut (),
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                if let AppEvent::Custom { id: 1, .. } = event {
+                    ctx.set_always_on_top(!ctx.is_always_on_top());
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &(), v: &mut ViewBuilder<'_>) {
+                self.observed_in_view = v.ctx.is_always_on_top();
+            }
+        }
+
+        let mut rt = AppRuntime::new(
+            PinApp {
+                observed_in_view: false,
+            },
+            Vec2::new(400.0, 300.0),
+        );
+        let _ = rt.frame(0.0);
+        assert!(!rt.context().is_always_on_top());
+        assert!(!rt.is_always_on_top());
+        assert!(!rt.app().observed_in_view);
+
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 1,
+            payload: String::new(),
+        });
+        assert_eq!(
+            rt.drain_window_commands(),
+            vec![WindowCommand::SetAlwaysOnTop(true)]
+        );
+
+        rt.sync_window_always_on_top(true);
+        let _ = rt.frame(0.0);
+        assert!(rt.context().is_always_on_top());
+        assert!(rt.is_always_on_top());
+        assert!(rt.app().observed_in_view);
+
+        let _ = rt.dispatch(AppEvent::Custom {
+            id: 1,
+            payload: String::new(),
+        });
+        assert_eq!(
+            rt.drain_window_commands(),
+            vec![WindowCommand::SetAlwaysOnTop(false)]
+        );
     }
 }

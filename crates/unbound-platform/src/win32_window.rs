@@ -346,6 +346,19 @@ impl Window {
         let _ = topmost;
     }
 
+    /// Returns whether this window currently has the `WS_EX_TOPMOST` style bit set.
+    #[must_use]
+    pub fn is_always_on_top(&self) -> bool {
+        #[cfg(windows)]
+        {
+            win32::is_always_on_top(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
+    }
+
     /// 运行时无闪烁切换窗口鼠标穿透状态。
     pub fn set_click_through(&self, click_through: bool) {
         #[cfg(windows)]
@@ -530,7 +543,7 @@ pub(crate) mod win32 {
         SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
         SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WMSZ_BOTTOM,
         WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
-        WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WS_EX_TRANSPARENT,
+        WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     #[inline]
@@ -761,6 +774,11 @@ pub(crate) mod win32 {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
+    }
+
+    pub(crate) fn is_always_on_top(hwnd: isize) -> bool {
+        let ex_style = unsafe { GetWindowLongPtrW(hwnd_from_isize(hwnd), GWL_EXSTYLE) } as u32;
+        (ex_style & WS_EX_TOPMOST.0) != 0
     }
 
     pub(crate) fn set_click_through(hwnd: isize, click_through: bool) {

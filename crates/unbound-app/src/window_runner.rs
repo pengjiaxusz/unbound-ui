@@ -644,6 +644,11 @@ impl<A: Application> WindowedRunner<A> {
                 crate::WindowCommand::SetMaximized(maximized) => {
                     window.set_maximized(maximized);
                 }
+                crate::WindowCommand::SetAlwaysOnTop(topmost) => {
+                    let effective = topmost && window.capabilities().supports_topmost;
+                    window.set_always_on_top(effective);
+                    self.runtime.sync_window_always_on_top(effective);
+                }
                 crate::WindowCommand::SetTaskbarProgress {
                     completed,
                     total,
@@ -671,6 +676,7 @@ impl<A: Application> WindowedRunner<A> {
                         let eff = crate::effective_policy(policy, caps);
                         window.set_always_on_top(eff.always_on_top);
                         window.set_click_through(eff.click_through);
+                        self.runtime.sync_window_always_on_top(eff.always_on_top);
                     }
                 }
                 crate::WindowCommand::SetWindowVisibleNoActivate { id, visible } => {
@@ -681,7 +687,9 @@ impl<A: Application> WindowedRunner<A> {
                 crate::WindowCommand::SetWindowAlwaysOnTop { id, topmost } => {
                     if id == WindowId(window.id().0 as u64) {
                         let caps = window.capabilities();
-                        window.set_always_on_top(topmost && caps.supports_topmost);
+                        let effective = topmost && caps.supports_topmost;
+                        window.set_always_on_top(effective);
+                        self.runtime.sync_window_always_on_top(effective);
                     }
                 }
                 crate::WindowCommand::SetWindowClickThrough { id, click_through } => {
@@ -1852,6 +1860,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             os_scale,
         );
         self.runtime.context_mut().window_maximized = window.is_maximized();
+        self.runtime.context_mut().window_always_on_top = window.is_always_on_top();
 
         // 3. 宿主帧回调先于运行时推进执行：Agent 能力在这里排空跨线程请求，
         //    动作走完整事件管线后，本帧的场景构建就会带上变化。

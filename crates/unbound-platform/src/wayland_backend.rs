@@ -415,8 +415,12 @@ impl WaylandWindowHandle {
     }
 
     pub(crate) fn set_always_on_top(&self, topmost: bool) {
-        // Wayland `xdg_toplevel` 不支持应用侧强制置顶，安全无操作。
+        // Wayland `xdg_toplevel` does not support client-driven always-on-top; degrade safely.
         let _ = topmost;
+    }
+
+    pub(crate) fn is_always_on_top(&self) -> bool {
+        false
     }
 
     pub(crate) fn set_click_through(&self, click_through: bool) {

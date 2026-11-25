@@ -389,7 +389,7 @@ mod win32 {
         WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
         WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
         WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSEXW, WS_EX_APPWINDOW,
-        WS_EX_LAYERED, WS_EX_TRANSPARENT,
+        WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     use crate::pacing::PresentWaitPolicy;
@@ -1627,6 +1627,8 @@ mod win32 {
 
         let ex_style = if config.role != crate::floating::WindowRole::Standard {
             WINDOW_EX_STYLE(config.floating_policy.win32_ex_style_bits())
+        } else if config.floating_policy.always_on_top {
+            WS_EX_APPWINDOW | WS_EX_TOPMOST
         } else {
             WS_EX_APPWINDOW
         };

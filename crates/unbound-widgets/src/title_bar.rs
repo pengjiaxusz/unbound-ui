@@ -873,6 +873,11 @@ pub struct TitleBarDesc {
     pub left_reserved_width: f32,
     /// 右侧自定义全局操作槽预留宽度（逻辑像素，不含三枚窗口按钮）。
     pub right_reserved_width: f32,
+    /// When enabled, left-button press on the title bar drag region does not emit
+    /// `WindowCommand::StartDrag`; instead pointer and drag events flow to the app so it
+    /// can drive window movement via `WindowCommand::SetOuterPosition` without blocking
+    /// the event loop. Defaults to `false` for backward compatibility.
+    pub software_drag: bool,
 }
 
 impl Default for TitleBarDesc {
@@ -901,6 +906,7 @@ impl TitleBarDesc {
             show_bottom_divider: true,
             left_reserved_width: 0.0,
             right_reserved_width: 0.0,
+            software_drag: false,
         }
     }
 
@@ -994,6 +1000,13 @@ impl TitleBarDesc {
     #[must_use]
     pub fn show_title(mut self, show: bool) -> Self {
         self.show_title = show;
+        self
+    }
+
+    /// Enables or disables software-driven drag takeover on the title bar drag region.
+    #[must_use]
+    pub fn software_drag(mut self, enabled: bool) -> Self {
+        self.software_drag = enabled;
         self
     }
 
@@ -1541,5 +1554,17 @@ mod tests {
     #[test]
     fn fused_title_bar_height_matches_win11_fluent_scale() {
         assert!((TITLE_BAR_FUSED_HEIGHT - 48.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn title_bar_desc_software_drag_defaults_false_and_toggles() {
+        let default_desc = TitleBarDesc::new("Default");
+        assert!(!default_desc.software_drag);
+
+        let enabled = default_desc.software_drag(true);
+        assert!(enabled.software_drag);
+
+        let disabled = enabled.software_drag(false);
+        assert!(!disabled.software_drag);
     }
 }
