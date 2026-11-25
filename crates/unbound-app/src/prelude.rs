@@ -12,7 +12,7 @@ pub use crate::floating_host::{
 };
 pub use crate::form::{FormBindingStore, FormMutator, WidgetValue};
 pub use crate::multi_window::{
-    run_multi_window, run_multi_window_with_config, CrossWindowDragRoute,
+    run_multi_window, run_multi_window_with_config, BeforeRenderHook, CrossWindowDragRoute,
     CrossWindowDragTargetState, MultiWindowConfig, MultiWindowCoordinator, MultiWindowFactory,
     WindowContext, WindowCreatedHook, WindowGeometry,
 };
