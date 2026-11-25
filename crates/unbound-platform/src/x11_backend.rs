@@ -86,6 +86,11 @@ enum X11Command {
         window: X11WindowId,
         click_through: bool,
     },
+    SetOuterPosition {
+        window: X11WindowId,
+        x: i32,
+        y: i32,
+    },
     SetOuterRect {
         window: X11WindowId,
         rect: ScreenRect,
@@ -250,6 +255,7 @@ struct X11WindowShared {
     screen_origin: Mutex<(i32, i32)>,
     scale_bits: AtomicU64,
     maximized: AtomicBool,
+    always_on_top: AtomicBool,
     visible: AtomicBool,
     destroyed: AtomicBool,
     redraw_requested: AtomicBool,
@@ -335,11 +341,18 @@ impl X11WindowHandle {
     }
 
     pub(crate) fn outer_position(&self) -> Option<(i32, i32)> {
-        None
+        self.shared.screen_origin.lock().ok().map(|origin| *origin)
     }
 
     pub(crate) fn set_outer_position(&self, x: i32, y: i32) {
-        let _ = (x, y);
+        if let Ok(mut origin) = self.shared.screen_origin.lock() {
+            *origin = (x, y);
+        }
+        self.send(X11Command::SetOuterPosition {
+            window: self.shared.xid,
+            x,
+            y,
+        });
     }
 
     pub(crate) fn set_inner_size(&self, width: u32, height: u32) {
@@ -373,10 +386,15 @@ impl X11WindowHandle {
     }
 
     pub(crate) fn set_always_on_top(&self, topmost: bool) {
+        self.shared.always_on_top.store(topmost, Ordering::Release);
         self.send(X11Command::SetAlwaysOnTop {
             window: self.shared.xid,
             topmost,
         });
+    }
+
+    pub(crate) fn is_always_on_top(&self) -> bool {
+        self.shared.always_on_top.load(Ordering::Acquire)
     }
 
     pub(crate) fn set_click_through(&self, click_through: bool) {
@@ -1122,6 +1140,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             screen_origin: Mutex::new((i32::from(x), i32::from(y))),
             scale_bits: AtomicU64::new(1.0_f64.to_bits()),
             maximized: AtomicBool::new(false),
+            always_on_top: AtomicBool::new(cfg.floating_policy.always_on_top),
             visible: AtomicBool::new(cfg.visible),
             destroyed: AtomicBool::new(false),
             redraw_requested: AtomicBool::new(true),
@@ -1669,6 +1688,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 } => {
                     set_x11_click_through(&conn, window, click_through);
                 }
+                X11Command::SetOuterPosition { window, x, y } => {
+                    let _ = conn.configure_window(window, &ConfigureWindowAux::new().x(x).y(y));
+                }
                 X11Command::SetOuterRect { window, rect } => {
                     let _ = conn.configure_window(
                         window,
@@ -1951,6 +1973,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                         screen_origin: Mutex::new((placed.x, placed.y)),
                         scale_bits: AtomicU64::new(1.0_f64.to_bits()),
                         maximized: AtomicBool::new(false),
+                        always_on_top: AtomicBool::new(false),
                         visible: AtomicBool::new(true),
                         destroyed: AtomicBool::new(false),
                         redraw_requested: AtomicBool::new(true),

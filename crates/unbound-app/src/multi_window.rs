@@ -2076,6 +2076,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 if let Some(eff) = self.floating_host.update_policy(*id, *policy) {
                     if let Some(target_ctx) = self.registry.get_mut(*id) {
                         target_ctx.config.floating_policy = *policy;
+                        target_ctx
+                            .runtime
+                            .sync_window_always_on_top(eff.always_on_top);
                     }
                     let sync = self.pending_floating_live_syncs.entry(*id).or_default();
                     sync.topmost = Some(eff.always_on_top);
@@ -2093,7 +2096,17 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 if let Some(eff_topmost) = self.floating_host.set_always_on_top(*id, *topmost) {
                     if let Some(target_ctx) = self.registry.get_mut(*id) {
                         target_ctx.config.floating_policy.always_on_top = *topmost;
+                        target_ctx.runtime.sync_window_always_on_top(eff_topmost);
                     }
+                    let sync = self.pending_floating_live_syncs.entry(*id).or_default();
+                    sync.topmost = Some(eff_topmost);
+                } else if let Some(target_ctx) = self.registry.get_mut(*id) {
+                    // Standard windows are not registered in FloatingHost but still support
+                    // runtime always-on-top subject to platform capabilities.
+                    let eff_topmost =
+                        *topmost && self.floating_host.capabilities().supports_topmost;
+                    target_ctx.config.floating_policy.always_on_top = *topmost;
+                    target_ctx.runtime.sync_window_always_on_top(eff_topmost);
                     let sync = self.pending_floating_live_syncs.entry(*id).or_default();
                     sync.topmost = Some(eff_topmost);
                 }
@@ -2217,6 +2230,13 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             self.pending_popup_closes.push(id);
                         }
                     }
+                }
+                WindowCommand::SetAlwaysOnTop(topmost) => {
+                    let cmd = WindowCommand::SetWindowAlwaysOnTop {
+                        id: source_id,
+                        topmost,
+                    };
+                    self.apply_floating_command_state(&cmd);
                 }
                 cmd @ (WindowCommand::UpdateFloatingPolicy { .. }
                 | WindowCommand::SetWindowVisibleNoActivate { .. }
@@ -2536,11 +2556,23 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 window.set_outer_rect(initial_rect);
             }
             window.set_visible_no_activate(initial_visible);
+            if let Some(slot) = self.registry.get_mut(id) {
+                slot.runtime.sync_window_always_on_top(eff.always_on_top);
+            }
             if !eff.no_activate && initial_visible && self.focused_window_id.is_none() {
                 self.focused_window_id = Some(id);
             }
-        } else if visible && self.focused_window_id.is_none() {
-            self.focused_window_id = Some(id);
+        } else {
+            let eff_topmost = policy.always_on_top && caps.supports_topmost;
+            if eff_topmost {
+                window.set_always_on_top(true);
+            }
+            if let Some(slot) = self.registry.get_mut(id) {
+                slot.runtime.sync_window_always_on_top(eff_topmost);
+            }
+            if visible && self.focused_window_id.is_none() {
+                self.focused_window_id = Some(id);
+            }
         }
         self.sync_all_window_geometries_to_runtimes();
         if let Some(hook) = self.on_window_created.as_mut() {
@@ -2630,6 +2662,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
                     }
                     WindowCommand::SetMaximized(maximized) => {
                         window.set_maximized(maximized);
+                    }
+                    WindowCommand::SetAlwaysOnTop(topmost) => {
+                        deferred_floating.push(WindowCommand::SetWindowAlwaysOnTop { id, topmost });
                     }
                     WindowCommand::SetTaskbarProgress {
                         completed,
@@ -3306,6 +3341,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             os_scale,
         );
         ctx.runtime.context_mut().window_maximized = window.is_maximized();
+        ctx.runtime.context_mut().window_always_on_top = window.is_always_on_top();
 
         let _ = ctx.runtime.tick(dt);
         let report = ctx.runtime.frame(0.0);
@@ -4537,5 +4573,75 @@ mod tests {
         assert!(coord.registry().get(ghost_id).is_none());
         assert!(coord.take_window_close_requests().contains(&ghost_id));
         assert_eq!(coord.focused_window_id(), Some(win_a));
+    }
+
+    #[test]
+    fn standard_window_runtime_always_on_top_toggle_and_wayland_degradation() {
+        let primary_cfg = WindowConfig::default().with_title("Standard");
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.register_headless_window(WindowId(1), primary_cfg);
+        assert_eq!(coord.window_role(WindowId(1)), Some(WindowRole::Standard));
+        assert!(!coord
+            .registry()
+            .get(WindowId(1))
+            .unwrap()
+            .runtime
+            .is_always_on_top());
+
+        // Toggle standard window topmost via SetWindowAlwaysOnTop.
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_always_on_top(WindowId(1), true);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert!(coord
+            .registry()
+            .get(WindowId(1))
+            .unwrap()
+            .runtime
+            .context()
+            .is_always_on_top());
+
+        // Toggle back off via SetAlwaysOnTop on the current window.
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_always_on_top(false);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert!(!coord
+            .registry()
+            .get(WindowId(1))
+            .unwrap()
+            .runtime
+            .context()
+            .is_always_on_top());
+
+        // On Wayland xdg_toplevel fallback, supports_topmost is false so state degrades safely.
+        coord.set_headless_capabilities(FloatingWindowCapabilities::wayland_xdg_fallback());
+        coord
+            .registry_mut()
+            .get_mut(WindowId(1))
+            .unwrap()
+            .runtime
+            .set_window_always_on_top(WindowId(1), true);
+        assert!(coord.route_window_commands(WindowId(1)).is_empty());
+        assert!(!coord
+            .registry()
+            .get(WindowId(1))
+            .unwrap()
+            .runtime
+            .context()
+            .is_always_on_top());
     }
 }

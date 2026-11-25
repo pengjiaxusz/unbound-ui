@@ -310,6 +310,18 @@ impl NativeWindow {
         }
     }
 
+    /// Returns whether this window is currently pinned above other windows.
+    #[must_use]
+    pub fn is_always_on_top(&self) -> bool {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.is_always_on_top(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.is_always_on_top(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.is_always_on_top(),
+        }
+    }
+
     /// 运行时无闪烁切换窗口鼠标穿透状态。
     pub fn set_click_through(&self, click_through: bool) {
         match &self.inner {
