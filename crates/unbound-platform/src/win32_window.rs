@@ -294,6 +294,19 @@ impl Window {
         }
     }
 
+    /// 获取窗口在非最大化普通状态下的外框矩形（Windows 下通过 `GetWindowPlacement` 查询）。
+    #[must_use]
+    pub fn normal_bounds(&self) -> Option<ScreenRect> {
+        #[cfg(windows)]
+        {
+            win32::normal_bounds(self.hwnd)
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    }
+
     /// 设置窗口外框左上角在屏幕物理坐标系中的位置。
     pub fn set_outer_position(&self, x: i32, y: i32) {
         #[cfg(windows)]
@@ -535,15 +548,16 @@ pub(crate) mod win32 {
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, IsIconic,
-        IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SetCursor, SetForegroundWindow,
-        SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, GWL_EXSTYLE, HTCAPTION,
-        HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO,
-        IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MONITORINFOF_PRIMARY,
-        SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
-        SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WMSZ_BOTTOM,
-        WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT,
-        WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        BringWindowToTop, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowPlacement,
+        GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SetCursor,
+        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+        GWL_EXSTYLE, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND,
+        IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+        MONITORINFOF_PRIMARY, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE,
+        WINDOWPLACEMENT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT,
+        WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     #[inline]
@@ -627,6 +641,21 @@ pub(crate) mod win32 {
         } else {
             None
         }
+    }
+
+    pub(crate) fn normal_bounds(hwnd: isize) -> Option<ScreenRect> {
+        let mut placement = WINDOWPLACEMENT {
+            length: core::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetWindowPlacement(hwnd_from_isize(hwnd), &mut placement) }.ok()?;
+        let r = placement.rcNormalPosition;
+        let width = (r.right - r.left).max(0) as u32;
+        let height = (r.bottom - r.top).max(0) as u32;
+        if width == 0 || height == 0 {
+            return None;
+        }
+        Some(ScreenRect::new(r.left, r.top, width, height))
     }
 
     pub(crate) fn set_outer_position(hwnd: isize, x: i32, y: i32) {

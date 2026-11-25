@@ -213,6 +213,8 @@ pub struct WindowedRunner<A: Application> {
     main_screen_origin: (i32, i32),
     /// Outer frame bounds of the primary window in physical screen coordinates.
     outer_bounds: ScreenRect,
+    /// 主窗口在非最大化普通状态下的外框矩形。
+    normal_bounds: Option<ScreenRect>,
     /// 已创建的原生弹出窗 `WindowId -> popup_id` 映射。
     native_popup_windows: FxHashMap<WindowId, u64>,
     /// 越界原生弹出窗状态注册表。
@@ -289,6 +291,7 @@ impl<A: Application> WindowedRunner<A> {
             primary_window_id: None,
             main_screen_origin: (initial_outer_bounds.x, initial_outer_bounds.y),
             outer_bounds: initial_outer_bounds,
+            normal_bounds: Some(initial_outer_bounds),
             native_popup_windows: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
             pending_popup_syncs: Vec::new(),
@@ -340,6 +343,12 @@ impl<A: Application> WindowedRunner<A> {
     #[must_use]
     pub const fn outer_bounds(&self) -> ScreenRect {
         self.outer_bounds
+    }
+
+    /// 返回主窗口非最大化普通状态下的外框矩形。
+    #[must_use]
+    pub const fn normal_bounds(&self) -> Option<ScreenRect> {
+        self.normal_bounds
     }
 
     /// Updates the cached physical outer bounds and synchronizes them to `AppRuntime` and `AppContext`.
@@ -395,11 +404,19 @@ impl<A: Application> WindowedRunner<A> {
         let (outer_x, outer_y) = window
             .outer_position()
             .unwrap_or((client_screen.x, client_screen.y));
+        let maximized = window.is_maximized();
         self.main_screen_origin = (client_screen.x, client_screen.y);
         self.outer_bounds = ScreenRect::new(outer_x, outer_y, width, height);
+        if let Some(native_normal) = window.normal_bounds() {
+            self.normal_bounds = Some(native_normal);
+        } else if !maximized {
+            self.normal_bounds = Some(self.outer_bounds);
+        }
+        self.runtime.context_mut().window_maximized = maximized;
         self.runtime
             .set_window_screen_origin(self.main_screen_origin, id);
         self.runtime.set_window_outer_bounds(self.outer_bounds);
+        self.runtime.set_window_normal_bounds(self.normal_bounds);
         self.sync_geometry_snapshot_to_runtime();
     }
 
@@ -587,7 +604,7 @@ impl<A: Application> WindowedRunner<A> {
                     window.set_maximized(!window.is_maximized());
                 }
                 crate::WindowCommand::Close => {
-                    window.request_close();
+                    self.destroy_vulkan();
                     return Flow::Exit;
                 }
                 crate::WindowCommand::SetThrottlePolicy(policy) => {
@@ -614,7 +631,7 @@ impl<A: Application> WindowedRunner<A> {
                 crate::WindowCommand::CloseWindow(target)
                 | crate::WindowCommand::CloseFloatingWindow(target) => {
                     if target == WindowId(window.id().0 as u64) {
-                        window.request_close();
+                        self.destroy_vulkan();
                         return Flow::Exit;
                     }
                 }
@@ -1762,14 +1779,24 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 }
             }
             PlatformEvent::Moved { x, y } => {
+                let (outer_x, outer_y) = window.outer_position().unwrap_or((x, y));
+                let maximized = window.is_maximized();
                 self.main_screen_origin = (x, y);
-                self.outer_bounds.x = x;
-                self.outer_bounds.y = y;
+                self.outer_bounds.x = outer_x;
+                self.outer_bounds.y = outer_y;
+                if let Some(native_normal) = window.normal_bounds() {
+                    self.normal_bounds = Some(native_normal);
+                } else if !maximized {
+                    self.normal_bounds = Some(self.outer_bounds);
+                }
                 let id = WindowId(window.id().0 as u64);
                 self.primary_window_id = Some(id);
+                self.runtime.context_mut().window_maximized = maximized;
                 self.runtime.set_window_screen_origin((x, y), id);
                 self.runtime.set_window_outer_bounds(self.outer_bounds);
+                self.runtime.set_window_normal_bounds(self.normal_bounds);
                 self.sync_geometry_snapshot_to_runtime();
+                let _ = self.runtime.window_moved(outer_x, outer_y);
             }
             PlatformEvent::PopupDismissed { id } => {
                 let _ = self.popup_host.close_popup(id);
@@ -1777,8 +1804,9 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 state.pacer.note_activity(Instant::now());
             }
             PlatformEvent::CloseRequested => {
-                self.destroy_vulkan();
-                return Flow::Exit;
+                // 先转发给应用层决定拦截或放行，紧随其后的 `drain_runtime_commands` 会执行显式关闭命令。
+                let _ = self.runtime.request_close();
+                state.pacer.note_activity(Instant::now());
             }
             PlatformEvent::RedrawRequested => {
                 window.request_redraw();

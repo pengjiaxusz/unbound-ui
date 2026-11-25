@@ -388,6 +388,10 @@ impl WaylandWindowHandle {
         None
     }
 
+    pub(crate) fn normal_bounds(&self) -> Option<ScreenRect> {
+        None
+    }
+
     pub(crate) fn set_outer_position(&self, x: i32, y: i32) {
         let _ = (x, y);
     }
@@ -2412,16 +2416,11 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             }
         }
 
-        // 3. 派发所有顶层窗口的待处理事件，并处理副窗（`Second Window`）独立关闭。
-        let mut closed_secondary_ids: Vec<isize> = Vec::new();
+        // 3. 派发所有顶层窗口的待处理事件；关闭请求统一交由应用层拦截或通过 `take_window_close_requests` 放行。
         for idx in 0..wl.windows.len() {
             let events: Vec<PlatformEvent> = std::mem::take(&mut wl.windows[idx].pending_events);
             let ev_now = Instant::now();
-            let mut close_requested = false;
             for ev in events {
-                if matches!(ev, PlatformEvent::CloseRequested) {
-                    close_requested = true;
-                }
                 let derived = apply(&mut wl.windows[idx].state, &ev, ev_now);
                 let entry = &mut wl.windows[idx];
                 for out_ev in derived {
@@ -2437,36 +2436,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             if wl.exit_requested {
                 break;
             }
-            if close_requested && idx > 0 {
-                closed_secondary_ids.push(wl.windows[idx].id);
-            }
         }
         if wl.exit_requested {
             break;
-        }
-        for sec_id in closed_secondary_ids {
-            // 先级联关闭归属该副窗的所有 `xdg_popup`，再通知应用销毁副窗渲染表面。
-            let owned_popups: Vec<u64> = wl
-                .popups
-                .iter()
-                .filter(|(_, p)| p.owner_window_id == sec_id)
-                .map(|(&pid, _)| pid)
-                .collect();
-            for pid in owned_popups {
-                if let Some(pentry) = wl.popups.remove(&pid) {
-                    pentry.shared.destroyed.store(true, Ordering::Release);
-                    let proto_id = pentry.popup.wl_surface().id().protocol_id();
-                    wl.surface_to_popup.remove(&proto_id);
-                    app.window_closing(&pentry.native_window);
-                }
-            }
-            if let Some(pos) = wl.windows.iter().position(|w| w.id == sec_id) {
-                let entry = wl.windows.remove(pos);
-                entry.shared.destroyed.store(true, Ordering::Release);
-                let proto_id = entry.sctk_window.wl_surface().id().protocol_id();
-                wl.surface_to_window.remove(&proto_id);
-                app.window_closing(&entry.native_window);
-            }
         }
 
         // 4. 派发所有越界弹出窗事件，并回收合成器已 `done` 关闭的弹出窗。

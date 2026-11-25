@@ -348,6 +348,10 @@ impl X11WindowHandle {
         self.shared.screen_origin.lock().ok().map(|origin| *origin)
     }
 
+    pub(crate) fn normal_bounds(&self) -> Option<ScreenRect> {
+        None
+    }
+
     pub(crate) fn set_outer_position(&self, x: i32, y: i32) {
         if let Ok(mut origin) = self.shared.screen_origin.lock() {
             *origin = (x, y);
@@ -1874,16 +1878,11 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             }
         }
 
-        // 3. 派发顶层窗口事件与副窗独立关闭
-        let mut closed_secondary: Vec<X11WindowId> = Vec::new();
-        for (idx, entry) in windows.iter_mut().enumerate() {
+        // 3. 派发顶层窗口事件；关闭请求交由应用层拦截或通过 `take_window_close_requests` 放行。
+        for entry in windows.iter_mut() {
             let events = std::mem::take(&mut entry.pending_events);
             let ev_now = Instant::now();
-            let mut close_req = false;
             for ev in events {
-                if matches!(ev, PlatformEvent::CloseRequested) {
-                    close_req = true;
-                }
                 let derived = apply(&mut entry.state, &ev, ev_now);
                 for out_ev in derived {
                     if app.event(&mut entry.state, &entry.native_window, out_ev) == Flow::Exit {
@@ -1898,33 +1897,9 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             if exit_requested {
                 break;
             }
-            if close_req && idx > 0 {
-                closed_secondary.push(entry.xid);
-            }
         }
         if exit_requested {
             break;
-        }
-        for sec_xid in closed_secondary {
-            let owned_pids: Vec<u64> = popups
-                .iter()
-                .filter(|(_, p)| p.owner_xid == sec_xid)
-                .map(|(&pid, _)| pid)
-                .collect();
-            for pid in owned_pids {
-                if let Some(pentry) = popups.remove(&pid) {
-                    pentry.shared.destroyed.store(true, Ordering::Release);
-                    app.window_closing(&pentry.native_window);
-                    let _ = conn.destroy_window(pentry.xid);
-                }
-            }
-            if let Some(pos) = windows.iter().position(|w| w.xid == sec_xid) {
-                let entry = windows.remove(pos);
-                entry.shared.destroyed.store(true, Ordering::Release);
-                cursor_cache.remove_window(entry.xid);
-                app.window_closing(&entry.native_window);
-                let _ = conn.destroy_window(entry.xid);
-            }
         }
 
         // 4. 派发越界弹出窗事件

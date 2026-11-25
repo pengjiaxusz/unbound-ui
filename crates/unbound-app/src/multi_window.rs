@@ -208,6 +208,7 @@ pub struct WindowContext<A: Application> {
     popup_host: PopupHostRegistry,
     screen_origin: (i32, i32),
     outer_bounds: ScreenRect,
+    normal_bounds: Option<ScreenRect>,
     was_suspended: bool,
     /// 已注册的 3D 视口自定义渲染通道工厂集合。
     viewport_pass_factories: Vec<crate::window_runner::ViewportPassFactory>,
@@ -269,6 +270,7 @@ impl<A: Application> WindowContext<A> {
             popup_host: PopupHostRegistry::new(),
             screen_origin: (initial_outer_bounds.x, initial_outer_bounds.y),
             outer_bounds: initial_outer_bounds,
+            normal_bounds: Some(initial_outer_bounds),
             was_suspended: false,
             viewport_pass_factories: Vec::new(),
         }
@@ -304,6 +306,18 @@ impl<A: Application> WindowContext<A> {
     pub fn set_outer_bounds(&mut self, bounds: ScreenRect) {
         self.outer_bounds = bounds;
         self.runtime.set_window_outer_bounds(bounds);
+    }
+
+    /// 更新并同步非最大化普通状态下的外框矩形。
+    pub fn set_normal_bounds(&mut self, bounds: Option<ScreenRect>) {
+        self.normal_bounds = bounds;
+        self.runtime.set_window_normal_bounds(bounds);
+    }
+
+    /// 返回窗口在非最大化普通状态下的外框物理矩形。
+    #[must_use]
+    pub const fn normal_bounds(&self) -> Option<ScreenRect> {
+        self.normal_bounds
     }
 
     /// 设置窗口操作系统 DPI 缩放比例并同步至内部 [`AppRuntime`]。
@@ -2081,6 +2095,34 @@ impl<A: Application> MultiWindowCoordinator<A> {
         active.last_route
     }
 
+    /// 无头派发原生关窗请求至指定窗口，并立即排空该窗口命令；返回该窗口是否已被实际关闭。
+    pub fn dispatch_close_requested(&mut self, id: WindowId) -> bool {
+        if let Some(ctx) = self.registry.get_mut(id) {
+            let _ = ctx.runtime.request_close();
+        } else {
+            return false;
+        }
+        let _ = self.route_window_commands(id);
+        self.registry.get(id).is_none()
+    }
+
+    /// 无头派发窗口移动事件至指定窗口，同步几何与非最大化普通矩形。
+    pub fn dispatch_window_moved(&mut self, id: WindowId, x: i32, y: i32) {
+        if let Some(ctx) = self.registry.get_mut(id) {
+            let maximized = ctx.runtime.context().window_maximized;
+            ctx.screen_origin = (x, y);
+            ctx.outer_bounds.x = x;
+            ctx.outer_bounds.y = y;
+            if !maximized {
+                ctx.set_normal_bounds(Some(ctx.outer_bounds));
+            }
+            ctx.runtime.set_window_screen_origin((x, y), id);
+            ctx.runtime.set_window_outer_bounds(ctx.outer_bounds);
+            let _ = ctx.runtime.window_moved(x, y);
+        }
+        self.sync_all_window_geometries_to_runtimes();
+    }
+
     /// 按严格回收顺序关闭并移除指定窗口；若无任何 `Standard` 窗口存活则级联关闭全部浮窗并释放共享 GPU。
     pub fn close_window(&mut self, id: WindowId) -> bool {
         if self
@@ -3091,15 +3133,6 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             }
             return Flow::Continue;
         }
-        if matches!(event, PlatformEvent::CloseRequested) {
-            let _ = self.close_window(id);
-            return if self.registry.is_empty() {
-                Flow::Exit
-            } else {
-                Flow::Continue
-            };
-        }
-
         let Some(ctx) = self.registry.get_mut(id) else {
             return Flow::Continue;
         };
@@ -3297,9 +3330,26 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 }
             }
             PlatformEvent::Moved { x, y } => {
-                ctx.set_screen_origin((x, y));
+                let (outer_x, outer_y) = window.outer_position().unwrap_or((x, y));
+                let maximized = window.is_maximized();
+                ctx.screen_origin = (x, y);
+                ctx.outer_bounds.x = outer_x;
+                ctx.outer_bounds.y = outer_y;
+                if let Some(native_normal) = window.normal_bounds() {
+                    ctx.set_normal_bounds(Some(native_normal));
+                } else if !maximized {
+                    ctx.set_normal_bounds(Some(ctx.outer_bounds));
+                }
+                ctx.runtime.context_mut().window_maximized = maximized;
                 ctx.runtime.set_window_screen_origin((x, y), id);
+                ctx.runtime.set_window_outer_bounds(ctx.outer_bounds);
+                let _ = ctx.runtime.window_moved(outer_x, outer_y);
                 geometry_changed = true;
+            }
+            PlatformEvent::CloseRequested => {
+                // 先交由目标窗口应用层拦截或放行；紧随其后的命令排空阶段执行显式关窗命令。
+                let _ = ctx.runtime.request_close();
+                ctx.pacer.note_activity(Instant::now());
             }
             PlatformEvent::PopupDismissed { id: popup_id } => {
                 let _ = ctx.popup_host.close_popup(popup_id);
@@ -3423,7 +3473,13 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             Vec2::new(chain_w.max(1) as f32, chain_h.max(1) as f32),
             os_scale,
         );
-        ctx.runtime.context_mut().window_maximized = window.is_maximized();
+        let maximized = window.is_maximized();
+        ctx.runtime.context_mut().window_maximized = maximized;
+        if let Some(native_normal) = window.normal_bounds() {
+            ctx.set_normal_bounds(Some(native_normal));
+        } else if !maximized {
+            ctx.set_normal_bounds(Some(ctx.outer_bounds));
+        }
         ctx.runtime.context_mut().window_always_on_top = window.is_always_on_top();
 
         let before_render_dirty = Self::invoke_before_render(&mut self.on_before_render, id, ctx);
@@ -4872,5 +4928,103 @@ mod tests {
             .expect("window should render normally without hook");
         assert_eq!(dirty, DirtyFlags::NONE);
         assert!(report.external_texture_ops.is_empty());
+    }
+
+    #[test]
+    fn multi_window_close_requested_interception_and_moved_normal_bounds() {
+        struct GuardedApp {
+            allow_close: bool,
+            moved: Vec<(i32, i32)>,
+        }
+
+        impl Application for GuardedApp {
+            type State = ();
+
+            fn init(&mut self, _: &mut AppContext) {}
+
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: crate::AppEvent,
+                ctx: &mut crate::AppContext,
+            ) -> crate::EventOutcome {
+                match event {
+                    crate::AppEvent::Custom { id: 1, .. } => {
+                        self.allow_close = true;
+                        crate::EventOutcome::new(crate::DirtyFlags::NONE)
+                    }
+                    crate::AppEvent::CloseRequested => {
+                        if self.allow_close {
+                            ctx.close_window(ctx.window_id());
+                        }
+                        crate::EventOutcome::new(crate::DirtyFlags::PAINT)
+                    }
+                    crate::AppEvent::Moved { x, y } => {
+                        self.moved.push((x, y));
+                        crate::EventOutcome::new(crate::DirtyFlags::PAINT)
+                    }
+                    _ => crate::EventOutcome::new(crate::DirtyFlags::NONE),
+                }
+            }
+
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut main_cfg = WindowConfig::default().with_title("Main");
+        main_cfg.width = 900;
+        main_cfg.height = 640;
+        let mut coord =
+            MultiWindowCoordinator::new(main_cfg.clone(), |_: WindowId, _: &WindowConfig| {
+                GuardedApp {
+                    allow_close: false,
+                    moved: Vec::new(),
+                }
+            });
+        let main_id = WindowId(1);
+        coord.register_headless_window(main_id, main_cfg);
+
+        // 拖动窗口并记录非最大化普通矩形。
+        coord.dispatch_window_moved(main_id, 150, 90);
+        coord.dispatch_window_moved(main_id, 150, 90);
+        let ctx = coord.registry().get(main_id).unwrap();
+        assert_eq!(ctx.runtime.app().moved, vec![(150, 90)]);
+        assert_eq!(
+            ctx.normal_bounds(),
+            Some(unbound_platform::ScreenRect::new(150, 90, 900, 640))
+        );
+
+        // 模拟最大化后再次移动：normal_bounds 保持最大化前的普通尺寸与位置。
+        coord
+            .registry_mut()
+            .get_mut(main_id)
+            .unwrap()
+            .runtime
+            .context_mut()
+            .window_maximized = true;
+        coord.dispatch_window_moved(main_id, 0, 0);
+        let ctx = coord.registry().get(main_id).unwrap();
+        assert_eq!(
+            ctx.normal_bounds(),
+            Some(unbound_platform::ScreenRect::new(150, 90, 900, 640))
+        );
+
+        // 拦截关闭：窗口保持存活且无待关闭请求。
+        assert!(!coord.dispatch_close_requested(main_id));
+        assert!(coord.registry().get(main_id).is_some());
+        assert!(coord.take_window_close_requests().is_empty());
+
+        // 放行关闭：窗口被移除并产生待关闭请求。
+        let _ = coord
+            .registry_mut()
+            .get_mut(main_id)
+            .unwrap()
+            .runtime
+            .dispatch(crate::AppEvent::Custom {
+                id: 1,
+                payload: String::new(),
+            });
+        assert!(coord.dispatch_close_requested(main_id));
+        assert!(coord.registry().get(main_id).is_none());
+        assert_eq!(coord.take_window_close_requests(), vec![main_id]);
     }
 }

@@ -175,6 +175,8 @@ impl Application for GalleryApp {
             | AppEvent::NativePopupDismissed { .. }
             | AppEvent::OverlayDismissed { .. }
             | AppEvent::DragEnd { .. }
+            | AppEvent::Moved { .. }
+            | AppEvent::CloseRequested
             | AppEvent::Custom { .. } => {}
         }
 

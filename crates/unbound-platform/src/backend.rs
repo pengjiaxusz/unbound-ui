@@ -2116,19 +2116,19 @@ mod win32 {
                 }
             }
 
-            let mut closing_indices = Vec::new();
-            for (index, entry) in windows.iter_mut().enumerate() {
+            for entry in &mut windows {
                 let events: Vec<PlatformEvent> =
                     entry.user_data.events.borrow_mut().drain(..).collect();
 
                 for platform_event in events {
                     let now = Instant::now();
                     if matches!(platform_event, PlatformEvent::CloseRequested) {
+                        // 先将原生关窗请求转发给应用层决定拦截或放行；
+                        // 仅当应用返回 `Flow::Exit` 或通过 `take_window_close_requests` 显式下发关闭时才销毁窗口。
                         let flow = app.event(&mut entry.state, &entry.window, platform_event);
                         if flow == Flow::Exit {
                             break 'main_loop;
                         }
-                        closing_indices.push(index);
                         break;
                     }
 
@@ -2183,36 +2183,6 @@ mod win32 {
                         {
                             break 'main_loop;
                         }
-                    }
-                }
-            }
-
-            for index in closing_indices.into_iter().rev() {
-                let entry = windows.remove(index);
-                let closed_was_primary = entry.window.id() == primary_id;
-                let owner_id = crate::windows::WindowId(entry.window.raw_win32_hwnd() as u64);
-                for action in popup_registry.close_for_owner(owner_id) {
-                    if let crate::popup_host::PopupSyncAction::Close { id, .. } = action {
-                        if let Some(pos) = popup_windows.iter().position(|(pid, _)| *pid == id) {
-                            let (_, popup_entry) = popup_windows.remove(pos);
-                            app.window_closing(&popup_entry.window);
-                            if !popup_entry.window.is_destroyed() {
-                                let _ = unsafe { DestroyWindow(popup_entry.hwnd) };
-                            }
-                        }
-                    }
-                }
-                app.window_closing(&entry.window);
-                if !entry.window.is_destroyed() {
-                    let _ = unsafe { DestroyWindow(entry.hwnd) };
-                }
-                if closed_was_primary {
-                    if let Some(next_primary) = windows.first() {
-                        primary_id = next_primary.window.id();
-                        primary_hwnd_atomic
-                            .store(next_primary.window.raw_win32_hwnd(), Ordering::Release);
-                    } else {
-                        primary_hwnd_atomic.store(0, Ordering::Release);
                     }
                 }
             }

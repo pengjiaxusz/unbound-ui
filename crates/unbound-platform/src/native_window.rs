@@ -232,6 +232,18 @@ impl NativeWindow {
         }
     }
 
+    /// 获取窗口在非最大化普通状态下的外框物理矩形（最大化退出还原时使用）。
+    #[must_use]
+    pub fn normal_bounds(&self) -> Option<ScreenRect> {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.normal_bounds(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.normal_bounds(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.normal_bounds(),
+        }
+    }
+
     /// 设置窗口外框左上角在屏幕物理坐标系中的位置。
     pub fn set_outer_position(&self, x: i32, y: i32) {
         match &self.inner {
