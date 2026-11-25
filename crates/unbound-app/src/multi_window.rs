@@ -206,6 +206,7 @@ pub struct WindowContext<A: Application> {
     bc7_fallback_standalone: FxHashMap<AssetId, u32>,
     popup_host: PopupHostRegistry,
     screen_origin: (i32, i32),
+    outer_bounds: ScreenRect,
     was_suspended: bool,
     /// 已注册的 3D 视口自定义渲染通道工厂集合。
     viewport_pass_factories: Vec<crate::window_runner::ViewportPassFactory>,
@@ -217,7 +218,14 @@ impl<A: Application> WindowContext<A> {
     pub fn new(app: A, config: &WindowConfig) -> Self {
         let (w, h) = (config.width.max(1), config.height.max(1));
         let viewport = Vec2::new(w as f32, h as f32);
+        let initial_outer_bounds = match config.position {
+            WindowPosition::Physical { x, y } | WindowPosition::Logical { x, y } => {
+                ScreenRect::new(x, y, w, h)
+            }
+            _ => ScreenRect::new(0, 0, w, h),
+        };
         let mut runtime = AppRuntime::new(app, viewport);
+        runtime.set_window_outer_bounds(initial_outer_bounds);
         runtime.set_backdrop(config.backdrop);
         runtime.set_clipboard(Box::new(unbound_platform::SystemClipboard::new()));
         let ctx = runtime.context();
@@ -258,7 +266,8 @@ impl<A: Application> WindowContext<A> {
             bc7_fallback_pages: FxHashMap::default(),
             bc7_fallback_standalone: FxHashMap::default(),
             popup_host: PopupHostRegistry::new(),
-            screen_origin: (0, 0),
+            screen_origin: (initial_outer_bounds.x, initial_outer_bounds.y),
+            outer_bounds: initial_outer_bounds,
             was_suspended: false,
             viewport_pass_factories: Vec::new(),
         }
@@ -273,6 +282,27 @@ impl<A: Application> WindowContext<A> {
     /// 设置窗口客户区左上角在屏幕物理坐标系中的原点（供无头多窗与原生窗口移动事件同步）。
     pub fn set_screen_origin(&mut self, origin: (i32, i32)) {
         self.screen_origin = origin;
+        self.outer_bounds.x = origin.0;
+        self.outer_bounds.y = origin.1;
+        self.runtime.set_window_outer_bounds(self.outer_bounds);
+    }
+
+    /// Returns the window outer frame top-left position in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_position(&self) -> (i32, i32) {
+        (self.outer_bounds.x, self.outer_bounds.y)
+    }
+
+    /// Returns the window outer frame bounds in physical screen coordinates.
+    #[must_use]
+    pub const fn outer_bounds(&self) -> ScreenRect {
+        self.outer_bounds
+    }
+
+    /// Updates the window outer frame bounds in physical screen coordinates and syncs `AppRuntime`.
+    pub fn set_outer_bounds(&mut self, bounds: ScreenRect) {
+        self.outer_bounds = bounds;
+        self.runtime.set_window_outer_bounds(bounds);
     }
 
     /// 设置窗口操作系统 DPI 缩放比例并同步至内部 [`AppRuntime`]。
@@ -284,6 +314,11 @@ impl<A: Application> WindowContext<A> {
         };
         self.os_scale = clamped;
         self.runtime.context_mut().set_os_scale(clamped);
+        let scale = self.runtime.context().effective_scale().max(0.01);
+        let vp = self.runtime.context().viewport;
+        self.outer_bounds.width = (vp.x * scale).round().max(1.0) as u32;
+        self.outer_bounds.height = (vp.y * scale).round().max(1.0) as u32;
+        self.runtime.set_window_outer_bounds(self.outer_bounds);
     }
 
     /// 计算窗口客户区在屏幕物理坐标系中的包围矩形。
@@ -1028,6 +1063,90 @@ struct FloatingLiveSync {
     outer_rect: Option<ScreenRect>,
 }
 
+/// Physical screen-space geometry snapshot for a registered application window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowGeometry {
+    /// Unique platform window identifier.
+    pub id: WindowId,
+    /// Window role (`Standard`, `Ghost`, or `FloatingIsland`).
+    pub role: WindowRole,
+    /// Outer frame top-left position in physical screen coordinates.
+    pub outer_position: (i32, i32),
+    /// Outer frame bounds in physical screen coordinates.
+    pub outer_bounds: ScreenRect,
+    /// Client-area top-left origin in physical screen coordinates.
+    pub client_origin: (i32, i32),
+    /// Effective DPI * UI scale factor.
+    pub effective_scale: f32,
+    /// Whether the window is currently visible.
+    pub visible: bool,
+    /// Whether the window ignores pointer hit-testing (`click_through`).
+    pub click_through: bool,
+}
+
+impl WindowGeometry {
+    /// Returns `true` when the given physical screen pixel lies inside `outer_bounds`.
+    #[must_use]
+    pub const fn contains_screen_pos(&self, screen_x: i32, screen_y: i32) -> bool {
+        if self.outer_bounds.width == 0 || self.outer_bounds.height == 0 {
+            return false;
+        }
+        let x = screen_x as i64;
+        let y = screen_y as i64;
+        let left = self.outer_bounds.x as i64;
+        let top = self.outer_bounds.y as i64;
+        let right = left + self.outer_bounds.width as i64;
+        let bottom = top + self.outer_bounds.height as i64;
+        x >= left && x < right && y >= top && y < bottom
+    }
+
+    /// Returns `true` when the given physical screen point lies inside `outer_bounds`.
+    #[must_use]
+    pub fn contains_screen_vec2(&self, screen_physical: Vec2) -> bool {
+        if self.outer_bounds.width == 0 || self.outer_bounds.height == 0 {
+            return false;
+        }
+        let left = self.outer_bounds.x as f32;
+        let top = self.outer_bounds.y as f32;
+        let right = left + self.outer_bounds.width as f32;
+        let bottom = top + self.outer_bounds.height as f32;
+        screen_physical.x >= left
+            && screen_physical.x < right
+            && screen_physical.y >= top
+            && screen_physical.y < bottom
+    }
+}
+
+/// Live cross-window drag hover state synchronized to the currently targeted window.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CrossWindowDragTargetState {
+    /// Source window that initiated the active cross-window drag session.
+    pub source_window: WindowId,
+    /// Drag source descriptor (tab or shell).
+    pub source: unbound_widgets::DockDragSource,
+    /// Pointer position in the target window's local logical coordinates.
+    pub local_logical: Vec2,
+    /// Pointer position in global physical screen coordinates.
+    pub screen_physical: Vec2,
+    /// Resolved dock drop target preview for this window, if visible.
+    pub target: Option<unbound_widgets::DockDropTarget>,
+    /// Drag proxy payload associated with the active drag.
+    pub proxy: Option<unbound_widgets::DockDragProxy>,
+    /// Dock overlay state snapshot ready for rendering in the target window's view.
+    pub overlay: unbound_widgets::DockOverlayState,
+}
+
+struct ActiveCrossWindowDrag {
+    source_window: WindowId,
+    source: unbound_widgets::DockDragSource,
+    title: String,
+    proxy_size: (u32, u32),
+    overlay: unbound_widgets::DockOverlayState,
+    last_target_window: Option<WindowId>,
+    last_route: Option<CrossWindowDragRoute>,
+    last_update: Instant,
+}
+
 /// 跨窗拖拽单帧坐标映射与停靠目标仲裁结果。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CrossWindowDragRoute {
@@ -1070,6 +1189,8 @@ pub struct MultiWindowCoordinator<A: Application> {
     theme_clock_epoch: Instant,
     /// 最近一次全局主题切换对应的共享触发时间戳（秒），确保并排可见窗口同拍推进。
     shared_theme_trigger: Option<(ThemeSnapshotKey, f64)>,
+    /// Active live cross-window drag routing session, if any.
+    active_cross_window_drag: Option<ActiveCrossWindowDrag>,
 }
 
 impl<A: Application> MultiWindowCoordinator<A> {
@@ -1099,6 +1220,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
             waker: None,
             theme_clock_epoch: Instant::now(),
             shared_theme_trigger: None,
+            active_cross_window_drag: None,
         }
     }
 
@@ -1252,11 +1374,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
         }
         let visible = config.visible;
+        ctx.runtime
+            .set_window_screen_origin(ctx.screen_origin(), id);
         let _ = self.registry.insert(id, ctx);
         self.registry.set_visible(id, visible);
         if self.focused_window_id.is_none() && visible {
             self.focused_window_id = Some(id);
         }
+        self.sync_all_window_geometries_to_runtimes();
     }
 
     /// 无头注册一个幽灵窗或悬浮浮岛上下文（含策略、初始外框与焦点隔离初始化）。
@@ -1279,6 +1404,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
 
         let app = self.factory.create(id, &config);
         let mut ctx = WindowContext::new(app, &config);
+        ctx.set_screen_origin((outer_rect.x, outer_rect.y));
+        ctx.set_outer_bounds(outer_rect);
+        ctx.runtime
+            .set_window_screen_origin((outer_rect.x, outer_rect.y), id);
         if let Some(waker) = &self.waker {
             ctx.runtime
                 .set_waker(Arc::new(SignalWaker(Arc::clone(waker))));
@@ -1288,6 +1417,22 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let state = self
             .floating_host
             .register(id, role, policy, outer_rect, visible);
+        let state_no_activate = state.effective_policy.no_activate;
+        if role == WindowRole::Ghost
+            && self
+                .floating_host
+                .drag_proxy()
+                .is_some_and(|proxy| proxy.spawn_pending)
+            && self.floating_host.bind_drag_proxy_window(id)
+        {
+            if let Some(proxy) = self.floating_host.drag_proxy().cloned() {
+                self.registry.set_visible(id, proxy.visible);
+                if let Some(bound_ctx) = self.registry.get_mut(id) {
+                    bound_ctx.set_screen_origin((proxy.outer_rect.x, proxy.outer_rect.y));
+                    bound_ctx.set_outer_bounds(proxy.outer_rect);
+                }
+            }
+        }
         // 绝不将 Ghost 提升为主窗口；若当前主窗口是非 Standard，则尝试保持首个 Standard 为主窗口。
         if let Some(primary) = self.registry.primary() {
             if primary == id && role == WindowRole::Ghost {
@@ -1301,9 +1446,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 }
             }
         }
-        if !state.effective_policy.no_activate && visible && self.focused_window_id.is_none() {
+        if !state_no_activate && visible && self.focused_window_id.is_none() {
             self.focused_window_id = Some(id);
         }
+        self.sync_all_window_geometries_to_runtimes();
     }
 
     /// 无头模拟窗口焦点事件，验证 `no_activate` 浮窗绝不抢占宿主焦点。
@@ -1346,7 +1492,91 @@ impl<A: Application> MultiWindowCoordinator<A> {
     /// 查询指定浮窗当前记录的屏幕物理外框矩形。
     #[must_use]
     pub fn window_outer_rect(&self, id: WindowId) -> Option<ScreenRect> {
-        self.floating_host.get(id).map(|s| s.outer_rect)
+        self.floating_host
+            .get(id)
+            .map(|s| s.outer_rect)
+            .or_else(|| self.registry.get(id).map(WindowContext::outer_bounds))
+    }
+
+    /// Returns the outer top-left position of the given window in physical screen coordinates.
+    #[must_use]
+    pub fn outer_position(&self, id: WindowId) -> Option<(i32, i32)> {
+        self.outer_bounds(id).map(|rect| (rect.x, rect.y))
+    }
+
+    /// Returns the outer frame bounds of the given window in physical screen coordinates.
+    #[must_use]
+    pub fn outer_bounds(&self, id: WindowId) -> Option<ScreenRect> {
+        self.window_outer_rect(id)
+    }
+
+    /// Returns physical screen geometry snapshots for all registered windows in this process.
+    #[must_use]
+    pub fn all_window_geometries(&self) -> Vec<WindowGeometry> {
+        self.registry
+            .iter()
+            .map(|slot| {
+                let floating = self.floating_host.get(slot.id);
+                let role = floating.map_or(slot.context.config.role, |s| s.role);
+                let outer_bounds = floating
+                    .map(|s| s.outer_rect)
+                    .unwrap_or_else(|| slot.context.outer_bounds());
+                let visible = floating.map_or(slot.visible, |s| s.visible);
+                let click_through = floating.map_or(
+                    role != WindowRole::Standard
+                        && slot.context.config.floating_policy.click_through,
+                    |s| s.effective_policy.click_through,
+                );
+                WindowGeometry {
+                    id: slot.id,
+                    role,
+                    outer_position: (outer_bounds.x, outer_bounds.y),
+                    outer_bounds,
+                    client_origin: slot.context.screen_origin(),
+                    effective_scale: slot.context.runtime.context().effective_scale(),
+                    visible,
+                    click_through,
+                }
+            })
+            .collect()
+    }
+
+    /// Hit-tests all visible, non-click-through windows at physical screen coordinates, preferring the focused window.
+    #[must_use]
+    pub fn window_at_screen_pos(&self, screen_x: i32, screen_y: i32) -> Option<WindowId> {
+        let geometries = self.all_window_geometries();
+        if let Some(focused) = self.focused_window_id {
+            if let Some(hit) = geometries.iter().find(|geom| {
+                geom.id == focused
+                    && geom.visible
+                    && !geom.click_through
+                    && geom.contains_screen_pos(screen_x, screen_y)
+            }) {
+                return Some(hit.id);
+            }
+        }
+        geometries
+            .iter()
+            .find(|geom| {
+                geom.visible && !geom.click_through && geom.contains_screen_pos(screen_x, screen_y)
+            })
+            .map(|geom| geom.id)
+    }
+
+    /// Broadcasts the current in-process multi-window geometry snapshot into every registered `AppRuntime`.
+    pub fn sync_all_window_geometries_to_runtimes(&mut self) {
+        let snapshot = Arc::new(self.all_window_geometries());
+        for slot in self.registry.iter_mut() {
+            let bounds = self
+                .floating_host
+                .get(slot.id)
+                .map(|s| s.outer_rect)
+                .unwrap_or_else(|| slot.context.outer_bounds());
+            slot.context.runtime.set_window_outer_bounds(bounds);
+            slot.context
+                .runtime
+                .set_all_window_geometries(Arc::clone(&snapshot));
+        }
     }
 
     /// 查询指定窗口当前是否可见。
@@ -1398,6 +1628,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
             return false;
         };
         ctx.set_screen_origin(origin);
+        ctx.runtime.set_window_screen_origin(origin, id);
+        self.sync_all_window_geometries_to_runtimes();
         true
     }
 
@@ -1407,6 +1639,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
             return false;
         };
         ctx.set_os_scale(os_scale);
+        self.sync_all_window_geometries_to_runtimes();
         true
     }
 
@@ -1445,6 +1678,16 @@ impl<A: Application> MultiWindowCoordinator<A> {
     #[must_use]
     pub fn hit_test_screen_window(&self, screen_physical: Vec2) -> Option<(WindowId, Vec2)> {
         for slot in self.registry.iter() {
+            let floating = self.floating_host.get(slot.id);
+            let visible = floating.map_or(slot.visible, |s| s.visible);
+            let role = floating.map_or(slot.context.config.role, |s| s.role);
+            let click_through = floating.map_or(
+                role != WindowRole::Standard && slot.context.config.floating_policy.click_through,
+                |s| s.effective_policy.click_through,
+            );
+            if !visible || click_through {
+                continue;
+            }
             if slot
                 .context
                 .screen_bounds_physical()
@@ -1520,8 +1763,250 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
     }
 
+    /// Returns the most recent live cross-window drag routing result, if a drag session is active.
+    #[must_use]
+    pub fn active_cross_window_drag_route(&self) -> Option<&CrossWindowDragRoute> {
+        self.active_cross_window_drag
+            .as_ref()
+            .and_then(|drag| drag.last_route.as_ref())
+    }
+
+    /// Returns the active cross-screen drag proxy ghost window state, if any.
+    #[must_use]
+    pub fn drag_proxy_ghost(&self) -> Option<&crate::DragProxyGhostState> {
+        self.floating_host.drag_proxy()
+    }
+
+    fn collect_dock_candidate_panes(
+        &self,
+    ) -> Vec<(WindowId, Vec<unbound_widgets::DockCandidatePane>)> {
+        self.registry
+            .iter()
+            .filter_map(|slot| {
+                let panes = slot.context.runtime.dock_candidate_panes();
+                if panes.is_empty() {
+                    None
+                } else {
+                    Some((slot.id, panes.to_vec()))
+                }
+            })
+            .collect()
+    }
+
+    fn clamp_drag_proxy_rect(&self, desired: ScreenRect) -> ScreenRect {
+        if self
+            .floating_host
+            .capabilities()
+            .supports_global_positioning
+            && !self.headless_work_areas.is_empty()
+        {
+            let area = self.select_work_area_for_rect(desired);
+            clamp_rect_to_work_area(desired, area.work_area)
+        } else {
+            desired
+        }
+    }
+
+    /// Synchronizes position and visibility of the cross-screen drag proxy ghost window.
+    pub fn sync_drag_proxy_ghost_state(
+        &mut self,
+        source_window: WindowId,
+        title: &str,
+        desired_rect: ScreenRect,
+        visible: bool,
+    ) {
+        let clamped_rect = self.clamp_drag_proxy_rect(desired_rect);
+        if self.floating_host.drag_proxy().is_none() {
+            if !visible {
+                return;
+            }
+            let _ = self
+                .floating_host
+                .begin_drag_proxy(source_window, title, clamped_rect, true);
+            let (ghost_cfg, _) = crate::FloatingWindowSpec::drag_proxy_ghost(
+                title,
+                clamped_rect.width,
+                clamped_rect.height,
+                (clamped_rect.x, clamped_rect.y),
+            )
+            .build();
+            self.pending_windows.push_back(ghost_cfg);
+            return;
+        }
+
+        if let Some((applied_rect, applied_visible, Some(id))) =
+            self.floating_host.update_drag_proxy(clamped_rect, visible)
+        {
+            self.registry.set_visible(id, applied_visible);
+            if let Some(ctx) = self.registry.get_mut(id) {
+                ctx.set_screen_origin((applied_rect.x, applied_rect.y));
+                ctx.set_outer_bounds(applied_rect);
+            }
+            let sync = self.pending_floating_live_syncs.entry(id).or_default();
+            sync.visible = Some(applied_visible);
+            if self
+                .floating_host
+                .capabilities()
+                .supports_global_positioning
+            {
+                sync.outer_rect = Some(applied_rect);
+            }
+        }
+    }
+
+    /// Closes the active cross-screen drag proxy ghost window and drops queued ghost spawn requests.
+    pub fn close_drag_proxy_ghost_window(&mut self) {
+        if let Some(proxy) = self.floating_host.drag_proxy() {
+            if proxy.spawn_pending {
+                let proxy_title = proxy.title.clone();
+                self.pending_windows
+                    .retain(|cfg| !(cfg.role == WindowRole::Ghost && cfg.title == proxy_title));
+            }
+        }
+        if let Some(ghost_id) = self.floating_host.end_drag_proxy() {
+            if self.close_window(ghost_id) {
+                self.pending_window_close_requests.push(ghost_id);
+            }
+        }
+    }
+
+    /// Starts a live cross-window drag routing session owned by `source_window`.
+    pub fn begin_cross_window_drag(
+        &mut self,
+        source_window: WindowId,
+        source: unbound_widgets::DockDragSource,
+        title: impl Into<String>,
+        pointer_local: Vec2,
+        proxy_size: (u32, u32),
+    ) -> Option<CrossWindowDragRoute> {
+        let _ = self.finish_cross_window_drag(true);
+        let mut overlay = unbound_widgets::DockOverlayState::new();
+        overlay.begin_drag(source, pointer_local);
+        let clamped_size = (proxy_size.0.max(1), proxy_size.1.max(1));
+        self.active_cross_window_drag = Some(ActiveCrossWindowDrag {
+            source_window,
+            source,
+            title: title.into(),
+            proxy_size: clamped_size,
+            overlay,
+            last_target_window: None,
+            last_route: None,
+            last_update: Instant::now(),
+        });
+        self.step_active_cross_window_drag(source_window, pointer_local, 0.0)
+    }
+
+    /// Routes a pointer movement during an active cross-window drag session, updating target previews and ghost proxy state.
+    pub fn process_cross_window_drag_move(
+        &mut self,
+        source_id: WindowId,
+        source_local_logical: Vec2,
+        dt: f32,
+    ) -> Option<CrossWindowDragRoute> {
+        self.step_active_cross_window_drag(source_id, source_local_logical, dt)
+    }
+
+    fn step_active_cross_window_drag(
+        &mut self,
+        source_id: WindowId,
+        source_local_logical: Vec2,
+        dt: f32,
+    ) -> Option<CrossWindowDragRoute> {
+        let mut active = self.active_cross_window_drag.take()?;
+        if active.source_window != source_id {
+            self.active_cross_window_drag = Some(active);
+            return None;
+        }
+        let window_panes = self.collect_dock_candidate_panes();
+        let route = self.route_cross_window_drag(
+            source_id,
+            source_local_logical,
+            &mut active.overlay,
+            &window_panes,
+            dt,
+            &active.title,
+        );
+        let Some(route) = route else {
+            self.active_cross_window_drag = Some(active);
+            return None;
+        };
+
+        let prev_target = active.last_target_window;
+        if prev_target != route.target_window {
+            if let Some(old_id) = prev_target {
+                if let Some(old_ctx) = self.registry.get_mut(old_id) {
+                    old_ctx.runtime.set_cross_window_drag_target(None);
+                }
+            }
+        }
+
+        if let (Some(target_id), Some(target_local)) =
+            (route.target_window, route.target_local_logical)
+        {
+            let target_state = CrossWindowDragTargetState {
+                source_window: source_id,
+                source: active.source,
+                local_logical: target_local,
+                screen_physical: route.screen_physical,
+                target: route.target.clone(),
+                proxy: route.proxy.clone(),
+                overlay: active.overlay.clone(),
+            };
+            if let Some(target_ctx) = self.registry.get_mut(target_id) {
+                target_ctx
+                    .runtime
+                    .set_cross_window_drag_target(Some(target_state));
+            }
+        } else if let Some(old_id) = prev_target {
+            if let Some(old_ctx) = self.registry.get_mut(old_id) {
+                old_ctx.runtime.set_cross_window_drag_target(None);
+            }
+        }
+
+        let proxy_rect = crate::compute_drag_proxy_rect(
+            route.screen_physical,
+            active.proxy_size,
+            crate::DEFAULT_DRAG_PROXY_CURSOR_OFFSET,
+        );
+        if route.tear_out {
+            self.sync_drag_proxy_ghost_state(source_id, &active.title, proxy_rect, true);
+        } else if self.floating_host.drag_proxy().is_some() {
+            self.sync_drag_proxy_ghost_state(source_id, &active.title, proxy_rect, false);
+        }
+
+        active.last_target_window = route.target_window;
+        active.last_route = Some(route.clone());
+        active.last_update = Instant::now();
+        self.active_cross_window_drag = Some(active);
+        self.sync_all_window_geometries_to_runtimes();
+        Some(route)
+    }
+
+    /// Finishes or cancels the active cross-window drag session, clearing target previews and closing the ghost proxy.
+    pub fn finish_cross_window_drag(&mut self, _cancelled: bool) -> Option<CrossWindowDragRoute> {
+        let active = self.active_cross_window_drag.take()?;
+        if let Some(old_id) = active.last_target_window {
+            if let Some(old_ctx) = self.registry.get_mut(old_id) {
+                old_ctx.runtime.set_cross_window_drag_target(None);
+            }
+        }
+        for slot in self.registry.iter_mut() {
+            slot.context.runtime.set_cross_window_drag_target(None);
+        }
+        self.close_drag_proxy_ghost_window();
+        self.sync_all_window_geometries_to_runtimes();
+        active.last_route
+    }
+
     /// 按严格回收顺序关闭并移除指定窗口；若无任何 `Standard` 窗口存活则级联关闭全部浮窗并释放共享 GPU。
     pub fn close_window(&mut self, id: WindowId) -> bool {
+        if self
+            .active_cross_window_drag
+            .as_ref()
+            .is_some_and(|drag| drag.source_window == id)
+        {
+            let _ = self.finish_cross_window_drag(true);
+        }
         let _ = self.floating_host.unregister(id);
         self.pending_floating_live_syncs.remove(&id);
         if self.focused_window_id == Some(id) {
@@ -1579,6 +2064,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
 
         if self.registry.is_empty() {
             self.release_shared_gpu();
+        } else {
+            self.sync_all_window_geometries_to_runtimes();
         }
         true
     }
@@ -1750,6 +2237,33 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 | WindowCommand::SetInnerSize { .. }
                 | WindowCommand::SetMaximized(_)
                 | WindowCommand::SetTaskbarProgress { .. } => {}
+                WindowCommand::BeginCrossWindowDrag {
+                    source,
+                    title,
+                    pointer_local,
+                    proxy_size,
+                } => {
+                    let _ = self.begin_cross_window_drag(
+                        source_id,
+                        source,
+                        title,
+                        pointer_local,
+                        proxy_size,
+                    );
+                }
+                WindowCommand::EndCrossWindowDrag { cancelled } => {
+                    let _ = self.finish_cross_window_drag(cancelled);
+                }
+                WindowCommand::SyncDragProxyGhost {
+                    title,
+                    screen_rect,
+                    visible,
+                } => {
+                    self.sync_drag_proxy_ghost_state(source_id, &title, screen_rect, visible);
+                }
+                WindowCommand::CloseDragProxyGhost => {
+                    self.close_drag_proxy_ghost_window();
+                }
             }
         }
         for target in &to_close {
@@ -1949,7 +2463,19 @@ impl<A: Application> MultiWindowCoordinator<A> {
 
         state.set_present_extensions(&device_extensions);
         let client_screen = window.client_rect_on_screen();
+        let (outer_x, outer_y) = window
+            .outer_position()
+            .unwrap_or((client_screen.x, client_screen.y));
+        let outer_rect = ScreenRect::new(
+            outer_x,
+            outer_y,
+            client_screen.width.max(width).max(1),
+            client_screen.height.max(height).max(1),
+        );
         ctx.screen_origin = (client_screen.x, client_screen.y);
+        ctx.set_outer_bounds(outer_rect);
+        ctx.runtime
+            .set_window_screen_origin((client_screen.x, client_screen.y), id);
         let now_secs = self.theme_clock_epoch.elapsed().as_secs_f64();
         let trigger_secs = {
             let app_ctx = ctx.runtime.context();
@@ -1974,7 +2500,6 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let role = config.role;
         let policy = config.floating_policy;
         let visible = config.visible;
-        let outer_rect = ScreenRect::new(client_screen.x, client_screen.y, width, height);
         let _ = self.registry.insert(id, ctx);
         self.registry.set_visible(id, visible);
         if role != WindowRole::Standard {
@@ -1982,15 +2507,42 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 .floating_host
                 .register(id, role, policy, outer_rect, visible);
             let eff = state.effective_policy;
+            let mut initial_visible = visible;
+            let mut initial_rect = outer_rect;
+            if role == WindowRole::Ghost
+                && self
+                    .floating_host
+                    .drag_proxy()
+                    .is_some_and(|proxy| proxy.spawn_pending)
+                && self.floating_host.bind_drag_proxy_window(id)
+            {
+                if let Some(proxy) = self.floating_host.drag_proxy().cloned() {
+                    initial_visible = proxy.visible;
+                    initial_rect = proxy.outer_rect;
+                    self.registry.set_visible(id, initial_visible);
+                    if let Some(bound_ctx) = self.registry.get_mut(id) {
+                        bound_ctx.set_screen_origin((initial_rect.x, initial_rect.y));
+                        bound_ctx.set_outer_bounds(initial_rect);
+                    }
+                }
+            }
             window.set_always_on_top(eff.always_on_top);
             window.set_click_through(eff.click_through);
-            window.set_visible_no_activate(visible);
-            if !eff.no_activate && visible && self.focused_window_id.is_none() {
+            if self
+                .floating_host
+                .capabilities()
+                .supports_global_positioning
+            {
+                window.set_outer_rect(initial_rect);
+            }
+            window.set_visible_no_activate(initial_visible);
+            if !eff.no_activate && initial_visible && self.focused_window_id.is_none() {
                 self.focused_window_id = Some(id);
             }
         } else if visible && self.focused_window_id.is_none() {
             self.focused_window_id = Some(id);
         }
+        self.sync_all_window_geometries_to_runtimes();
         if let Some(hook) = self.on_window_created.as_mut() {
             hook(id, window);
         }
@@ -2001,6 +2553,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let mut close_targets = Vec::new();
         let mut close_self = false;
         let mut deferred_floating = Vec::new();
+        let mut deferred_cross_drag = Vec::new();
 
         if let Some(ctx) = self.registry.get_mut(id) {
             for cmd in ctx.runtime.drain_window_commands() {
@@ -2102,6 +2655,12 @@ impl<A: Application> MultiWindowCoordinator<A> {
                     | WindowCommand::SnapFloatingWindow { .. }) => {
                         deferred_floating.push(other);
                     }
+                    other @ (WindowCommand::BeginCrossWindowDrag { .. }
+                    | WindowCommand::EndCrossWindowDrag { .. }
+                    | WindowCommand::SyncDragProxyGhost { .. }
+                    | WindowCommand::CloseDragProxyGhost) => {
+                        deferred_cross_drag.push(other);
+                    }
                 }
             }
             if let Some(request) = outbound_drag {
@@ -2168,6 +2727,34 @@ impl<A: Application> MultiWindowCoordinator<A> {
                     }
                     other => self.apply_floating_command_state(&other),
                 }
+            }
+        }
+
+        for cmd in deferred_cross_drag {
+            match cmd {
+                WindowCommand::BeginCrossWindowDrag {
+                    source,
+                    title,
+                    pointer_local,
+                    proxy_size,
+                } => {
+                    let _ =
+                        self.begin_cross_window_drag(id, source, title, pointer_local, proxy_size);
+                }
+                WindowCommand::EndCrossWindowDrag { cancelled } => {
+                    let _ = self.finish_cross_window_drag(cancelled);
+                }
+                WindowCommand::SyncDragProxyGhost {
+                    title,
+                    screen_rect,
+                    visible,
+                } => {
+                    self.sync_drag_proxy_ghost_state(id, &title, screen_rect, visible);
+                }
+                WindowCommand::CloseDragProxyGhost => {
+                    self.close_drag_proxy_ghost_window();
+                }
+                _ => {}
             }
         }
 
@@ -2404,6 +2991,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         } else {
             None
         };
+        let mut drag_move_local: Option<Vec2> = None;
+        let mut drag_finish_cancelled: Option<bool> = None;
+        let mut geometry_changed = false;
         match event {
             PlatformEvent::Resized(_) => {
                 let size = window.inner_size();
@@ -2413,6 +3003,17 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                         os_scale,
                     );
                     ctx.swapchain_dirty = true;
+                    let client_screen = window.client_rect_on_screen();
+                    let (outer_x, outer_y) = window
+                        .outer_position()
+                        .unwrap_or((client_screen.x, client_screen.y));
+                    ctx.set_outer_bounds(ScreenRect::new(
+                        outer_x,
+                        outer_y,
+                        client_screen.width.max(size.width).max(1),
+                        client_screen.height.max(size.height).max(1),
+                    ));
+                    geometry_changed = true;
                 }
             }
             PlatformEvent::RecreateSwapchain(_) => {
@@ -2423,6 +3024,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 ctx.pointer = Vec2::new(x as f32 / effective_scale, y as f32 / effective_scale);
                 ctx.pacer.note_activity(Instant::now());
                 ctx.runtime.pointer_move(ctx.pointer);
+                drag_move_local = Some(ctx.pointer);
             }
             PlatformEvent::MouseInput {
                 state: btn_state,
@@ -2433,6 +3035,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                         ctx.runtime.pointer_down(ctx.pointer, btn);
                     } else {
                         ctx.runtime.pointer_up(ctx.pointer, btn);
+                        if btn == PointerButton::Left {
+                            drag_finish_cancelled = Some(false);
+                        }
                     }
                     ctx.pacer.note_activity(Instant::now());
                 }
@@ -2471,6 +3076,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 let modifiers = translate_modifiers(ctx.modifiers);
                 ctx.pacer.note_activity(Instant::now());
                 ctx.runtime.key(app_k, pressed, modifiers);
+                if pressed && app_k == AppKey::Escape {
+                    drag_finish_cancelled = Some(true);
+                }
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
                 ctx.modifiers = modifiers;
@@ -2518,6 +3126,8 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                     new_os_scale,
                 );
                 ctx.swapchain_dirty = true;
+                ctx.set_os_scale(new_os_scale);
+                geometry_changed = true;
                 window.request_redraw();
             }
             PlatformEvent::ThemeChanged { dark } => {
@@ -2569,8 +3179,9 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 }
             }
             PlatformEvent::Moved { x, y } => {
-                ctx.screen_origin = (x, y);
+                ctx.set_screen_origin((x, y));
                 ctx.runtime.set_window_screen_origin((x, y), id);
+                geometry_changed = true;
             }
             PlatformEvent::PopupDismissed { id: popup_id } => {
                 let _ = ctx.popup_host.close_popup(popup_id);
@@ -2592,6 +3203,26 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 } else if self.focused_window_id == Some(id) {
                     self.focused_window_id = None;
                 }
+            }
+        }
+        if geometry_changed {
+            self.sync_all_window_geometries_to_runtimes();
+        }
+        if let Some(local_pos) = drag_move_local {
+            if let Some(dt) = self.active_cross_window_drag.as_ref().and_then(|drag| {
+                (drag.source_window == id)
+                    .then(|| drag.last_update.elapsed().as_secs_f32().clamp(0.0, 0.1))
+            }) {
+                let _ = self.step_active_cross_window_drag(id, local_pos, dt);
+            }
+        }
+        if let Some(cancelled) = drag_finish_cancelled {
+            if self
+                .active_cross_window_drag
+                .as_ref()
+                .is_some_and(|drag| drag.source_window == id)
+            {
+                let _ = self.finish_cross_window_drag(cancelled);
             }
         }
         self.flush_floating_live_sync(id, window);
@@ -2624,7 +3255,16 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
         let (width, height) = (size.width.max(1), size.height.max(1));
         let os_scale = ctx.sync_os_scale(window);
         let client_screen = window.client_rect_on_screen();
+        let (outer_x, outer_y) = window
+            .outer_position()
+            .unwrap_or((client_screen.x, client_screen.y));
         ctx.screen_origin = (client_screen.x, client_screen.y);
+        ctx.set_outer_bounds(ScreenRect::new(
+            outer_x,
+            outer_y,
+            client_screen.width.max(width).max(1),
+            client_screen.height.max(height).max(1),
+        ));
         ctx.runtime
             .set_window_screen_origin((client_screen.x, client_screen.y), id);
         let now = Instant::now();
@@ -2805,12 +3445,24 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             return Flow::Continue;
         }
 
+        let pointer_local = ctx.pointer;
         let keep_animating =
             ctx.runtime.context().scale_osd_remaining > 0.0 || report.dirty.needs_rebuild();
         ctx.pacer.set_animating(keep_animating);
         if keep_animating {
             window.request_redraw();
         }
+
+        if self
+            .active_cross_window_drag
+            .as_ref()
+            .is_some_and(|drag| drag.source_window == id)
+        {
+            let _ = self.step_active_cross_window_drag(id, pointer_local, dt);
+        } else {
+            self.sync_all_window_geometries_to_runtimes();
+        }
+        self.flush_floating_live_sync(id, window);
 
         if self.drain_window_commands_live(id, window) == Flow::Exit {
             return Flow::Exit;
@@ -3569,5 +4221,321 @@ mod tests {
         assert_eq!(rt.focus().focused(), None);
         assert!(rt.scene().regions.is_empty());
         assert!(rt.overlays().stack().is_empty());
+    }
+
+    #[test]
+    fn global_window_geometry_api_syncs_outer_bounds_and_screen_hit_test() {
+        let primary_cfg = WindowConfig {
+            title: "Primary".to_owned(),
+            width: 400,
+            height: 300,
+            position: WindowPosition::Physical { x: 100, y: 50 },
+            ..WindowConfig::default()
+        };
+        let secondary_cfg = WindowConfig {
+            title: "Secondary".to_owned(),
+            width: 300,
+            height: 200,
+            position: WindowPosition::Physical { x: 600, y: 120 },
+            ..WindowConfig::default()
+        };
+        let mut coord =
+            MultiWindowCoordinator::new(primary_cfg.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+
+        let win_a = WindowId(1);
+        let win_b = WindowId(2);
+        let ghost_id = WindowId(3);
+        coord.register_headless_window(win_a, primary_cfg);
+        coord.register_headless_window(win_b, secondary_cfg);
+
+        assert_eq!(coord.outer_position(win_a), Some((100, 50)));
+        assert_eq!(
+            coord.outer_bounds(win_a),
+            Some(ScreenRect::new(100, 50, 400, 300))
+        );
+        assert_eq!(coord.outer_position(win_b), Some((600, 120)));
+        assert_eq!(
+            coord.outer_bounds(win_b),
+            Some(ScreenRect::new(600, 120, 300, 200))
+        );
+
+        // Moving and scaling window B updates coordinator and AppContext snapshots.
+        assert!(coord.set_window_screen_origin(win_b, (700, 150)));
+        assert!(coord.set_window_os_scale(win_b, 2.0));
+        assert_eq!(coord.outer_position(win_b), Some((700, 150)));
+        assert_eq!(
+            coord.outer_bounds(win_b),
+            Some(ScreenRect::new(700, 150, 300, 200))
+        );
+
+        // Register a click-through ghost overlapping window B; screen hit-testing must skip it.
+        let (ghost_cfg, _) =
+            crate::FloatingWindowSpec::drag_proxy_ghost("Drag Proxy", 200, 48, (720, 170)).build();
+        coord.register_headless_floating_window(ghost_id, ghost_cfg);
+
+        assert_eq!(coord.all_window_geometries().len(), 3);
+        assert_eq!(coord.window_at_screen_pos(200, 150), Some(win_a));
+        assert_eq!(coord.window_at_screen_pos(750, 180), Some(win_b));
+        assert_eq!(coord.window_at_screen_pos(550, 180), None);
+
+        let rt_a = &coord.registry().get(win_a).unwrap().runtime;
+        assert_eq!(rt_a.outer_position(), (100, 50));
+        assert_eq!(rt_a.outer_bounds(), ScreenRect::new(100, 50, 400, 300));
+        assert_eq!(rt_a.all_window_geometries().len(), 3);
+        assert_eq!(rt_a.window_at_screen_pos(750, 180), Some(win_b));
+        assert_eq!(rt_a.context().window_at_screen_pos(200, 150), Some(win_a));
+    }
+
+    #[test]
+    fn live_cross_window_drag_routes_target_and_clears_previous_preview_on_leave() {
+        let cfg_a = WindowConfig {
+            title: "Main".to_owned(),
+            width: 400,
+            height: 300,
+            position: WindowPosition::Physical { x: 0, y: 0 },
+            ..WindowConfig::default()
+        };
+        let cfg_b = WindowConfig {
+            title: "Target B".to_owned(),
+            width: 400,
+            height: 300,
+            position: WindowPosition::Physical { x: 500, y: 0 },
+            ..WindowConfig::default()
+        };
+        let cfg_c = WindowConfig {
+            title: "Target C".to_owned(),
+            width: 400,
+            height: 300,
+            position: WindowPosition::Physical { x: 1000, y: 0 },
+            ..WindowConfig::default()
+        };
+        let mut coord =
+            MultiWindowCoordinator::new(cfg_a.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+
+        let win_a = WindowId(1);
+        let win_b = WindowId(2);
+        let win_c = WindowId(3);
+        coord.register_headless_window(win_a, cfg_a);
+        coord.register_headless_window(win_b, cfg_b);
+        coord.register_headless_window(win_c, cfg_c);
+        coord.set_motion_policy_all(unbound_anim::MotionPolicy::reduced());
+
+        coord
+            .registry_mut()
+            .get_mut(win_b)
+            .unwrap()
+            .runtime
+            .set_dock_candidate_panes(vec![unbound_widgets::DockCandidatePane::new(
+                20,
+                unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            )]);
+        coord
+            .registry_mut()
+            .get_mut(win_c)
+            .unwrap()
+            .runtime
+            .set_dock_candidate_panes(vec![unbound_widgets::DockCandidatePane::new(
+                30,
+                unbound_math::Rect::new(0.0, 0.0, 400.0, 300.0),
+            )]);
+
+        let source = unbound_widgets::DockDragSource::Tab {
+            window_id: win_a.0,
+            pane_id: 10,
+            tab_id: 7,
+        };
+        coord
+            .registry_mut()
+            .get_mut(win_a)
+            .unwrap()
+            .runtime
+            .begin_cross_window_drag(source, "Scene Graph", Vec2::new(100.0, 100.0), (196, 44));
+        assert!(coord.route_window_commands(win_a).is_empty());
+
+        // Move pointer into window B -> window B receives live cross-window drag target state.
+        let route_b = coord
+            .process_cross_window_drag_move(win_a, Vec2::new(700.0, 150.0), 1.0 / 60.0)
+            .expect("route into window B");
+        assert_eq!(route_b.target_window, Some(win_b));
+        let target_b = coord
+            .registry()
+            .get(win_b)
+            .unwrap()
+            .runtime
+            .cross_window_drag_target()
+            .expect("window B should hold active drag target preview");
+        assert_eq!(target_b.source_window, win_a);
+        assert_eq!(target_b.local_logical, Vec2::new(200.0, 150.0));
+        assert!(target_b.target.is_some());
+        assert!(coord
+            .registry()
+            .get(win_c)
+            .unwrap()
+            .runtime
+            .cross_window_drag_target()
+            .is_none());
+
+        // Move pointer into window C -> window B preview is cleared and window C becomes active.
+        let route_c = coord
+            .process_cross_window_drag_move(win_a, Vec2::new(1200.0, 150.0), 1.0 / 60.0)
+            .expect("route into window C");
+        assert_eq!(route_c.target_window, Some(win_c));
+        assert!(coord
+            .registry()
+            .get(win_b)
+            .unwrap()
+            .runtime
+            .cross_window_drag_target()
+            .is_none());
+        let target_c = coord
+            .registry()
+            .get(win_c)
+            .unwrap()
+            .runtime
+            .cross_window_drag_target()
+            .expect("window C should hold active drag target preview");
+        assert_eq!(target_c.local_logical, Vec2::new(200.0, 150.0));
+        assert!(target_c.target.is_some());
+
+        // Move into free space (TearOut) -> window C preview is cleared.
+        let tear = coord
+            .process_cross_window_drag_move(win_a, Vec2::new(450.0, 150.0), 1.0 / 60.0)
+            .expect("tear out route");
+        assert!(tear.tear_out);
+        assert!(coord
+            .registry()
+            .get(win_c)
+            .unwrap()
+            .runtime
+            .cross_window_drag_target()
+            .is_none());
+
+        // Finishing drag clears active session cleanly.
+        let _ = coord.finish_cross_window_drag(false);
+        assert!(coord.active_cross_window_drag_route().is_none());
+    }
+
+    #[test]
+    fn tear_out_spawns_tracks_and_auto_closes_drag_proxy_ghost_across_monitors() {
+        let cfg_a = WindowConfig {
+            title: "Main".to_owned(),
+            width: 400,
+            height: 300,
+            position: WindowPosition::Physical { x: 0, y: 0 },
+            ..WindowConfig::default()
+        };
+        let mut coord =
+            MultiWindowCoordinator::new(cfg_a.clone(), |id: WindowId, _: &WindowConfig| {
+                TaggedApp {
+                    window_id: id,
+                    events: Vec::new(),
+                }
+            });
+        coord.set_headless_capabilities(FloatingWindowCapabilities::win32_full());
+        coord.set_headless_work_areas(vec![
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(0, 0, 1920, 1080),
+                work_area: ScreenRect::new(0, 0, 1920, 1040),
+                scale_factor: 1.0,
+                is_primary: true,
+            },
+            MonitorWorkArea {
+                monitor_bounds: ScreenRect::new(-1920, 0, 1920, 1080),
+                work_area: ScreenRect::new(-1920, 0, 1920, 1040),
+                scale_factor: 1.0,
+                is_primary: false,
+            },
+        ]);
+
+        let win_a = WindowId(1);
+        let ghost_id = WindowId(99);
+        coord.register_headless_window(win_a, cfg_a);
+        assert_eq!(coord.focused_window_id(), Some(win_a));
+
+        let source = unbound_widgets::DockDragSource::Tab {
+            window_id: win_a.0,
+            pane_id: 1,
+            tab_id: 2,
+        };
+        let _ = coord.begin_cross_window_drag(
+            win_a,
+            source,
+            "Shader Preview",
+            Vec2::new(50.0, 50.0),
+            (200, 44),
+        );
+        // Inside source window: no tear-out ghost spawned yet.
+        assert!(coord.drag_proxy_ghost().is_none());
+        assert!(coord.take_window_request().is_none());
+
+        // Drag into free space on the left negative-coordinate monitor -> spawns ghost proxy.
+        let tear = coord
+            .process_cross_window_drag_move(win_a, Vec2::new(-500.0, 200.0), 1.0 / 60.0)
+            .expect("tear out route");
+        assert!(tear.tear_out);
+        let ghost_req = coord
+            .take_window_request()
+            .expect("tear out must queue a ghost drag proxy window");
+        assert_eq!(ghost_req.role, WindowRole::Ghost);
+        assert!(ghost_req.floating_policy.no_activate);
+        assert!(ghost_req.floating_policy.click_through);
+        assert!(ghost_req.floating_policy.always_on_top);
+        assert_eq!(
+            ghost_req.position,
+            WindowPosition::Physical { x: -488, y: 212 }
+        );
+
+        // Register the spawned ghost window and verify it binds and preserves main focus.
+        coord.register_headless_floating_window(ghost_id, ghost_req);
+        assert_eq!(coord.focused_window_id(), Some(win_a));
+        assert_eq!(coord.window_generation(ghost_id), Some(1));
+        assert_eq!(
+            coord.drag_proxy_ghost().and_then(|p| p.window_id),
+            Some(ghost_id)
+        );
+        assert_eq!(coord.window_visible(ghost_id), Some(true));
+
+        // Follow cursor smoothly across negative-coordinate screen without recreating the window.
+        let _ = coord.process_cross_window_drag_move(win_a, Vec2::new(-800.0, 320.0), 1.0 / 60.0);
+        assert_eq!(coord.window_generation(ghost_id), Some(1));
+        assert_eq!(
+            coord.outer_bounds(ghost_id),
+            Some(ScreenRect::new(-788, 332, 200, 44))
+        );
+        assert_eq!(coord.window_visible(ghost_id), Some(true));
+
+        // Returning over window A hides the ghost proxy without destroying it.
+        let back_in = coord
+            .process_cross_window_drag_move(win_a, Vec2::new(150.0, 120.0), 1.0 / 60.0)
+            .expect("back inside window A");
+        assert!(!back_in.tear_out);
+        assert_eq!(back_in.target_window, Some(win_a));
+        assert_eq!(coord.window_visible(ghost_id), Some(false));
+        assert_eq!(coord.window_generation(ghost_id), Some(1));
+
+        // Ending/cancelling the drag automatically closes the ghost proxy window.
+        coord
+            .registry_mut()
+            .get_mut(win_a)
+            .unwrap()
+            .runtime
+            .end_cross_window_drag(true);
+        let _ = coord.route_window_commands(win_a);
+        assert!(coord.drag_proxy_ghost().is_none());
+        assert!(coord.registry().get(ghost_id).is_none());
+        assert!(coord.take_window_close_requests().contains(&ghost_id));
+        assert_eq!(coord.focused_window_id(), Some(win_a));
     }
 }
