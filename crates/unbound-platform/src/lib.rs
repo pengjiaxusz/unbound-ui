@@ -60,7 +60,7 @@ pub use a11y_bridge::{action_request, A11yBridge, A11yRequest, A11yTransport};
 pub use a11y_linux::{A11yWindowBounds, LinuxA11y};
 pub use a11y_platform::PlatformA11y;
 pub use a11y_win32::Win32A11y;
-pub use backend::{Flow, PlatformApp, PlatformWindow};
+pub use backend::{apply_floating_live_sync, Flow, PlatformApp, PlatformWindow};
 pub use clipboard::{
     decode_gnome_copied_files, encode_gnome_copied_files, is_headless_clipboard_loopback_enabled,
     set_headless_clipboard_loopback, ClipboardError, ClipboardFileDropEffect, ClipboardProvider,
@@ -77,8 +77,8 @@ pub use dialogs::{
 pub use floating::{
     all_monitors, clamp_rect_to_work_area, place_anchor_rect_avoid, place_cursor_monitor_avoid,
     resolve_floating_placement, restore_from_relative_anchor, solve_edge_snap, work_area_for_point,
-    EdgeSnapResult, FloatingPlacementStrategy, FloatingWindowCapabilities, FloatingWindowPolicy,
-    MonitorWorkArea, RelativeMonitorAnchor, SnapEdge, WindowRole,
+    EdgeSnapResult, FloatingLiveSync, FloatingPlacementStrategy, FloatingWindowCapabilities,
+    FloatingWindowPolicy, MonitorWorkArea, RelativeMonitorAnchor, SnapEdge, WindowRole,
 };
 pub use latency::{LatencyTracker, BUDGET as LATENCY_BUDGET};
 pub use linux_backend::{

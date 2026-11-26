@@ -682,7 +682,8 @@ impl<A: Application> WindowedRunner<A> {
                         );
                     }
                 }
-                crate::WindowCommand::OpenFloatingWindow { .. } => {
+                crate::WindowCommand::OpenFloatingWindow { .. }
+                | crate::WindowCommand::OpenFloatingWindowWithTag { .. } => {
                     eprintln!(
                         "[unbound-app] WindowCommand::OpenFloatingWindow requires MultiWindowCoordinator"
                     );

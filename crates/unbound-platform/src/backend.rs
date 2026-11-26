@@ -26,6 +26,28 @@ pub enum Flow {
 /// 平台层的引擎侧回调接口。
 ///
 /// 该 trait 刻意保持精简：平台层负责帧时序与缩放策略，应用层负责场景逻辑。
+/// 将跨窗口运行期同步状态按固定无闪烁顺序应用到目标原生窗口。
+///
+/// 当 `visible == Some(true)` 时严格按 `set_outer_rect` -> `set_visible_no_activate(true)`
+/// -> `request_redraw()` 执行，确保 `SW_HIDE` 休眠窗 0ms 就位唤醒。
+pub fn apply_floating_live_sync(window: &NativeWindow, sync: crate::floating::FloatingLiveSync) {
+    if let Some(topmost) = sync.topmost {
+        window.set_always_on_top(topmost);
+    }
+    if let Some(click_through) = sync.click_through {
+        window.set_click_through(click_through);
+    }
+    if let Some(rect) = sync.outer_rect {
+        window.set_outer_rect(rect);
+    }
+    if let Some(visible) = sync.visible {
+        window.set_visible_no_activate(visible);
+        if visible {
+            window.request_redraw();
+        }
+    }
+}
+
 pub trait PlatformApp {
     /// 窗口已就绪，应用可创建渲染器。
     fn resumed(&mut self, state: &mut PlatformState, window: &NativeWindow);
@@ -91,6 +113,13 @@ pub trait PlatformApp {
 
     /// 排空本帧需要由平台显式关闭并销毁原生句柄的应用窗口 ID 列表。
     fn take_window_close_requests(&mut self) -> Vec<crate::windows::WindowId> {
+        Vec::new()
+    }
+
+    /// 排空本轮事件泵末尾需要跨窗口同步到目标原生窗口的运行期状态。
+    fn take_pending_floating_syncs(
+        &mut self,
+    ) -> Vec<(crate::windows::WindowId, crate::floating::FloatingLiveSync)> {
         Vec::new()
     }
 
@@ -229,6 +258,8 @@ pub(crate) mod style_bits {
     /// `WS_OVERLAPPEDWINDOW`，本常量仅由样式单元测试断言"绝不出现 POPUP"时引用。
     #[allow(dead_code)]
     pub const WS_POPUP: u32 = 0x8000_0000;
+    pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
+    pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
     pub const WS_CAPTION: u32 = 0x00C0_0000;
     pub const WS_SYSMENU: u32 = 0x0008_0000;
     pub const WS_THICKFRAME: u32 = 0x0004_0000;
@@ -304,6 +335,9 @@ pub(crate) fn push_coalesced_event(events: &mut Vec<PlatformEvent>, event: Platf
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn compute_window_style(config: &WindowConfig) -> u32 {
     use style_bits::*;
+    if config.role == crate::floating::WindowRole::Ghost {
+        return WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
+    }
     if config.decorations {
         if config.resizable {
             WS_OVERLAPPEDWINDOW
@@ -2277,6 +2311,17 @@ mod win32 {
             if windows.is_empty() {
                 break;
             }
+            for (sync_id, sync) in app.take_pending_floating_syncs() {
+                if let Some(entry) = windows
+                    .iter_mut()
+                    .find(|e| crate::windows::WindowId(e.window.raw_win32_hwnd() as u64) == sync_id)
+                {
+                    apply_floating_live_sync(&entry.window, sync);
+                    if sync.visible == Some(true) {
+                        entry.state.pacer.request_immediate(Instant::now());
+                    }
+                }
+            }
             if !windows.iter().any(|e| e.window.id() == primary_id) {
                 if let Some(next_primary) = windows.first() {
                     primary_id = next_primary.window.id();
@@ -2402,6 +2447,15 @@ mod style_tests {
         assert_eq!(fixed_style & WS_THICKFRAME, 0);
         assert_eq!(fixed_style & WS_MAXIMIZEBOX, 0);
         assert_eq!(fixed_style & WS_POPUP, 0);
+    }
+
+    #[test]
+    fn ghost_windows_use_pure_popup_without_caption() {
+        let mut cfg = config(false, false);
+        cfg.role = crate::floating::WindowRole::Ghost;
+        let style = compute_window_style(&cfg);
+        assert_eq!(style, WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN);
+        assert_eq!(style & WS_CAPTION, 0);
     }
 
     #[test]

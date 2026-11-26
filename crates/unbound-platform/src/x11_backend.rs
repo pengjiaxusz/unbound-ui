@@ -91,6 +91,11 @@ enum X11Command {
         x: i32,
         y: i32,
     },
+    SetInnerSize {
+        window: X11WindowId,
+        width: u32,
+        height: u32,
+    },
     SetOuterRect {
         window: X11WindowId,
         rect: ScreenRect,
@@ -364,7 +369,16 @@ impl X11WindowHandle {
     }
 
     pub(crate) fn set_inner_size(&self, width: u32, height: u32) {
-        let _ = (width, height);
+        let width = width.max(1);
+        let height = height.max(1);
+        if let Ok(mut sz) = self.shared.inner_size.lock() {
+            *sz = PhysicalSize::new(width, height);
+        }
+        self.send(X11Command::SetInnerSize {
+            window: self.shared.xid,
+            width,
+            height,
+        });
     }
 
     pub(crate) fn activate_foreground(&self) {
@@ -1774,6 +1788,18 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 X11Command::SetOuterPosition { window, x, y } => {
                     let _ = conn.configure_window(window, &ConfigureWindowAux::new().x(x).y(y));
                 }
+                X11Command::SetInnerSize {
+                    window,
+                    width,
+                    height,
+                } => {
+                    let _ = conn.configure_window(
+                        window,
+                        &ConfigureWindowAux::new()
+                            .width(width.max(1))
+                            .height(height.max(1)),
+                    );
+                }
                 X11Command::SetOuterRect { window, rect } => {
                     let _ = conn.configure_window(
                         window,
@@ -1956,6 +1982,14 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                 cursor_cache.remove_window(entry.xid);
                 app.window_closing(&entry.native_window);
                 let _ = conn.destroy_window(entry.xid);
+            }
+        }
+        for (sync_id, sync) in app.take_pending_floating_syncs() {
+            if let Some(entry) = windows.iter_mut().find(|w| u64::from(w.xid) == sync_id.0) {
+                crate::backend::apply_floating_live_sync(&entry.native_window, sync);
+                if sync.visible == Some(true) {
+                    entry.state.pacer.request_immediate(Instant::now());
+                }
             }
         }
 

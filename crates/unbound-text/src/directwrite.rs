@@ -293,8 +293,9 @@ impl DirectWriteRasterizer {
     /// `glyphs` 只含本簇的字形，调用方负责按簇切分；`palette_index` 透传给
     /// `TranslateColorGlyphRun`（本轮恒为 0，见 ADR 0017）。
     ///
-    /// 层的包围盒来自 `CreateGlyphRunAnalysis`，坐标系与单字形路径一致：
-    /// 基线为原点、Y 向上，因此这里统一翻转成「相对簇原点、Y 向下」。
+    /// 层的包围盒来自 `GetAlphaTextureBounds`，其 `bounds.top` 已是 Y 向下坐标
+    /// （基线上方为负），与 `Bitmap` 层的 `horizontalLeftOrigin.y` 坐标系一致，
+    /// 直接传入 `ColorLayerRaster` 即可（无需再次取反）。
     pub fn rasterize_color_cluster(
         &mut self,
         key: &FaceKey,
@@ -506,7 +507,7 @@ impl DirectWriteRasterizer {
                 width,
                 height,
                 left: bounds.left + layer.Base.baselineOriginX.round() as i32,
-                top: -(bounds.top + layer.Base.baselineOriginY.round() as i32),
+                top: bounds.top + layer.Base.baselineOriginY.round() as i32,
                 coverage: data,
             });
         }

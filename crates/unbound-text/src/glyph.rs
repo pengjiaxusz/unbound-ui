@@ -2096,4 +2096,96 @@ mod tests {
         assert_eq!(cache.resident_glyphs(), 0);
         assert_eq!(cache.atlas_memory_bytes(), 0);
     }
+
+    #[test]
+    fn color_layer_solid_and_bitmap_preserve_negative_bearing_y_above_baseline() {
+        use crate::composite::{
+            composite_layers, BitmapLayer, ColorLayer, CompositeOutcome, Layer, LayerColor,
+        };
+
+        // 模拟 DirectWrite GetAlphaTextureBounds / horizontalLeftOrigin 返回的 Y 向下坐标：
+        // 基线上方 12px（top = -12），高 16px。
+        let solid_cov = vec![255u8; 4 * 16];
+        let solid = Layer::Solid(ColorLayer {
+            color: LayerColor::new(1.0, 0.5, 0.0, 1.0),
+            coverage: &solid_cov,
+            width: 4,
+            height: 16,
+            left: 1,
+            top: -12,
+        });
+        let CompositeOutcome::Color(solid_bmp) = composite_layers(&[solid]) else {
+            panic!("expected solid color composite");
+        };
+        assert_eq!(solid_bmp.top, -12);
+
+        let mut cache = GlyphCache::new();
+        let solid_resolved = cache
+            .commit_raster(
+                GlyphKey {
+                    face: 1,
+                    glyph_id: 1,
+                    size_q4: 64,
+                    weight: 400,
+                    italic: 0,
+                    phase: 0,
+                    sdf: 0,
+                    presentation: 0,
+                    palette_index: 0,
+                    cluster_hash: 1,
+                },
+                16.0,
+                solid_bmp.width,
+                solid_bmp.height,
+                solid_bmp.left as f32,
+                -(solid_bmp.top as f32),
+                true,
+                solid_bmp.data,
+                false,
+            )
+            .expect("commit solid color glyph");
+        assert!(
+            solid_resolved.bearing.y < 0.0,
+            "solid COLR glyph bearing.y must be negative (above baseline), got {}",
+            solid_resolved.bearing.y
+        );
+
+        let bmp_rgba = vec![255u8; 4 * 16 * 4];
+        let bitmap = Layer::Bitmap(BitmapLayer {
+            rgba: &bmp_rgba,
+            width: 4,
+            height: 16,
+            left: 1,
+            top: -12,
+        });
+        let CompositeOutcome::Color(bmp_out) = composite_layers(&[bitmap]) else {
+            panic!("expected bitmap color composite");
+        };
+        assert_eq!(bmp_out.top, -12);
+        let bmp_resolved = cache
+            .commit_raster(
+                GlyphKey {
+                    face: 1,
+                    glyph_id: 2,
+                    size_q4: 64,
+                    weight: 400,
+                    italic: 0,
+                    phase: 0,
+                    sdf: 0,
+                    presentation: 0,
+                    palette_index: 0,
+                    cluster_hash: 2,
+                },
+                16.0,
+                bmp_out.width,
+                bmp_out.height,
+                bmp_out.left as f32,
+                -(bmp_out.top as f32),
+                true,
+                bmp_out.data,
+                false,
+            )
+            .expect("commit bitmap color glyph");
+        assert_eq!(solid_resolved.bearing.y, bmp_resolved.bearing.y);
+    }
 }
