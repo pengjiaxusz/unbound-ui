@@ -116,6 +116,30 @@ pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
 pub use theme_driver::{
     make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
 };
+pub use unbound_input::CustomCursorId;
+pub use unbound_widgets::{emit_draw_list, Draw2dCommand};
+
+/// 将输入层 [`CursorKind`] 映射为平台层 [`unbound_platform::CursorIcon`]。
+#[must_use]
+pub const fn cursor_icon_from_kind(kind: CursorKind) -> unbound_platform::CursorIcon {
+    use unbound_platform::CursorIcon as Icon;
+    match kind {
+        CursorKind::Default => Icon::Default,
+        CursorKind::Pointer => Icon::Pointer,
+        CursorKind::Text => Icon::Text,
+        CursorKind::Grab => Icon::Grab,
+        CursorKind::Grabbing => Icon::Grabbing,
+        CursorKind::Crosshair => Icon::Crosshair,
+        CursorKind::Move => Icon::Move,
+        CursorKind::ResizeNorthSouth => Icon::NsResize,
+        CursorKind::ResizeEastWest => Icon::EwResize,
+        CursorKind::ResizeNorthWestSouthEast => Icon::NwseResize,
+        CursorKind::ResizeNorthEastSouthWest => Icon::NeswResize,
+        CursorKind::NotAllowed => Icon::NotAllowed,
+        CursorKind::Custom(id) => Icon::Custom(id),
+    }
+}
+
 pub use unbound_asset::{
     AtlasPageId, CompressedPixelFormat, CompressedTextureError, CompressedTexturePayload,
     UploadPacingBudget,
@@ -1553,6 +1577,38 @@ impl AppContext {
             .push(WindowCommand::CloseWindow(id));
     }
 
+    /// 注册自定义 RGBA8 位图光标并返回句柄；输入尺寸或缓冲无效时返回占位句柄 `CustomCursorId(0)`（呈现时安全降级为默认光标）。
+    #[must_use]
+    pub fn register_custom_cursor(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+    ) -> CustomCursorId {
+        self.try_register_custom_cursor(rgba, width, height, hotspot_x, hotspot_y)
+            .unwrap_or(CustomCursorId(0))
+    }
+
+    /// 尝试注册自定义 RGBA8 位图光标；若宽高为 0、超过上限或缓冲长度不匹配则返回 `None`。
+    #[must_use]
+    pub fn try_register_custom_cursor(
+        &mut self,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        hotspot_x: u32,
+        hotspot_y: u32,
+    ) -> Option<CustomCursorId> {
+        unbound_platform::register_custom_cursor(rgba, width, height, hotspot_x, hotspot_y)
+    }
+
+    /// 注销已注册的自定义位图光标并释放其关联的平台句柄。
+    pub fn unregister_custom_cursor(&mut self, id: CustomCursorId) -> bool {
+        unbound_platform::unregister_custom_cursor(id)
+    }
+
     /// 上报输入法（IME）候选框锚点区域（物理像素坐标）。
     pub fn set_ime_cursor_area(&mut self, x: i32, y: i32, width: u32, height: u32) {
         self.pending_window_commands
@@ -2183,6 +2239,12 @@ pub enum WidgetSpec {
     },
     /// 可交互容器的纯命中区域注册（不发射绘制图元，直接绑定容器逻辑键）。
     InteractiveHit { z: u16, cursor: CursorKind },
+    /// 轻量级 2D 批量绘制列表（单个 Taffy 节点承载任意数量 2D 原语，零子节点开销）。
+    CanvasDrawList {
+        commands: Vec<Draw2dCommand>,
+        bounds_hint: Option<Vec2>,
+        clip: bool,
+    },
     /// 开启滚动裁剪与平移作用域。
     ScrollScopeBegin {
         scroll_key: u64,
@@ -3175,6 +3237,9 @@ impl<'a> ViewBuilder<'a> {
                 Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
             }
             WidgetSpec::Viewport3D { size, .. } => (size.x > 0.0 && size.y > 0.0).then_some(*size),
+            WidgetSpec::CanvasDrawList { bounds_hint, .. } => {
+                bounds_hint.filter(|s| s.x.is_finite() && s.y.is_finite() && s.x > 0.0 && s.y > 0.0)
+            }
             WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                 && desc.rect.height() > 0.0)
                 .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -3670,6 +3735,41 @@ impl<'a> ViewBuilder<'a> {
     pub fn video_surface(&mut self, key: u64, desc: VideoSurfaceDesc) -> NodeId {
         let node_desc = RawNodeDesc::container().size(desc.size.x.max(0.0), desc.size.y.max(0.0));
         self.widget(key, node_desc, WidgetSpec::VideoSurface(desc))
+    }
+
+    /// 声明式轻量级 2D 批量绘制列表（单 Taffy 节点承载高频 2D 矢量图元，默认启用容器 AABB 裁剪）。
+    pub fn canvas_draw_list(
+        &mut self,
+        id: u64,
+        bounds_hint: Option<Vec2>,
+        commands: Vec<Draw2dCommand>,
+    ) -> NodeId {
+        let mut desc = RawNodeDesc::container();
+        if let Some(size) = bounds_hint {
+            if size.x.is_finite() && size.y.is_finite() && size.x > 0.0 && size.y > 0.0 {
+                desc = desc.size(size.x, size.y);
+            }
+        }
+        self.canvas_draw_list_with_layout(id, desc, bounds_hint, commands)
+    }
+
+    /// 声明式轻量级 2D 批量绘制列表（允许传入自定义布局容器约束）。
+    pub fn canvas_draw_list_with_layout(
+        &mut self,
+        id: u64,
+        desc: RawNodeDesc,
+        bounds_hint: Option<Vec2>,
+        commands: Vec<Draw2dCommand>,
+    ) -> NodeId {
+        self.widget(
+            id,
+            desc,
+            WidgetSpec::CanvasDrawList {
+                commands,
+                bounds_hint,
+                clip: true,
+            },
+        )
     }
 
     /// 声明式 3D 视口控件。
@@ -6377,6 +6477,12 @@ impl<A: Application> AppRuntime<A> {
         &self.ctx
     }
 
+    /// 获取当前帧解析出的指针光标样式。
+    #[must_use]
+    pub const fn cursor(&self) -> CursorKind {
+        self.ctx.cursor
+    }
+
     /// 可变访问应用上下文。
     ///
     /// 窗口 host 借此在每帧构建视图前同步窗口最大化状态等外部输入。
@@ -8171,6 +8277,8 @@ impl<A: Application> AppRuntime<A> {
                     WidgetSpec::Viewport3D { size, .. } => {
                         (size.x > 0.0 && size.y > 0.0).then_some(*size)
                     }
+                    WidgetSpec::CanvasDrawList { bounds_hint, .. } => bounds_hint
+                        .filter(|s| s.x.is_finite() && s.y.is_finite() && s.x > 0.0 && s.y > 0.0),
                     WidgetSpec::TreeView { desc, .. } => (desc.rect.width() > 0.0
                         && desc.rect.height() > 0.0)
                         .then_some(Vec2::new(desc.rect.width(), desc.rect.height())),
@@ -9950,6 +10058,21 @@ impl<A: Application> AppRuntime<A> {
                                 ..Default::default()
                             },
                         );
+                    }
+                }
+                WidgetSpec::CanvasDrawList {
+                    commands,
+                    bounds_hint: _,
+                    clip,
+                } => {
+                    let output = unbound_widgets::emit_draw_list(
+                        rect,
+                        commands,
+                        entry.z_base.saturating_add(100),
+                        *clip,
+                    );
+                    if !output.primitives.is_empty() {
+                        self.collector.push(entry.key, output);
                     }
                 }
                 WidgetSpec::ScrollScopeBegin {
@@ -13294,5 +13417,94 @@ mod tests {
         let _ = rt.pointer_move(top_click);
         let _ = rt.pointer_down(top_click, PointerButton::Left);
         assert!((rt.context().slider_value(102).unwrap_or(0.0) - 100.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn canvas_draw_list_emits_1200_primitives_with_single_taffy_node() {
+        struct DrawListApp;
+
+        impl Application for DrawListApp {
+            type State = ();
+
+            fn init(&mut self, _: &mut AppContext) {}
+
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+
+            fn view(&mut self, _: &Self::State, ui: &mut ViewBuilder<'_>) {
+                let mut commands = Vec::with_capacity(1200);
+                for i in 0..1000 {
+                    commands.push(Draw2dCommand::rect(
+                        Rect::new(i as f32 * 0.5, 10.0, 0.4, 80.0),
+                        unbound_theme::Token::ACCENT,
+                    ));
+                }
+                for i in 0..199 {
+                    commands.push(Draw2dCommand::line(
+                        Vec2::new(i as f32 * 4.0, 0.0),
+                        Vec2::new(i as f32 * 4.0, 12.0),
+                        unbound_theme::Token::CARD_BORDER,
+                        1.0,
+                    ));
+                }
+                commands.push(Draw2dCommand::polyline(
+                    vec![Vec2::new(0.0, 50.0), Vec2::new(800.0, 50.0)],
+                    unbound_theme::Token::TEXT_PRIMARY,
+                    1.5,
+                    false,
+                ));
+                ui.canvas_draw_list(100, Some(Vec2::new(800.0, 200.0)), commands);
+            }
+        }
+
+        let mut rt = AppRuntime::new(DrawListApp, Vec2::new(800.0, 400.0));
+        let _ = rt.frame(0.0);
+        // 仅存在根容器 + 1 个 CanvasDrawList Taffy 节点，绝不拆分出 1200 个子布局节点。
+        assert_eq!(rt.world().len(), 2);
+        assert!(rt.collector.primitives.len() >= 1200);
+        assert_eq!(rt.collector.primitives.len(), 1200);
+    }
+
+    #[test]
+    fn app_context_registers_and_unregisters_custom_cursor() {
+        struct CursorApp;
+
+        impl Application for CursorApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut rt = AppRuntime::new(CursorApp, Vec2::new(320.0, 240.0));
+        let ctx = rt.context_mut();
+        let invalid = ctx.register_custom_cursor(&[], 0, 0, 0, 0);
+        assert_eq!(invalid, CustomCursorId(0));
+        assert!(ctx
+            .try_register_custom_cursor(&[0; 8], 4, 4, 0, 0)
+            .is_none());
+
+        let rgba = vec![255u8; 8 * 8 * 4];
+        let id = ctx.register_custom_cursor(&rgba, 8, 8, 3, 4);
+        assert_ne!(id.raw(), 0);
+        assert_eq!(
+            cursor_icon_from_kind(CursorKind::from(id)),
+            unbound_platform::CursorIcon::Custom(id.raw())
+        );
+        assert!(ctx.unregister_custom_cursor(id));
+        assert!(!ctx.unregister_custom_cursor(id));
     }
 }

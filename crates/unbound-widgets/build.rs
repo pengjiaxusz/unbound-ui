@@ -33,6 +33,7 @@ fn main() {
         "column_header_bar",
         "diff",
         "docking_overlay",
+        "draw_list",
         "ergonomics",
         "primitive",
         "procedural_grid",

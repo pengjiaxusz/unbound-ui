@@ -22,6 +22,26 @@
 
 use unbound_canvas::Handle;
 
+/// 已注册的自定义位图光标唯一标识。
+///
+/// `0` 保留为无效占位句柄，传入平台层时会安全降级为 [`CursorKind::Default`]。
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CustomCursorId(pub u16);
+
+impl CustomCursorId {
+    /// 返回底层 `u16` 原始编号。
+    #[must_use]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
+
+impl From<CustomCursorId> for CursorKind {
+    fn from(id: CustomCursorId) -> Self {
+        Self::Custom(id.0)
+    }
+}
+
 /// 操作系统指针应呈现的外观形态。
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum CursorKind {
@@ -215,5 +235,12 @@ mod tests {
             CursorKind::for_handle(Handle::SouthWest),
             CursorKind::ResizeNorthEastSouthWest
         );
+    }
+
+    #[test]
+    fn custom_cursor_id_converts_to_cursor_kind() {
+        let id = CustomCursorId(42);
+        assert_eq!(id.raw(), 42);
+        assert_eq!(CursorKind::from(id), CursorKind::Custom(42));
     }
 }

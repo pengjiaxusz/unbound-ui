@@ -5,7 +5,7 @@
 
 use std::cell::Cell;
 use std::num::NonZeroIsize;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use raw_window_handle::{
@@ -63,28 +63,55 @@ impl PhysicalPosition {
 }
 
 /// 窗口光标图标。
-#[repr(u8)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum CursorIcon {
     #[default]
-    Default = 0,
-    Pointer = 1,
-    Text = 2,
-    Grab = 3,
-    Grabbing = 4,
-    Crosshair = 5,
-    Move = 6,
-    NsResize = 7,
-    EwResize = 8,
-    NwseResize = 9,
-    NeswResize = 10,
-    NotAllowed = 11,
+    Default,
+    Pointer,
+    Text,
+    Grab,
+    Grabbing,
+    Crosshair,
+    Move,
+    NsResize,
+    EwResize,
+    NwseResize,
+    NeswResize,
+    NotAllowed,
+    /// 已注册的自定义 RGBA 位图光标 ID。
+    Custom(u16),
 }
 
 impl CursorIcon {
-    /// 从原子 `u8` 编码还原 [`CursorIcon`]。
+    /// 自定义光标在原子 `u32` 编码中的高位标记。
+    const CUSTOM_TAG: u32 = 0x1_0000;
+
+    /// 将 [`CursorIcon`] 编码为原子 `u32`（标准光标占 `0..=11`，自定义光标为 `0x10000 | id`）。
     #[must_use]
-    pub const fn from_u8(raw: u8) -> Self {
+    pub const fn to_u32(self) -> u32 {
+        match self {
+            Self::Default => 0,
+            Self::Pointer => 1,
+            Self::Text => 2,
+            Self::Grab => 3,
+            Self::Grabbing => 4,
+            Self::Crosshair => 5,
+            Self::Move => 6,
+            Self::NsResize => 7,
+            Self::EwResize => 8,
+            Self::NwseResize => 9,
+            Self::NeswResize => 10,
+            Self::NotAllowed => 11,
+            Self::Custom(id) => Self::CUSTOM_TAG | (id as u32),
+        }
+    }
+
+    /// 从原子 `u32` 编码还原 [`CursorIcon`]；未知编码安全回退至 [`Self::Default`]。
+    #[must_use]
+    pub const fn from_u32(raw: u32) -> Self {
+        if (raw & 0xFFFF_0000) == Self::CUSTOM_TAG {
+            return Self::Custom((raw & 0xFFFF) as u16);
+        }
         match raw {
             1 => Self::Pointer,
             2 => Self::Text,
@@ -121,7 +148,7 @@ pub struct Window {
     hinstance: isize,
     decorated: bool,
     popup_id: Option<u64>,
-    cursor: Arc<AtomicU8>,
+    cursor: Arc<AtomicU32>,
     ime_allowed: Cell<bool>,
     redraw_requested: Arc<AtomicBool>,
     destroyed: Arc<AtomicBool>,
@@ -133,7 +160,7 @@ impl Window {
         hwnd: isize,
         hinstance: isize,
         decorated: bool,
-        cursor: Arc<AtomicU8>,
+        cursor: Arc<AtomicU32>,
         redraw_requested: Arc<AtomicBool>,
         destroyed: Arc<AtomicBool>,
     ) -> Self {
@@ -184,7 +211,7 @@ impl Window {
     /// 获取当前选中的光标样式。
     #[must_use]
     pub fn current_cursor(&self) -> CursorIcon {
-        CursorIcon::from_u8(self.cursor.load(Ordering::Acquire))
+        CursorIcon::from_u32(self.cursor.load(Ordering::Acquire))
     }
 
     /// 获取客户区物理像素尺寸。
@@ -433,7 +460,7 @@ impl Window {
 
     /// 更新窗口光标样式。
     pub fn set_cursor(&self, cursor: CursorIcon) {
-        self.cursor.store(cursor as u8, Ordering::Release);
+        self.cursor.store(cursor.to_u32(), Ordering::Release);
         #[cfg(windows)]
         win32::apply_cursor(cursor);
     }
@@ -551,13 +578,13 @@ pub(crate) mod win32 {
         BringWindowToTop, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowPlacement,
         GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SetCursor,
         SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        GWL_EXSTYLE, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND,
-        IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-        MONITORINFOF_PRIMARY, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE,
-        WINDOWPLACEMENT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT,
-        WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        GWL_EXSTYLE, HCURSOR, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS,
+        IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+        IDC_SIZEWE, MONITORINFOF_PRIMARY, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+        SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT,
+        WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN,
+        WM_SYSCOMMAND, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     #[inline]
@@ -881,8 +908,17 @@ pub(crate) mod win32 {
     }
 
     pub(crate) fn apply_cursor(cursor: CursorIcon) {
+        if let CursorIcon::Custom(id) = cursor {
+            if let Some(raw) = crate::custom_cursor::lookup_or_create_win32_hcursor(id) {
+                // SAFETY: `raw` 由进程级自定义光标注册表持有并经 `CreateIconIndirect` 创建。
+                unsafe {
+                    let _ = SetCursor(Some(HCURSOR(raw as *mut c_void)));
+                }
+                return;
+            }
+        }
         let id: PCWSTR = match cursor {
-            CursorIcon::Default => IDC_ARROW,
+            CursorIcon::Default | CursorIcon::Custom(_) => IDC_ARROW,
             CursorIcon::Pointer | CursorIcon::Grab | CursorIcon::Grabbing => IDC_HAND,
             CursorIcon::Text => IDC_IBEAM,
             CursorIcon::Crosshair => IDC_CROSS,

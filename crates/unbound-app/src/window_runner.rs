@@ -750,6 +750,10 @@ impl<A: Application> WindowedRunner<A> {
             state.pacer.note_activity(Instant::now());
             window.request_redraw();
         }
+        let desired_cursor = crate::cursor_icon_from_kind(self.runtime.cursor());
+        if window.current_cursor() != desired_cursor {
+            window.set_cursor(desired_cursor);
+        }
         Flow::Continue
     }
 

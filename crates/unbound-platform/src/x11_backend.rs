@@ -12,7 +12,7 @@ use core::num::NonZeroU32;
 use core::ptr::NonNull;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -263,7 +263,7 @@ struct X11WindowShared {
     visible: AtomicBool,
     destroyed: AtomicBool,
     redraw_requested: AtomicBool,
-    cursor: AtomicU8,
+    cursor: AtomicU32,
     frame_metrics: Mutex<Option<Arc<FrameHitMetrics>>>,
     cmd_tx: Mutex<mpsc::Sender<X11Command>>,
     wake_signal: X11WakeSignal,
@@ -296,7 +296,7 @@ impl X11WindowHandle {
     }
 
     pub(crate) fn current_cursor(&self) -> CursorIcon {
-        CursorIcon::from_u8(self.shared.cursor.load(Ordering::Acquire))
+        CursorIcon::from_u32(self.shared.cursor.load(Ordering::Acquire))
     }
 
     pub(crate) fn inner_size(&self) -> PhysicalSize {
@@ -458,7 +458,7 @@ impl X11WindowHandle {
     }
 
     pub(crate) fn set_cursor(&self, cursor: CursorIcon) {
-        self.shared.cursor.store(cursor as u8, Ordering::Release);
+        self.shared.cursor.store(cursor.to_u32(), Ordering::Release);
         self.send(X11Command::SetCursor {
             window: self.shared.xid,
             cursor,
@@ -613,7 +613,7 @@ impl WaylandClipboardBackend for X11ClipboardBridge {
 /// 彻底避免在 4K WSLg XWayland 下加载 24px+ Adwaita 光栅主题后被 2× 放大导致光标异常巨大。
 const fn x11_core_cursor_glyph(icon: CursorIcon) -> Option<u16> {
     match icon {
-        CursorIcon::Default => None,
+        CursorIcon::Default | CursorIcon::Custom(_) => None,
         CursorIcon::Pointer => Some(60),    // XC_hand2
         CursorIcon::Text => Some(152),      // XC_xterm
         CursorIcon::Grab => Some(58),       // XC_hand1
@@ -631,7 +631,7 @@ const fn x11_core_cursor_glyph(icon: CursorIcon) -> Option<u16> {
 /// X11 核心字体光标缓存：零磁盘主题扫描、按样式复用 `Cursor` XID、按窗口去重。
 struct X11CursorCache {
     cursor_font: Option<Font>,
-    cursors: HashMap<u8, u32>,
+    cursors: HashMap<u32, u32>,
     applied: HashMap<X11WindowId, CursorIcon>,
 }
 
@@ -652,7 +652,7 @@ impl X11CursorCache {
         let Some(glyph) = x11_core_cursor_glyph(icon) else {
             return x11rb::NONE;
         };
-        let key = icon as u8;
+        let key = icon.to_u32();
         if let Some(&existing) = self.cursors.get(&key) {
             return existing;
         }
@@ -1200,7 +1200,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             visible: AtomicBool::new(cfg.visible),
             destroyed: AtomicBool::new(false),
             redraw_requested: AtomicBool::new(true),
-            cursor: AtomicU8::new(CursorIcon::Default as u8),
+            cursor: AtomicU32::new(CursorIcon::Default.to_u32()),
             frame_metrics: Mutex::new(None),
             cmd_tx: Mutex::new(cmd_tx.clone()),
             wake_signal: wake_signal.clone(),
@@ -2047,7 +2047,7 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                         visible: AtomicBool::new(true),
                         destroyed: AtomicBool::new(false),
                         redraw_requested: AtomicBool::new(true),
-                        cursor: AtomicU8::new(CursorIcon::Default as u8),
+                        cursor: AtomicU32::new(CursorIcon::Default.to_u32()),
                         frame_metrics: Mutex::new(None),
                         cmd_tx: Mutex::new(cmd_tx.clone()),
                         wake_signal: wake_signal.clone(),

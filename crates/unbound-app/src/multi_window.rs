@@ -2836,6 +2836,10 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 ctx.pacer.note_activity(Instant::now());
                 window.request_redraw();
             }
+            let desired_cursor = crate::cursor_icon_from_kind(ctx.runtime.cursor());
+            if window.current_cursor() != desired_cursor {
+                window.set_cursor(desired_cursor);
+            }
         }
 
         if !deferred_floating.is_empty() {

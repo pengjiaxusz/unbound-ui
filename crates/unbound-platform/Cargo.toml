@@ -11,6 +11,7 @@ repository.workspace = true
 unbound-math.workspace = true
 unbound-gpu.workspace = true
 unbound-a11y.workspace = true
+unbound-input.workspace = true
 accesskit.workspace = true
 raw-window-handle = "0.6"
 log.workspace = true

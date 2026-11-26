@@ -337,7 +337,7 @@ mod win32 {
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
-    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
     use std::time::Duration;
 
     use ::windows::core::{s, w, BOOL, PCWSTR};
@@ -827,7 +827,7 @@ mod win32 {
         /// 原生装饰窗口的非客户区边框增量（用于 `WM_GETMINMAXINFO` 保证客户区最小尺寸准确）。
         frame_extra_w: std::cell::Cell<i32>,
         frame_extra_h: std::cell::Cell<i32>,
-        cursor: Arc<AtomicU8>,
+        cursor: Arc<AtomicU32>,
         tracking_leave: std::cell::Cell<bool>,
         minimized: std::cell::Cell<bool>,
         last_modifiers: std::cell::Cell<Modifiers>,
@@ -1111,7 +1111,7 @@ mod win32 {
             }
             WM_SETCURSOR => {
                 if (lparam.0 & 0xFFFF) as u32 == HTCLIENT {
-                    let icon = CursorIcon::from_u8(data.cursor.load(Ordering::Acquire));
+                    let icon = CursorIcon::from_u32(data.cursor.load(Ordering::Acquire));
                     crate::win32_window::win32::apply_cursor(icon);
                     return LRESULT(1);
                 }
@@ -1546,7 +1546,7 @@ mod win32 {
 
         let redraw_requested = Arc::new(AtomicBool::new(true));
         let destroyed = Arc::new(AtomicBool::new(false));
-        let cursor = Arc::new(AtomicU8::new(CursorIcon::Default as u8));
+        let cursor = Arc::new(AtomicU32::new(CursorIcon::Default.to_u32()));
         let user_data = Rc::new(WindowUserData {
             decorations: config.decorations,
             resizable: config.resizable,
@@ -1778,7 +1778,7 @@ mod win32 {
 
         let redraw_requested = Arc::new(AtomicBool::new(true));
         let destroyed = Arc::new(AtomicBool::new(false));
-        let cursor = Arc::new(AtomicU8::new(CursorIcon::Default as u8));
+        let cursor = Arc::new(AtomicU32::new(CursorIcon::Default.to_u32()));
         let user_data = Rc::new(WindowUserData {
             decorations: false,
             resizable: false,

@@ -20,7 +20,7 @@ pub mod keymap;
 pub mod pointer;
 pub mod router;
 
-pub use cursor::{CursorKind, CursorSource, CursorStack};
+pub use cursor::{CursorKind, CursorSource, CursorStack, CustomCursorId};
 pub use dnd::{DragOver, DragPayload, PayloadArena};
 pub use focus::{
     FocusCause, FocusConfig, FocusGroup, FocusGroupMode, FocusKey, FocusManager, RovingKey,

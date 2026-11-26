@@ -407,7 +407,7 @@ impl KeyRepeatState {
 #[must_use]
 pub const fn wayland_cursor_name(icon: CursorIcon) -> &'static str {
     match icon {
-        CursorIcon::Default => "default",
+        CursorIcon::Default | CursorIcon::Custom(_) => "default",
         CursorIcon::Pointer => "pointer",
         CursorIcon::Text => "text",
         CursorIcon::Grab => "grab",
