@@ -31,7 +31,8 @@
 #define PRIM_CURVE        4u
 #define PRIM_STROKE       5u
 #define PRIM_SHADOW       6u
-#define PRIM_LINE         7u
+#define PRIM_LINE            7u
+#define PRIM_PROCEDURAL_GRID 8u
 
 // 图元标志位，镜像 Rust 侧的 `PrimFlags`。它们位于 `type_flags` 的高 16 位，
 // 使顶点和片元阶段无需第二套解包约定即可直接读取。

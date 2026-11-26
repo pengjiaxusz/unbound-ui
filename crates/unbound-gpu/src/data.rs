@@ -36,6 +36,8 @@ pub enum PrimType {
     Shadow = 6,
     /// 实心分隔线。
     Line = 7,
+    /// 单图元程序化解析抗锯齿网格（次/主两级网格线由片元着色器求值）。
+    ProceduralGrid = 8,
 }
 
 impl PrimType {
@@ -49,6 +51,7 @@ impl PrimType {
             5 => Self::Stroke,
             6 => Self::Shadow,
             7 => Self::Line,
+            8 => Self::ProceduralGrid,
             _ => Self::RoundedRect,
         }
     }
@@ -485,7 +488,36 @@ impl core::ops::BitOr for TransformFlags {
     }
 }
 
-/// 曲线与渐变的 48B 载荷头。
+/// 图像图元单通道检视掩码，编码在 [`GpuPayload::flags`] 的低 3 位。
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ImageChannelMask {
+    /// 常规 RGBA 四通道输出。
+    #[default]
+    Rgba = 0,
+    /// 仅输出 R 通道（灰度广播至 RGB）。
+    Red = 1,
+    /// 仅输出 G 通道（灰度广播至 RGB）。
+    Green = 2,
+    /// 仅输出 B 通道（灰度广播至 RGB）。
+    Blue = 3,
+    /// 仅输出 Alpha 通道（经 sRGB 转线性后灰度广播至 RGB）。
+    Alpha = 4,
+    /// 输出 Rec.709 感知亮度灰度。
+    Luma = 5,
+}
+
+/// [`GpuPayload::flags`] 第 3 位：置位时忽略源纹理 Alpha 通道，以不透明方式预览图像。
+pub const IMAGE_FLAG_DISABLE_ALPHA: u32 = 1 << 3;
+
+/// 将 RGBA8 四字节打包为小端 `u32`（与 GLSL `unpackUnorm4x8` 字节序一致）。
+#[inline]
+#[must_use]
+pub const fn pack_rgba8(rgba: [u8; 4]) -> u32 {
+    (rgba[0] as u32) | ((rgba[1] as u32) << 8) | ((rgba[2] as u32) << 16) | ((rgba[3] as u32) << 24)
+}
+
+/// 曲线、渐变、图像通道检视与程序化网格共用的 48B 载荷头。
 ///
 /// 对于 [`PrimType::Curve`]：`p0`/`p1`/`p2` 为图元局部空间中的二次控制多边形顶点。
 /// 对于渐变：`p0`/`p1` 为端点，`p2.x` 携带色标信息。
@@ -572,6 +604,54 @@ impl GpuPayload {
     #[must_use]
     pub fn gradient_exponent(&self) -> f32 {
         self.p2[1]
+    }
+
+    /// 构造携带通道掩码与 Alpha 预览开关的图像采样载荷。
+    #[must_use]
+    pub fn image_with_channel(
+        uv_min: [f32; 2],
+        uv_max: [f32; 2],
+        channel_mask: ImageChannelMask,
+        enable_alpha: bool,
+    ) -> Self {
+        let flags = (channel_mask as u32 & 0x7)
+            | if enable_alpha {
+                0
+            } else {
+                IMAGE_FLAG_DISABLE_ALPHA
+            };
+        Self {
+            p0: uv_min,
+            p1: uv_max,
+            p2: [0.0, 0.0],
+            line_width: 0.0,
+            extra: 0,
+            flags,
+            _reserved: [0; 3],
+        }
+    }
+
+    /// 构造程序化 SDF 网格载荷（次网格与主网格两级间距、线宽及颜色打包在同一 48B 载荷中）。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn procedural_grid(
+        origin_offset: [f32; 2],
+        minor_spacing: f32,
+        major_spacing: f32,
+        minor_line_width: f32,
+        major_line_width: f32,
+        minor_rgba: [u8; 4],
+        major_rgba: [u8; 4],
+    ) -> Self {
+        Self {
+            p0: origin_offset,
+            p1: [minor_spacing, major_spacing],
+            p2: [minor_line_width, major_line_width],
+            line_width: 0.0,
+            extra: pack_rgba8(minor_rgba),
+            flags: pack_rgba8(major_rgba),
+            _reserved: [0; 3],
+        }
     }
 }
 
@@ -1087,5 +1167,51 @@ mod tests {
         let (min, max) = p.bounds_with_shadow();
         assert_eq!(min, [-2.0, 8.0]);
         assert_eq!(max, [122.0, 82.0]);
+    }
+
+    #[test]
+    fn image_channel_mask_and_alpha_flag_pack_into_payload() {
+        assert_eq!(ImageChannelMask::default(), ImageChannelMask::Rgba);
+        let p_rgba =
+            GpuPayload::image_with_channel([0.1, 0.2], [0.9, 0.8], ImageChannelMask::Rgba, true);
+        assert_eq!(p_rgba.p0, [0.1, 0.2]);
+        assert_eq!(p_rgba.p1, [0.9, 0.8]);
+        assert_eq!(p_rgba.flags, 0);
+
+        let p_red_no_alpha =
+            GpuPayload::image_with_channel([0.0, 0.0], [1.0, 1.0], ImageChannelMask::Red, false);
+        assert_eq!(p_red_no_alpha.flags & 0x7, ImageChannelMask::Red as u32);
+        assert_ne!(p_red_no_alpha.flags & IMAGE_FLAG_DISABLE_ALPHA, 0);
+
+        let p_luma =
+            GpuPayload::image_with_channel([0.0, 0.0], [1.0, 1.0], ImageChannelMask::Luma, true);
+        assert_eq!(p_luma.flags, 5);
+        assert_eq!(p_luma.flags & IMAGE_FLAG_DISABLE_ALPHA, 0);
+    }
+
+    #[test]
+    fn procedural_grid_prim_type_and_payload_pack_cleanly() {
+        assert_eq!(PrimType::ProceduralGrid as u8, 8);
+        assert_eq!(PrimType::from_u8(8), PrimType::ProceduralGrid);
+        assert!(!PrimType::ProceduralGrid.is_text());
+
+        let w = GpuPrimitiveInstance::pack_type(PrimType::ProceduralGrid, BlendMode::Normal, 1);
+        assert_eq!(
+            GpuPrimitiveInstance::unpack_type(w),
+            (PrimType::ProceduralGrid, BlendMode::Normal, 1)
+        );
+
+        let minor = [0x11, 0x22, 0x33, 0x44];
+        let major = [0xAA, 0xBB, 0xCC, 0xDD];
+        assert_eq!(pack_rgba8(minor), 0x4433_2211);
+        assert_eq!(pack_rgba8(major), 0xDDCC_BBAA);
+
+        let pl = GpuPayload::procedural_grid([4.0, -8.0], 16.0, 64.0, 1.0, 2.0, minor, major);
+        assert_eq!(pl.p0, [4.0, -8.0]);
+        assert_eq!(pl.p1, [16.0, 64.0]);
+        assert_eq!(pl.p2, [1.0, 2.0]);
+        assert_eq!(pl.extra, 0x4433_2211);
+        assert_eq!(pl.flags, 0xDDCC_BBAA);
+        assert_eq!(size_of::<GpuPayload>(), 48);
     }
 }

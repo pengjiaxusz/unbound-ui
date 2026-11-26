@@ -44,6 +44,9 @@ pub enum Orientation {
     Vertical,
 }
 
+/// 滑块方向公开类型别名。
+pub type SliderOrientation = Orientation;
+
 /// 滑块可识别的按键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SliderKey {
@@ -173,6 +176,18 @@ impl SliderDesc {
         }
     }
 
+    /// 创建无 Rect 垂直滑块（底部对应 `min`，顶部对应 `max`）。
+    #[must_use]
+    pub fn vertical(value: f32, min: f32, max: f32) -> Self {
+        Self::new(Rect::ZERO, "", value, min, max).with_orientation(Orientation::Vertical)
+    }
+
+    /// 创建无 Rect 水平滑块（左侧对应 `min`，右侧对应 `max`）。
+    #[must_use]
+    pub fn horizontal(value: f32, min: f32, max: f32) -> Self {
+        Self::new(Rect::ZERO, "", value, min, max).with_orientation(Orientation::Horizontal)
+    }
+
     /// 设置步长。
     #[must_use]
     pub fn with_step(mut self, step: f32) -> Self {
@@ -289,12 +304,21 @@ impl SliderDesc {
                     self.track_height,
                 )
             }
-            Orientation::Vertical => Rect::new(
-                self.rect.origin.x + self.rect.size.x * 0.5 - self.track_height * 0.5,
-                self.rect.origin.y,
-                self.track_height,
-                self.rect.size.y,
-            ),
+            Orientation::Vertical => {
+                // 非空标签垂直滑块在顶部预留 `SLIDER_LABEL_AREA_HEIGHT`，避免标签文本与垂直轨道重叠。
+                let top_inset =
+                    if !self.label.is_empty() && self.rect.size.y > SLIDER_LABEL_AREA_HEIGHT {
+                        SLIDER_LABEL_AREA_HEIGHT
+                    } else {
+                        0.0
+                    };
+                Rect::new(
+                    self.rect.origin.x + self.rect.size.x * 0.5 - self.track_height * 0.5,
+                    self.rect.origin.y + top_inset,
+                    self.track_height,
+                    (self.rect.size.y - top_inset).max(0.0),
+                )
+            }
         }
     }
 
@@ -819,5 +843,88 @@ mod tests {
         let unlabeled = SliderDesc::new(Rect::new(10.0, 20.0, 200.0, 32.0), "", 50.0, 0.0, 100.0);
         let u_track = unlabeled.track_rect();
         assert_eq!(u_track.origin.y + u_track.size.y * 0.5, 20.0 + 16.0);
+    }
+
+    #[test]
+    fn vertical_slider_intrinsic_size_geometry_pointer_and_keyboard() {
+        let mut engine = unbound_text::TextEngine::new();
+        let mut cache = unbound_text::GlyphCache::new();
+        let mut text_ctx = crate::TextCtx {
+            engine: &mut engine,
+            cache: &mut cache,
+            atlas_clock: 1,
+            raster_scale: 1.0,
+        };
+
+        // 1. 固有尺寸：窄高布局，带标签时顶部额外增加标签区高度。
+        let v_unlabeled = SliderDesc::vertical(50.0, 0.0, 100.0);
+        let v_labeled = SliderDesc::vertical(50.0, 0.0, 100.0).label("Gain");
+        assert_eq!(v_unlabeled.orientation, SliderOrientation::Vertical);
+        let u_size = crate::UiWidget::intrinsic_size(&v_unlabeled, &mut text_ctx);
+        let l_size = crate::UiWidget::intrinsic_size(&v_labeled, &mut text_ctx);
+        assert!(u_size.x >= unbound_theme::typography::geometry::INPUT_HEIGHT);
+        assert!(u_size.y >= 160.0);
+        assert_eq!(l_size.y, 160.0 + SLIDER_LABEL_AREA_HEIGHT);
+
+        // 2. 带标签垂直滑块的轨道顶部避让标签区。
+        let mut laid_labeled = v_labeled.clone();
+        laid_labeled.rect = Rect::new(0.0, 10.0, 32.0, 180.0);
+        let labeled_track = laid_labeled.track_rect();
+        assert_eq!(labeled_track.origin.y, 10.0 + SLIDER_LABEL_AREA_HEIGHT);
+        assert_eq!(labeled_track.size.y, 160.0);
+
+        // 3. 指针点击与拖拽：底部为 min，顶部为 max。
+        let rect = Rect::new(0.0, 0.0, 32.0, 200.0);
+        let mut state = crate::UiWidget::initial_state(&v_unlabeled);
+        assert!(crate::UiWidget::reduce(
+            &v_unlabeled,
+            &mut state,
+            rect,
+            &crate::WidgetInputEvent::PointerDown {
+                pos: Vec2::new(16.0, 200.0),
+                click_count: 1,
+            },
+        ));
+        assert_eq!(state, 0.0);
+        assert!(crate::UiWidget::reduce(
+            &v_unlabeled,
+            &mut state,
+            rect,
+            &crate::WidgetInputEvent::PointerDrag {
+                pos: Vec2::new(16.0, 0.0),
+            },
+        ));
+        assert_eq!(state, 100.0);
+        assert!(crate::UiWidget::reduce(
+            &v_unlabeled,
+            &mut state,
+            rect,
+            &crate::WidgetInputEvent::PointerDrag {
+                pos: Vec2::new(16.0, 100.0),
+            },
+        ));
+        assert_eq!(state, 50.0);
+
+        // 4. 键盘导航：Up/Down/Home/End 通过 `UiWidget::reduce` 更新状态。
+        let stepped = SliderDesc::vertical(50.0, 0.0, 100.0).with_step(5.0);
+        let mut kstate = 50.0_f32;
+        let send_key = |state: &mut f32, name: &'static str| {
+            crate::UiWidget::reduce(
+                &stepped,
+                state,
+                rect,
+                &crate::WidgetInputEvent::KeyDown(unbound_input::KeyChord::new(
+                    unbound_input::KeyName::Named(name),
+                )),
+            )
+        };
+        assert!(send_key(&mut kstate, "ArrowUp"));
+        assert_eq!(kstate, 55.0);
+        assert!(send_key(&mut kstate, "ArrowDown"));
+        assert_eq!(kstate, 50.0);
+        assert!(send_key(&mut kstate, "Home"));
+        assert_eq!(kstate, 0.0);
+        assert!(send_key(&mut kstate, "End"));
+        assert_eq!(kstate, 100.0);
     }
 }

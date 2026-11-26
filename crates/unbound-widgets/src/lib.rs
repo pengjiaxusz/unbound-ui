@@ -23,6 +23,7 @@ pub mod diff;
 pub mod docking_overlay;
 pub mod ergonomics;
 pub mod primitive;
+pub mod procedural_grid;
 pub mod shell;
 pub mod slot_fixture;
 pub mod title_bar;
@@ -629,8 +630,8 @@ pub use hover_card::{
 };
 pub use image::{
     emit_icon, emit_image, emit_image_with_assets, emit_nine_patch, fit_image, IconDesc,
-    ImageAssetResolver, ImageDesc, ImageFit, ImageSource, ImageWidget, NinePatchDesc, ObjectFit,
-    ResolvedImage,
+    ImageAssetResolver, ImageChannelMask, ImageDesc, ImageFit, ImageSource, ImageWidget,
+    NinePatchDesc, ObjectFit, ResolvedImage,
 };
 pub use masonry::{emit_masonry, AspectRatioBoxDesc, MasonryDesc, MasonryItem};
 pub use menu::{
@@ -687,6 +688,7 @@ pub use pagination::{emit_pagination, PaginationDesc, PaginationState, Paginatio
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
 pub use popconfirm::{emit_popconfirm, PopconfirmDesc};
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
+pub use procedural_grid::{emit_procedural_grid, ProceduralGridDesc};
 pub use progress::{
     emit_progress, ProgressDesc, ProgressKind, ProgressState, ProgressTokens, PROGRESS_RATE,
     RING_SEGMENTS,
@@ -727,7 +729,7 @@ pub use scroll::{
 pub use segmented::{SegmentedDesc, SegmentedTokens};
 pub use select::{emit_select, SelectDesc, SelectState, SelectWidget};
 pub use skeleton::{emit_skeleton, SkeletonDesc, SkeletonState, SKELETON_PERIOD, SKELETON_SHIMMER};
-pub use slider::{SliderDesc, SliderTokens};
+pub use slider::{Orientation, SliderDesc, SliderOrientation, SliderTokens};
 pub use spinner::{emit_loading_overlay, emit_spinner, LoadingOverlayDesc, SpinnerDesc};
 pub use split_button::{
     emit_split_button, emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState,
@@ -1087,7 +1089,7 @@ impl WidgetOutput {
         self
     }
 
-    /// 判断图元是否引用载荷表（字形、彩色字形、图像、贝塞尔曲线或线性渐变）。
+    /// 判断图元是否引用载荷表（字形、彩色字形、图像、贝塞尔曲线、程序化网格或线性渐变）。
     #[must_use]
     pub fn primitive_uses_payload(prim: &GpuPrimitiveInstance) -> bool {
         let uses_by_type = matches!(
@@ -1096,6 +1098,7 @@ impl WidgetOutput {
                 | unbound_gpu::data::PrimType::GlyphColor
                 | unbound_gpu::data::PrimType::Image
                 | unbound_gpu::data::PrimType::Curve
+                | unbound_gpu::data::PrimType::ProceduralGrid
         );
         let has_gradient = ((prim.prim_type_and_flags >> 16) as u16
             & unbound_gpu::data::PrimFlags::GRADIENT_LINEAR.bits())

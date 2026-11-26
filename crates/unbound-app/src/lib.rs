@@ -121,11 +121,13 @@ pub use unbound_asset::{
     UploadPacingBudget,
 };
 pub use unbound_gpu::device::{CompressedTextureBackend, CompressedTextureCapabilities};
-pub use unbound_gpu::VideoUploadTier;
+pub use unbound_gpu::{ImageChannelMask, VideoUploadTier};
 pub use unbound_input::{FocusGroup, FocusGroupMode, RovingKey, RovingOrientation};
 pub use unbound_platform::WindowBackdropMaterial;
 pub use unbound_theme::typography::geometry::READABLE_FORM_MAX_WIDTH;
 pub use unbound_widgets::ergonomics::UiWidget;
+pub use unbound_widgets::slider::{Orientation, SliderOrientation};
+pub use unbound_widgets::{emit_procedural_grid, ProceduralGridDesc};
 pub use video::{
     VideoSurfaceDesc, VideoSurfaceHandle, VideoSurfaceMetrics, VideoSurfaceOp, VideoSurfaceState,
     DEFAULT_VIDEO_VRAM_BUDGET_BYTES,
@@ -1976,12 +1978,16 @@ pub struct ExternalTextureDesc {
     pub tint: unbound_theme::Token,
     /// Local draw order offset.
     pub z: u16,
-    /// Whether the image accepts pointer clicks.
+    /// RGBA 通道隔离掩码（默认 [`ImageChannelMask::Rgba`]）。
+    pub channel_mask: unbound_gpu::ImageChannelMask,
+    /// 是否启用源纹理 Alpha 混合；为 `false` 时以不透明方式预览（默认 `true`）。
+    pub enable_alpha: bool,
+    /// 图像是否接受指针点击。
     pub interactive: bool,
 }
 
 impl ExternalTextureDesc {
-    /// Create a descriptor with default UV, zero rotation, and no flip.
+    /// 以默认 UV、零旋转、无翻转构造外部纹理描述符。
     #[must_use]
     pub const fn new(
         handle: ExternalTextureHandle,
@@ -2002,6 +2008,8 @@ impl ExternalTextureDesc {
             border_color: unbound_theme::Token::NONE,
             tint: unbound_theme::Token::NONE,
             z: 690,
+            channel_mask: unbound_gpu::ImageChannelMask::Rgba,
+            enable_alpha: true,
             interactive: false,
         }
     }
@@ -2085,7 +2093,33 @@ impl ExternalTextureDesc {
         self
     }
 
-    /// Set whether this image accepts pointer clicks.
+    /// 设置 RGBA 通道隔离掩码。
+    #[must_use]
+    pub const fn with_channel_mask(mut self, mask: unbound_gpu::ImageChannelMask) -> Self {
+        self.channel_mask = mask;
+        self
+    }
+
+    /// 设置 RGBA 通道隔离掩码（无前缀别名）。
+    #[must_use]
+    pub const fn channel_mask(self, mask: unbound_gpu::ImageChannelMask) -> Self {
+        self.with_channel_mask(mask)
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合。
+    #[must_use]
+    pub const fn with_enable_alpha(mut self, enable: bool) -> Self {
+        self.enable_alpha = enable;
+        self
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合（无前缀别名）。
+    #[must_use]
+    pub const fn enable_alpha(self, enable: bool) -> Self {
+        self.with_enable_alpha(enable)
+    }
+
+    /// 设置图像是否接受指针点击。
     #[must_use]
     pub const fn with_interactive(mut self, interactive: bool) -> Self {
         self.interactive = interactive;
@@ -2178,6 +2212,8 @@ pub enum WidgetSpec {
     Alert(AlertDesc),
     /// 图像控件（支持图集层与异步资产解析）。
     Image(unbound_widgets::ImageDesc),
+    /// 单图元程序化 SDF 网格控件（次/主两级解析抗锯齿网格线）。
+    ProceduralGrid(unbound_widgets::ProceduralGridDesc),
     /// Externally managed RGBA8 texture image widget with optional UV/crop and 2D transform.
     ExternalImage(ExternalTextureDesc),
     /// Transform gizmo widget with optional OBB rotation and drag preview.
@@ -3087,10 +3123,29 @@ impl<'a> ViewBuilder<'a> {
                 sw.rect.width().max(48.0),
                 sw.rect.height().max(26.0),
             )),
-            WidgetSpec::Slider(sl) => Some(Vec2::new(
-                sl.rect.width().max(160.0),
-                sl.rect.height().max(28.0),
-            )),
+            WidgetSpec::Slider(sl) => match sl.orientation {
+                unbound_widgets::Orientation::Horizontal => Some(Vec2::new(
+                    sl.rect.width().max(160.0),
+                    sl.rect.height().max(if sl.label.is_empty() {
+                        28.0
+                    } else {
+                        unbound_widgets::slider::SLIDER_LABELED_HEIGHT
+                    }),
+                )),
+                unbound_widgets::Orientation::Vertical => {
+                    let min_width =
+                        unbound_theme::typography::geometry::INPUT_HEIGHT.max(sl.thumb_size);
+                    let min_height = if sl.label.is_empty() {
+                        160.0
+                    } else {
+                        160.0 + unbound_widgets::slider::SLIDER_LABEL_AREA_HEIGHT
+                    };
+                    Some(Vec2::new(
+                        sl.rect.width().max(min_width),
+                        sl.rect.height().max(min_height),
+                    ))
+                }
+            },
             WidgetSpec::Progress { desc: pr, .. } => Some(Vec2::new(
                 pr.rect.width().max(160.0),
                 pr.rect.height().max(12.0),
@@ -3109,6 +3164,9 @@ impl<'a> ViewBuilder<'a> {
             )),
             WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                 .then_some(Vec2::new(img.rect.width(), img.rect.height())),
+            WidgetSpec::ProceduralGrid(grid) => (grid.rect.width() > 0.0
+                || grid.rect.height() > 0.0)
+                .then_some(Vec2::new(grid.rect.width(), grid.rect.height())),
             WidgetSpec::ExternalImage(desc) => {
                 Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
             }
@@ -3527,6 +3585,32 @@ impl<'a> ViewBuilder<'a> {
             node_desc = node_desc.height(Dim::px(desc.rect.height()));
         }
         self.widget(key, node_desc, WidgetSpec::Image(desc))
+    }
+
+    /// 声明式程序化 SDF 网格控件（单图元解析抗锯齿次/主两级网格）。
+    pub fn procedural_grid(
+        &mut self,
+        key: u64,
+        desc: unbound_widgets::ProceduralGridDesc,
+    ) -> NodeId {
+        let mut node_desc = RawNodeDesc::container();
+        if desc.rect.width() > 0.0 {
+            node_desc = node_desc.width(Dim::px(desc.rect.width()));
+        }
+        if desc.rect.height() > 0.0 {
+            node_desc = node_desc.height(Dim::px(desc.rect.height()));
+        }
+        self.procedural_grid_with_layout(key, node_desc, desc)
+    }
+
+    /// 带自定义布局描述符的声明式程序化 SDF 网格控件。
+    pub fn procedural_grid_with_layout(
+        &mut self,
+        key: u64,
+        layout: RawNodeDesc,
+        desc: unbound_widgets::ProceduralGridDesc,
+    ) -> NodeId {
+        self.widget(key, layout, WidgetSpec::ProceduralGrid(desc))
     }
 
     /// 声明式外部纹理图像控件：外部纹理未就绪时自动绘制同尺寸占位框，就绪后绑定真实外部槽位与 UV。
@@ -8074,6 +8158,9 @@ impl<A: Application> AppRuntime<A> {
                     }
                     WidgetSpec::Image(img) => (img.rect.width() > 0.0 || img.rect.height() > 0.0)
                         .then_some(Vec2::new(img.rect.width(), img.rect.height())),
+                    WidgetSpec::ProceduralGrid(grid) => (grid.rect.width() > 0.0
+                        || grid.rect.height() > 0.0)
+                        .then_some(Vec2::new(grid.rect.width(), grid.rect.height())),
                     WidgetSpec::ExternalImage(desc) => {
                         Some(Vec2::new(desc.size.x.max(0.0), desc.size.y.max(0.0)))
                     }
@@ -8471,6 +8558,18 @@ impl<A: Application> AppRuntime<A> {
                     );
                     self.collector.push(entry.key, out);
                 }
+                WidgetSpec::ProceduralGrid(desc) => {
+                    let mut desc = *desc;
+                    if rect.width() > 0.0 && rect.height() > 0.0 {
+                        desc.rect = rect;
+                    }
+                    if desc.rect.width() <= 0.0 || desc.rect.height() <= 0.0 {
+                        continue;
+                    }
+                    desc.z = entry.z_base.saturating_add(desc.z);
+                    let out = unbound_widgets::emit_procedural_grid(&desc);
+                    self.collector.push(entry.key, out);
+                }
                 WidgetSpec::ExternalImage(ext) => {
                     let draw_rect = if rect.width() > 0.0 && rect.height() > 0.0 {
                         rect
@@ -8493,6 +8592,8 @@ impl<A: Application> AppRuntime<A> {
                     desc.border_width = ext.border_width;
                     desc.border_color = ext.border_color;
                     desc.tint = ext.tint;
+                    desc.channel_mask = ext.channel_mask;
+                    desc.enable_alpha = ext.enable_alpha;
                     desc.interactive = ext.interactive;
                     desc.sample_uv = ext.sample_uv.or_else(|| {
                         let crop = ext.crop_rect?;
@@ -8613,6 +8714,8 @@ impl<A: Application> AppRuntime<A> {
                         img.tint = desc.tint;
                         img.sample_uv = desc.sample_uv;
                         img.z = z;
+                        img.channel_mask = desc.channel_mask;
+                        img.enable_alpha = desc.enable_alpha;
                         img.interactive = desc.interactive;
                         if let Some(alt) = &desc.alt {
                             img.alt = alt.clone();
@@ -13135,5 +13238,61 @@ mod tests {
         assert_ne!(rt.set_window_occluded(false), DirtyFlags::NONE);
         assert!(!rt.context().is_window_occluded());
         assert_eq!(rt.app().transitions, vec![true, false]);
+    }
+
+    #[test]
+    fn procedural_grid_and_vertical_slider_layout_and_emit_cleanly() {
+        struct GridAndSliderApp;
+
+        impl Application for GridAndSliderApp {
+            type State = ();
+
+            fn init(&mut self, _: &mut AppContext) {}
+
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+
+            fn view(&mut self, _: &Self::State, ui: &mut ViewBuilder<'_>) {
+                ui.row(1, |ui| {
+                    ui.procedural_grid(
+                        101,
+                        ProceduralGridDesc::new(Rect::new(0.0, 0.0, 256.0, 192.0))
+                            .with_minor_spacing(16.0)
+                            .with_major_spacing(64.0),
+                    );
+                    ui.slider(102, SliderDesc::vertical(25.0, 0.0, 100.0));
+                });
+            }
+        }
+
+        let mut rt = AppRuntime::new(GridAndSliderApp, Vec2::new(640.0, 480.0));
+        let _ = rt.frame(0.0);
+
+        let grid_prims: Vec<_> = rt
+            .scene()
+            .primitives
+            .iter()
+            .filter(|p| p.prim_type() == PrimType::ProceduralGrid)
+            .collect();
+        assert_eq!(grid_prims.len(), 1);
+        assert_eq!(grid_prims[0].size, [256.0, 192.0]);
+        let grid_pl = rt.scene().payloads[grid_prims[0].extra_payload_idx as usize];
+        assert_eq!(grid_pl.p1, [16.0, 64.0]);
+
+        let slider_rect = rt.widget_rect(102).expect("vertical slider rect");
+        assert!(slider_rect.height() >= 160.0);
+        assert!(slider_rect.width() < slider_rect.height());
+
+        // 点击垂直滑块顶部应将值设为 max (100.0)。
+        let top_click = Vec2::new(slider_rect.center().x, slider_rect.origin.y + 0.5);
+        let _ = rt.pointer_move(top_click);
+        let _ = rt.pointer_down(top_click, PointerButton::Left);
+        assert!((rt.context().slider_value(102).unwrap_or(0.0) - 100.0).abs() < 1.0);
     }
 }

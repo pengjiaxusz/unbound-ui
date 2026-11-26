@@ -35,6 +35,7 @@ fn main() {
         "docking_overlay",
         "ergonomics",
         "primitive",
+        "procedural_grid",
         "shell",
         "slot_fixture",
         "title_bar",
