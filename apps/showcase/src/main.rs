@@ -690,7 +690,8 @@ fn cursor_icon(kind: CursorKind) -> CursorIcon {
         CursorKind::ResizeNorthWestSouthEast => Icon::NwseResize,
         CursorKind::ResizeNorthEastSouthWest => Icon::NeswResize,
         CursorKind::NotAllowed => Icon::NotAllowed,
-        CursorKind::Default | CursorKind::Custom(_) => Icon::Default,
+        CursorKind::Default => Icon::Default,
+        CursorKind::Custom(id) => Icon::Custom(id),
     }
 }
 

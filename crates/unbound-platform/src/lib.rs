@@ -24,6 +24,7 @@ pub mod a11y_platform;
 pub mod a11y_win32;
 pub mod backend;
 pub mod clipboard;
+pub mod custom_cursor;
 pub mod dialogs;
 pub mod floating;
 pub mod latency;
@@ -64,6 +65,10 @@ pub use clipboard::{
     decode_gnome_copied_files, encode_gnome_copied_files, is_headless_clipboard_loopback_enabled,
     set_headless_clipboard_loopback, ClipboardError, ClipboardFileDropEffect, ClipboardProvider,
     MemoryClipboard, SystemClipboard, GNOME_COPIED_FILES_MIME, MAX_CLIPBOARD_BYTES,
+};
+pub use custom_cursor::{
+    lookup_custom_cursor_bitmap, register_custom_cursor, unregister_custom_cursor,
+    CustomCursorBitmap, CustomCursorRegistry, MAX_CUSTOM_CURSORS, MAX_CUSTOM_CURSOR_SIZE,
 };
 pub use dialogs::{
     open_file, open_file_async, open_files, pick_folder, pick_folder_async, save_file,
@@ -123,6 +128,7 @@ pub use tray::{
     TaskbarProgressState, TrayEvent, TrayIconState, TrayMenuItem, TrayNotificationSeverity,
     WM_APP_TRAY,
 };
+pub use unbound_input::CustomCursorId;
 pub use wayland_logic::{
     compute_wayland_ime_cursor_rect, compute_wayland_popup_placement, csd_resize_direction_at,
     cursor_for_resize_direction, primary_output_metrics, set_primary_output_metrics,

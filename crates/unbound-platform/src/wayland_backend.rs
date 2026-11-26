@@ -13,7 +13,7 @@ use core::ptr::NonNull;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -41,6 +41,7 @@ use smithay_client_toolkit::shell::xdg::window::{
 };
 use smithay_client_toolkit::shell::xdg::{XdgShell, XdgSurface};
 use smithay_client_toolkit::shell::WaylandSurface;
+use smithay_client_toolkit::shm::slot::{Buffer as ShmBuffer, SlotPool};
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
 use smithay_client_toolkit::{
     delegate_compositor, delegate_data_device, delegate_output, delegate_pointer,
@@ -50,7 +51,7 @@ use smithay_client_toolkit::{
 use wayland_client::globals::registry_queue_init;
 use wayland_client::protocol::{
     wl_data_device_manager::DndAction, wl_data_source::WlDataSource, wl_keyboard, wl_output,
-    wl_pointer, wl_seat, wl_surface,
+    wl_pointer, wl_seat, wl_shm, wl_surface,
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::wp::text_input::zv3::client::{
@@ -308,7 +309,7 @@ struct WaylandWindowShared {
     visible: AtomicBool,
     destroyed: AtomicBool,
     redraw_requested: AtomicBool,
-    cursor: AtomicU8,
+    cursor: AtomicU32,
     frame_metrics: Mutex<Option<Arc<FrameHitMetrics>>>,
     cmd_tx: Mutex<mpsc::Sender<WaylandCommand>>,
     wake_signal: WakeSignal,
@@ -341,7 +342,7 @@ impl WaylandWindowHandle {
     }
 
     pub(crate) fn current_cursor(&self) -> CursorIcon {
-        CursorIcon::from_u8(self.shared.cursor.load(Ordering::Acquire))
+        CursorIcon::from_u32(self.shared.cursor.load(Ordering::Acquire))
     }
 
     pub(crate) fn inner_size(&self) -> PhysicalSize {
@@ -473,7 +474,7 @@ impl WaylandWindowHandle {
     }
 
     pub(crate) fn set_cursor(&self, cursor: CursorIcon) {
-        self.shared.cursor.store(cursor as u8, Ordering::Release);
+        self.shared.cursor.store(cursor.to_u32(), Ordering::Release);
         self.send(WaylandCommand::SetCursor { cursor });
     }
 
@@ -627,7 +628,7 @@ impl WaylandClipboardBackend for WaylandClipboardBridge {
 const fn to_sctk_cursor(icon: CursorIcon) -> smithay_client_toolkit::seat::pointer::CursorIcon {
     use smithay_client_toolkit::seat::pointer::CursorIcon as SctkIcon;
     match icon {
-        CursorIcon::Default => SctkIcon::Default,
+        CursorIcon::Default | CursorIcon::Custom(_) => SctkIcon::Default,
         CursorIcon::Pointer => SctkIcon::Pointer,
         CursorIcon::Text => SctkIcon::Text,
         CursorIcon::Grab => SctkIcon::Grab,
@@ -747,6 +748,10 @@ struct WaylandState {
     focused_surface_id: Option<u32>,
     pointer_surface_id: Option<u32>,
     last_pointer_serial: u32,
+    last_pointer_enter_serial: Option<u32>,
+    custom_cursor_surface: Option<wl_surface::WlSurface>,
+    custom_cursor_pool: Option<SlotPool>,
+    custom_cursor_buffer: Option<ShmBuffer>,
     last_key_serial: u32,
     next_window_id: isize,
 
@@ -770,6 +775,66 @@ impl WaylandState {
     fn window_by_surface_mut(&mut self, surface_id: u32) -> Option<&mut ToplevelEntry> {
         let win_id = *self.surface_to_window.get(&surface_id)?;
         self.window_by_id_mut(win_id)
+    }
+
+    /// 向当前 `wl_pointer` 下发光标样式；自定义位图光标走 `wl_shm` 表面，失败时安全回退至默认光标。
+    fn apply_cursor(&mut self, conn: &Connection, qh: &QueueHandle<Self>, cursor: CursorIcon) {
+        if let CursorIcon::Custom(id) = cursor {
+            if let (Some(bitmap), Some(serial)) = (
+                crate::custom_cursor::lookup_custom_cursor_bitmap(unbound_input::CustomCursorId(
+                    id,
+                )),
+                self.last_pointer_enter_serial,
+            ) {
+                if let Some(pointer) = &self.themed_pointer {
+                    let width = bitmap.width as i32;
+                    let height = bitmap.height as i32;
+                    let stride = (bitmap.width as usize) * 4;
+                    let byte_len = stride * (bitmap.height as usize);
+                    if let Ok(mut pool) = SlotPool::new(byte_len.max(4096), &self.shm) {
+                        if let Ok((buffer, canvas)) = pool.create_buffer(
+                            width,
+                            height,
+                            stride as i32,
+                            wl_shm::Format::Argb8888,
+                        ) {
+                            for (src_px, dst_px) in
+                                bitmap.rgba.chunks_exact(4).zip(canvas.chunks_exact_mut(4))
+                            {
+                                let a = u16::from(src_px[3]);
+                                let r = ((u16::from(src_px[0]) * a + 127) / 255) as u8;
+                                let g = ((u16::from(src_px[1]) * a + 127) / 255) as u8;
+                                let b = ((u16::from(src_px[2]) * a + 127) / 255) as u8;
+                                dst_px[0] = b;
+                                dst_px[1] = g;
+                                dst_px[2] = r;
+                                dst_px[3] = src_px[3];
+                            }
+                            let surface = self
+                                .custom_cursor_surface
+                                .get_or_insert_with(|| self.compositor_state.create_surface(qh));
+                            if buffer.attach_to(surface).is_ok() {
+                                surface.damage_buffer(0, 0, width, height);
+                                surface.commit();
+                                pointer.pointer().set_cursor(
+                                    serial,
+                                    Some(surface),
+                                    bitmap.hotspot_x as i32,
+                                    bitmap.hotspot_y as i32,
+                                );
+                                self.custom_cursor_buffer = Some(buffer);
+                                self.custom_cursor_pool = Some(pool);
+                                let _ = conn.flush();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(pointer) = &self.themed_pointer {
+            let _ = pointer.set_cursor(conn, to_sctk_cursor(cursor));
+        }
     }
 
     fn create_toplevel(
@@ -828,7 +893,7 @@ impl WaylandState {
             visible: AtomicBool::new(config.visible),
             destroyed: AtomicBool::new(false),
             redraw_requested: AtomicBool::new(true),
-            cursor: AtomicU8::new(CursorIcon::Default as u8),
+            cursor: AtomicU32::new(CursorIcon::Default.to_u32()),
             frame_metrics: Mutex::new(None),
             cmd_tx: Mutex::new(self.cmd_tx.clone()),
             wake_signal: self.wake_signal.clone(),
@@ -976,7 +1041,7 @@ impl WaylandState {
             visible: AtomicBool::new(true),
             destroyed: AtomicBool::new(false),
             redraw_requested: AtomicBool::new(true),
-            cursor: AtomicU8::new(CursorIcon::Default as u8),
+            cursor: AtomicU32::new(CursorIcon::Default.to_u32()),
             frame_metrics: Mutex::new(None),
             cmd_tx: Mutex::new(self.cmd_tx.clone()),
             wake_signal: self.wake_signal.clone(),
@@ -1093,9 +1158,7 @@ impl WaylandState {
                 }
             }
             WaylandCommand::SetCursor { cursor } => {
-                if let Some(pointer) = &self.themed_pointer {
-                    let _ = pointer.set_cursor(conn, to_sctk_cursor(cursor));
-                }
+                self.apply_cursor(conn, qh, cursor);
             }
             WaylandCommand::DragWindow { id } => {
                 let serial = self.last_pointer_serial;
@@ -1518,6 +1581,10 @@ impl SeatHandler for WaylandState {
     ) {
         if capability == Capability::Pointer {
             self.themed_pointer = None;
+            self.last_pointer_enter_serial = None;
+            self.custom_cursor_buffer = None;
+            self.custom_cursor_pool = None;
+            self.custom_cursor_surface = None;
         }
         if capability == Capability::Keyboard {
             if let Some(kb) = self.keyboard.take() {
@@ -1534,7 +1601,7 @@ impl PointerHandler for WaylandState {
     fn pointer_frame(
         &mut self,
         conn: &Connection,
-        _qh: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
@@ -1550,6 +1617,7 @@ impl PointerHandler for WaylandState {
                         PointerEventKind::Enter { serial } => {
                             self.pointer_surface_id = Some(proto_id);
                             self.last_pointer_serial = serial;
+                            self.last_pointer_enter_serial = Some(serial);
                             push_coalesced_event(
                                 &mut pentry.pending_events,
                                 PlatformEvent::CursorMoved {
@@ -1607,6 +1675,7 @@ impl PointerHandler for WaylandState {
                 PointerEventKind::Enter { serial } => {
                     self.pointer_surface_id = Some(proto_id);
                     self.last_pointer_serial = serial;
+                    self.last_pointer_enter_serial = Some(serial);
                 }
                 PointerEventKind::Leave { .. } => {
                     if self.pointer_surface_id == Some(proto_id) {
@@ -1781,8 +1850,8 @@ impl PointerHandler for WaylandState {
             } else if clear_active_resize {
                 self.active_resize = None;
             }
-            if let (Some(edge_cursor), Some(ptr)) = (pending_cursor, &self.themed_pointer) {
-                let _ = ptr.set_cursor(conn, to_sctk_cursor(edge_cursor));
+            if let Some(edge_cursor) = pending_cursor {
+                self.apply_cursor(conn, qh, edge_cursor);
             }
         }
     }
@@ -2350,6 +2419,10 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
         focused_surface_id: None,
         pointer_surface_id: None,
         last_pointer_serial: 0,
+        last_pointer_enter_serial: None,
+        custom_cursor_surface: None,
+        custom_cursor_pool: None,
+        custom_cursor_buffer: None,
         last_key_serial: 0,
         next_window_id: 1,
         windows: Vec::new(),
