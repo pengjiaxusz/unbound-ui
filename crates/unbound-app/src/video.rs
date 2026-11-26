@@ -6,7 +6,7 @@
 use rustc_hash::FxHashMap;
 
 use unbound_asset::{LatestFrameMailbox, VideoFrameError, VideoFramePayload, VideoPixelFormat};
-use unbound_gpu::VideoUploadTier;
+use unbound_gpu::{ImageChannelMask, VideoUploadTier};
 use unbound_math::{Rect, Vec2};
 use unbound_theme::Token;
 use unbound_widgets::ObjectFit;
@@ -143,6 +143,10 @@ pub struct VideoSurfaceDesc {
     pub alt: Option<String>,
     /// 绘制深度键。
     pub z: u16,
+    /// RGBA 通道隔离掩码（默认 [`ImageChannelMask::Rgba`]）。
+    pub channel_mask: ImageChannelMask,
+    /// 是否启用源纹理 Alpha 混合；为 `false` 时强制以不透明方式预览（默认 `true`）。
+    pub enable_alpha: bool,
     /// 是否接受指针命中交互（默认 `false`，不抢占焦点）。
     pub interactive: bool,
 }
@@ -164,6 +168,8 @@ impl VideoSurfaceDesc {
             placeholder_color: Token::SURFACE_SUNKEN,
             alt: None,
             z: 690,
+            channel_mask: ImageChannelMask::Rgba,
+            enable_alpha: true,
             interactive: false,
         }
     }
@@ -237,6 +243,32 @@ impl VideoSurfaceDesc {
     pub const fn with_z(mut self, z: u16) -> Self {
         self.z = z;
         self
+    }
+
+    /// 设置 RGBA 通道隔离掩码。
+    #[must_use]
+    pub const fn with_channel_mask(mut self, mask: ImageChannelMask) -> Self {
+        self.channel_mask = mask;
+        self
+    }
+
+    /// 设置 RGBA 通道隔离掩码（无前缀别名）。
+    #[must_use]
+    pub const fn channel_mask(self, mask: ImageChannelMask) -> Self {
+        self.with_channel_mask(mask)
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合。
+    #[must_use]
+    pub const fn with_enable_alpha(mut self, enable: bool) -> Self {
+        self.enable_alpha = enable;
+        self
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合（无前缀别名）。
+    #[must_use]
+    pub const fn enable_alpha(self, enable: bool) -> Self {
+        self.with_enable_alpha(enable)
     }
 
     /// 设置是否允许指针交互命中。

@@ -7,6 +7,7 @@
 use accesskit::Role;
 use unbound_a11y::A11yNode;
 use unbound_asset::AssetId;
+pub use unbound_gpu::data::ImageChannelMask;
 use unbound_gpu::data::{GpuPayload, PrimType, SubElement};
 use unbound_input::{HitRegion, Shape};
 use unbound_math::{Rect, Vec2};
@@ -205,6 +206,10 @@ pub struct ImageDesc {
     pub alt: String,
     /// 绘制顺序键。
     pub z: u16,
+    /// RGBA 通道隔离掩码（默认 [`ImageChannelMask::Rgba`]）。
+    pub channel_mask: ImageChannelMask,
+    /// 是否启用源纹理 Alpha 混合；为 `false` 时以不透明方式预览（默认 `true`）。
+    pub enable_alpha: bool,
     /// 图像是否接受点击。
     pub interactive: bool,
 }
@@ -229,6 +234,8 @@ impl ImageDesc {
             tint: Token::NONE,
             alt: String::new(),
             z: 690,
+            channel_mask: ImageChannelMask::Rgba,
+            enable_alpha: true,
             interactive: false,
         }
     }
@@ -284,6 +291,32 @@ impl ImageDesc {
     pub fn with_asset(mut self, id: AssetId) -> Self {
         self.source = ImageSource::Asset(id);
         self
+    }
+
+    /// 设置 RGBA 通道隔离掩码。
+    #[must_use]
+    pub fn with_channel_mask(mut self, mask: ImageChannelMask) -> Self {
+        self.channel_mask = mask;
+        self
+    }
+
+    /// 设置 RGBA 通道隔离掩码（无前缀别名）。
+    #[must_use]
+    pub fn channel_mask(self, mask: ImageChannelMask) -> Self {
+        self.with_channel_mask(mask)
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合。
+    #[must_use]
+    pub fn with_enable_alpha(mut self, enable: bool) -> Self {
+        self.enable_alpha = enable;
+        self
+    }
+
+    /// 设置是否启用源纹理 Alpha 混合（无前缀别名）。
+    #[must_use]
+    pub fn enable_alpha(self, enable: bool) -> Self {
+        self.with_enable_alpha(enable)
     }
 }
 
@@ -402,15 +435,12 @@ fn emit_image_inner(
             );
             primitive.border_token_or_tex = image.layer;
             primitives.push(primitive);
-            payloads.push(GpuPayload {
-                p0: [uv.origin.x, uv.origin.y],
-                p1: [uv.max().x, uv.max().y],
-                p2: [0.0, 0.0],
-                line_width: 0.0,
-                extra: 0,
-                flags: 0,
-                _reserved: [0; 3],
-            });
+            payloads.push(GpuPayload::image_with_channel(
+                [uv.origin.x, uv.origin.y],
+                [uv.max().x, uv.max().y],
+                desc.channel_mask,
+                desc.enable_alpha,
+            ));
             fit.rect
         }
         None => {
@@ -660,6 +690,8 @@ pub fn emit_icon(node: u64, desc: &IconDesc, state: ControlState) -> WidgetOutpu
         tint: desc.tint,
         alt: desc.label.clone(),
         z: desc.z,
+        channel_mask: ImageChannelMask::Rgba,
+        enable_alpha: true,
         interactive: false,
     };
     emit_image(node, &image, state)
@@ -1061,5 +1093,19 @@ mod tests {
             let segs = pack.resolve_segments(icon, Vec2::ZERO, Vec2::new(24.0, 24.0));
             assert!(!segs.is_empty(), "icon {icon:?} produced no segments");
         }
+    }
+
+    #[test]
+    fn image_channel_mask_and_enable_alpha_encode_into_payload_flags() {
+        let desc = ImageDesc::new(box_rect(), Vec2::new(64.0, 64.0), 3)
+            .with_channel_mask(ImageChannelMask::Alpha)
+            .with_enable_alpha(false);
+        let output = emit_image(7, &desc, ControlState::default());
+        assert_eq!(output.primitives.len(), 1);
+        assert_eq!(output.payloads.len(), 1);
+        assert_eq!(
+            output.payloads[0].flags,
+            (ImageChannelMask::Alpha as u32) | unbound_gpu::data::IMAGE_FLAG_DISABLE_ALPHA
+        );
     }
 }

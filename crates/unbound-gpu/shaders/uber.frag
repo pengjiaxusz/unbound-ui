@@ -183,14 +183,76 @@ void main() {
                     tint = vec3(1.0);
                     fill.a = 1.0;
                 }
-                texel = srgb_to_linear(t.rgb) * tint;
-                tex_a = t.a;
+                uint ch_mask = pl.flags & 0x7u;
+                bool disable_alpha = (pl.flags & 8u) != 0u;
+                vec3 lin = srgb_to_linear(t.rgb);
+                if (ch_mask == 1u) {
+                    // 仅隔离 R 通道并灰度广播。
+                    texel = vec3(lin.r) * tint;
+                    tex_a = 1.0;
+                } else if (ch_mask == 2u) {
+                    // 仅隔离 G 通道并灰度广播。
+                    texel = vec3(lin.g) * tint;
+                    tex_a = 1.0;
+                } else if (ch_mask == 3u) {
+                    // 仅隔离 B 通道并灰度广播。
+                    texel = vec3(lin.b) * tint;
+                    tex_a = 1.0;
+                } else if (ch_mask == 4u) {
+                    // 仅隔离 Alpha 通道，经 sRGB 转线性后灰度显示。
+                    texel = srgb_to_linear(vec3(t.a)) * tint;
+                    tex_a = 1.0;
+                } else if (ch_mask == 5u) {
+                    // Rec.709 线性感知亮度灰度。
+                    float luma = dot(lin, vec3(0.2126, 0.7152, 0.0722));
+                    texel = vec3(luma) * tint;
+                    tex_a = disable_alpha ? 1.0 : t.a;
+                } else {
+                    // 标准 RGBA 输出（可选禁用源纹理 Alpha）。
+                    texel = lin * tint;
+                    tex_a = disable_alpha ? 1.0 : t.a;
+                }
             } else {
                 texel = t.rgb;
                 tex_a = t.a;
             }
         }
         surface = vec4(texel, tex_a * fill.a * self_alpha);
+    } else if (prim_type == PRIM_PROCEDURAL_GRID) {
+        // 单图元解析抗锯齿程序化网格：先分别计算次/主两级覆盖率，
+        // 再在线性预乘空间执行主网格覆盖次网格的 Over 合成，最后还原为非预乘 RGB 供后续统一混合。
+        Payload pl = PayloadBuf(pc.payloads_bda).p[v_misc.x];
+        vec2 gp = v_local - pl.p0;
+        vec2 fw = max(fwidth(gp), vec2(1e-4));
+
+        float minor_cov = 0.0;
+        if (pl.p1.x > 0.0 && pl.p2.x > 0.0) {
+            float s = pl.p1.x;
+            float lw = pl.p2.x;
+            vec2 d = abs(mod(gp + 0.5 * s, s) - 0.5 * s);
+            vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
+            minor_cov = max(cov.x, cov.y);
+        }
+
+        float major_cov = 0.0;
+        if (pl.p1.y > 0.0 && pl.p2.y > 0.0) {
+            float s = pl.p1.y;
+            float lw = pl.p2.y;
+            vec2 d = abs(mod(gp + 0.5 * s, s) - 0.5 * s);
+            vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
+            major_cov = max(cov.x, cov.y);
+        }
+
+        vec4 minor_c = unpackUnorm4x8(pl.extra);
+        vec4 major_c = unpackUnorm4x8(pl.flags);
+        vec3 minor_rgb = srgb_to_linear(minor_c.rgb);
+        vec3 major_rgb = srgb_to_linear(major_c.rgb);
+        float minor_a = minor_c.a * minor_cov;
+        float major_a = major_c.a * major_cov;
+        float grid_a = major_a + minor_a * (1.0 - major_a);
+        vec3 grid_premul = major_rgb * major_a + minor_rgb * (minor_a * (1.0 - major_a));
+        vec3 grid_rgb = grid_a > 1e-5 ? grid_premul / grid_a : vec3(0.0);
+        surface = vec4(grid_rgb, grid_a * self_alpha);
     } else if (prim_type == PRIM_CURVE) {
         Payload pl = PayloadBuf(pc.payloads_bda).p[v_misc.x];
         float d = sd_quadratic_bezier(v_local, pl.p0, pl.p1, pl.p2);

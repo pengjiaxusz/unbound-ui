@@ -6429,4 +6429,150 @@ mod tests {
 
         renderer.destroy();
     }
+
+    /// 验证 `PrimType::Image` 的单通道 R/G/B/A/Luma 隔离与 `enable_alpha = false` 离屏回读。
+    #[test]
+    fn image_channel_mask_and_disable_alpha_render_readback() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+        let mut tex_rgba = Vec::with_capacity(4 * 4 * 4);
+        for _ in 0..16 {
+            tex_rgba.extend_from_slice(&[200, 100, 40, 64]);
+        }
+        let slot = renderer
+            .upload_external_rgba8(ManagedExternalTextureDesc::new(4, 4, true), &tex_rgba)
+            .expect("upload external rgba8");
+
+        let center = ((32 * 64 + 32) * 4) as usize;
+        let mut render_mode =
+            |gen: u64, mask: crate::data::ImageChannelMask, enable_alpha: bool| {
+                let prims = [image_quad(0.0, 0.0, 64.0, 64.0, slot, 1000)];
+                let payloads = [GpuPayload::image_with_channel(
+                    [0.0, 0.0],
+                    [1.0, 1.0],
+                    mask,
+                    enable_alpha,
+                )];
+                let scene = SceneUpload {
+                    payloads: &payloads,
+                    ..scene_at(&prims, &[], gen, (64.0, 64.0))
+                };
+                renderer.render(&scene).expect("render image mask");
+                let px = renderer.read_pixels().expect("read pixels");
+                // 离屏颜色附件为 `B8G8R8A8_SRGB`：字节序为 `[B, G, R, A]`。
+                [px[center], px[center + 1], px[center + 2], px[center + 3]]
+            };
+
+        let r_px = render_mode(1, crate::data::ImageChannelMask::Red, true);
+        assert!(
+            r_px[0].abs_diff(200) <= 3 && r_px[1].abs_diff(200) <= 3 && r_px[2].abs_diff(200) <= 3
+        );
+
+        let g_px = render_mode(2, crate::data::ImageChannelMask::Green, true);
+        assert!(
+            g_px[0].abs_diff(100) <= 3 && g_px[1].abs_diff(100) <= 3 && g_px[2].abs_diff(100) <= 3
+        );
+
+        let b_px = render_mode(3, crate::data::ImageChannelMask::Blue, true);
+        assert!(
+            b_px[0].abs_diff(40) <= 3 && b_px[1].abs_diff(40) <= 3 && b_px[2].abs_diff(40) <= 3
+        );
+
+        let a_px = render_mode(4, crate::data::ImageChannelMask::Alpha, true);
+        assert!(
+            a_px[0].abs_diff(64) <= 3 && a_px[1].abs_diff(64) <= 3 && a_px[2].abs_diff(64) <= 3
+        );
+
+        let luma_px = render_mode(5, crate::data::ImageChannelMask::Luma, false);
+        assert!(luma_px[0].abs_diff(luma_px[1]) <= 2 && luma_px[1].abs_diff(luma_px[2]) <= 2);
+        assert!((110..=165).contains(&luma_px[2]));
+
+        let opaque_rgba = render_mode(6, crate::data::ImageChannelMask::Rgba, false);
+        assert!(
+            opaque_rgba[2].abs_diff(200) <= 3
+                && opaque_rgba[1].abs_diff(100) <= 3
+                && opaque_rgba[0].abs_diff(40) <= 3
+        );
+
+        let blended_rgba = render_mode(7, crate::data::ImageChannelMask::Rgba, true);
+        assert!(blended_rgba[0].abs_diff(opaque_rgba[0]) >= 30);
+
+        renderer.destroy();
+    }
+
+    /// 验证 `PrimType::ProceduralGrid` 单图元渲染次/主两级解析抗锯齿网格线。
+    #[test]
+    fn procedural_grid_renders_minor_and_major_lines_in_single_primitive() {
+        let _guard = crate::device::gpu_test_guard();
+        let Some(gpu) = crate::device::test_device() else {
+            return;
+        };
+        let mut renderer = Renderer::new(gpu, 64, 64).expect("renderer");
+
+        renderer
+            .render(&scene_at(&[], &[], 1, (64.0, 64.0)))
+            .expect("render empty baseline");
+        let baseline = renderer.read_pixels().expect("read baseline");
+
+        let grid_prim = GpuPrimitiveInstance {
+            chunk_id: [0, 0],
+            local_pos: [0.0, 0.0],
+            size: [64.0, 64.0],
+            corner_radii: [0, 0, 0, 0],
+            border_width: 0,
+            shadow_blur: 0,
+            transform_idx: 0,
+            clip_idx: crate::data::CLIP_NONE,
+            fill_token_or_uv: u32::from(unbound_theme::Token::NONE.raw()),
+            border_token_or_tex: 0,
+            prim_type_and_flags: GpuPrimitiveInstance::pack_type(
+                crate::data::PrimType::ProceduralGrid,
+                crate::data::BlendMode::Normal,
+                PrimFlags::with_sub(SubElement::Background, PrimFlags::EMPTY).bits(),
+            ),
+            z_and_opacity: GpuPrimitiveInstance::pack_z_opacity(1000, 1.0),
+            extra_payload_idx: 0,
+        };
+        let payloads = [GpuPayload::procedural_grid(
+            [0.0, 0.0],
+            16.0,
+            32.0,
+            2.0,
+            2.0,
+            [0, 220, 0, 255],
+            [220, 0, 0, 255],
+        )];
+        let prims = [grid_prim];
+        let scene = SceneUpload {
+            payloads: &payloads,
+            ..scene_at(&prims, &[], 2, (64.0, 64.0))
+        };
+        renderer.render(&scene).expect("render procedural grid");
+        let px = renderer.read_pixels().expect("read grid pixels");
+
+        let sample = |buf: &[u8], x: usize, y: usize| {
+            let i = (y * 64 + x) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+
+        // 主网格交叉点 (32, 32) 应呈现红色主线（BGRA 中索引 2 为 R）。
+        let major_px = sample(&px, 32, 32);
+        assert!(major_px[2] >= 180 && major_px[1] <= 40 && major_px[0] <= 40);
+
+        // 次网格竖线 (16, 8) 应呈现绿色次线（BGRA 中索引 1 为 G）。
+        let minor_px = sample(&px, 16, 8);
+        assert!(minor_px[1] >= 180 && minor_px[2] <= 40 && minor_px[0] <= 40);
+
+        // 网格单元内部 (8, 8) 不应受网格线影响，与空背景基准一致。
+        let empty_px = sample(&px, 8, 8);
+        let base_px = sample(&baseline, 8, 8);
+        for c in 0..4 {
+            assert!(empty_px[c].abs_diff(base_px[c]) <= 2);
+        }
+
+        renderer.destroy();
+    }
 }

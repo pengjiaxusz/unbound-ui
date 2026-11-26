@@ -41,7 +41,10 @@ use crate::schema_form::{
 };
 use crate::select::{emit_select_with_glyphs, SelectDesc, SelectState};
 use crate::shortcut_bar::{emit_shortcut_bar, ShortcutBarDesc};
-use crate::slider::{emit_slider, value_from_pointer, Orientation, SliderDesc, SliderTokens};
+use crate::slider::{
+    emit_slider, reduce_slider_key, value_from_pointer, Orientation, SliderDesc, SliderKey,
+    SliderTokens,
+};
 use crate::split_button::{
     emit_split_button_with_glyphs, SplitButtonDesc, SplitButtonState, DROPDOWN_WIDTH,
 };
@@ -1061,17 +1064,35 @@ impl UiWidget for SliderDesc {
     }
 
     fn intrinsic_size(&self, _text_ctx: &mut TextCtx<'_>) -> Vec2 {
-        // 无标签滑块与按钮、输入框共享 32px 标准交互行高；
-        // 非空标签滑块扩展至 44px（顶部 16px 标签区 + 4px 间距 + 底部 24px 轨道与拇指区），避免标签与拇指重叠。
-        let min_height = if self.label.is_empty() {
-            unbound_theme::typography::geometry::INPUT_HEIGHT
-        } else {
-            crate::slider::SLIDER_LABELED_HEIGHT
-        };
-        Vec2::new(
-            self.rect.width().max(160.0),
-            self.rect.height().max(min_height),
-        )
+        match self.orientation {
+            Orientation::Horizontal => {
+                // 无标签滑块与按钮、输入框共享 32px 标准交互行高；
+                // 非空标签滑块扩展至 44px（顶部 16px 标签区 + 4px 间距 + 底部 24px 轨道与拇指区），避免标签与拇指重叠。
+                let min_height = if self.label.is_empty() {
+                    unbound_theme::typography::geometry::INPUT_HEIGHT
+                } else {
+                    crate::slider::SLIDER_LABELED_HEIGHT
+                };
+                Vec2::new(
+                    self.rect.width().max(160.0),
+                    self.rect.height().max(min_height),
+                )
+            }
+            Orientation::Vertical => {
+                // 垂直滑块返回窄高固有尺寸；非空标签时额外在顶部叠加标签区高度。
+                let min_width =
+                    unbound_theme::typography::geometry::INPUT_HEIGHT.max(self.thumb_size);
+                let min_height = if self.label.is_empty() {
+                    160.0
+                } else {
+                    160.0 + crate::slider::SLIDER_LABEL_AREA_HEIGHT
+                };
+                Vec2::new(
+                    self.rect.width().max(min_width),
+                    self.rect.height().max(min_height),
+                )
+            }
+        }
     }
 
     fn reduce(&self, state: &mut Self::State, rect: Rect, event: &WidgetInputEvent) -> bool {
@@ -1080,6 +1101,29 @@ impl UiWidget for SliderDesc {
                 let mut desc = self.clone();
                 desc.rect = rect;
                 *state = value_from_pointer(*pos, &desc);
+                true
+            }
+            WidgetInputEvent::KeyDown(chord) => {
+                let key = match chord.key {
+                    KeyName::Named("ArrowLeft") => SliderKey::Left,
+                    KeyName::Named("ArrowRight") => SliderKey::Right,
+                    KeyName::Named("ArrowUp") => SliderKey::Up,
+                    KeyName::Named("ArrowDown") => SliderKey::Down,
+                    KeyName::Named("PageUp") => SliderKey::PageUp,
+                    KeyName::Named("PageDown") => SliderKey::PageDown,
+                    KeyName::Named("Home") => SliderKey::Home,
+                    KeyName::Named("End") => SliderKey::End,
+                    _ => return false,
+                };
+                let mut desc = self.clone();
+                desc.rect = rect;
+                desc.value = *state;
+                let next = reduce_slider_key(&desc, key);
+                *state = if desc.snap_points.is_empty() {
+                    next
+                } else {
+                    desc.snap_value(next)
+                };
                 true
             }
             _ => false,

@@ -56,10 +56,10 @@ pub use custom_pass::{
     ViewportReadback, ViewportRenderPassDesc, MAX_VIEWPORT_RENDER_SCALE, MIN_VIEWPORT_RENDER_SCALE,
 };
 pub use data::{
-    BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
-    GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, PassLayer, PrimFlags, PrimType,
-    PushConstants, SortedEntry, SubElement, TransformFlags, CLIP_NONE, PRIMITIVE_STRIDE,
-    TRANSFORM_ANIMATED_BIT,
+    pack_rgba8, BlendMode, DrawIndirectCommand, FramePushConstants, GpuClipNode, GpuPayload,
+    GpuPrimitiveInstance, GpuScatterPatch, GpuTransform, ImageChannelMask, PassLayer, PrimFlags,
+    PrimType, PushConstants, SortedEntry, SubElement, TransformFlags, CLIP_NONE,
+    IMAGE_FLAG_DISABLE_ALPHA, PRIMITIVE_STRIDE, TRANSFORM_ANIMATED_BIT,
 };
 pub use debug::{
     is_device_lost, recover_with, RecoveryError, RecoveryPolicy, RenderDoc, ValidationCounter,

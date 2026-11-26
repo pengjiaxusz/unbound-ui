@@ -188,6 +188,19 @@ pub enum ChannelMask {
     Luminance = 6,
 }
 
+impl From<crate::data::ImageChannelMask> for ChannelMask {
+    fn from(mask: crate::data::ImageChannelMask) -> Self {
+        match mask {
+            crate::data::ImageChannelMask::Rgba => Self::Rgba,
+            crate::data::ImageChannelMask::Red => Self::Red,
+            crate::data::ImageChannelMask::Green => Self::Green,
+            crate::data::ImageChannelMask::Blue => Self::Blue,
+            crate::data::ImageChannelMask::Alpha => Self::Alpha,
+            crate::data::ImageChannelMask::Luma => Self::Luminance,
+        }
+    }
+}
+
 /// 2D 纹理通道检视器参数。
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct TextureInspectorParams {
