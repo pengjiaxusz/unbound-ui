@@ -1095,13 +1095,29 @@ impl<A: Application> MultiWindowConfig<A> {
     }
 }
 
-/// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
-#[derive(Clone, Copy, Debug, Default)]
-struct FloatingLiveSync {
-    visible: Option<bool>,
-    topmost: Option<bool>,
-    click_through: Option<bool>,
-    outer_rect: Option<ScreenRect>,
+use unbound_platform::FloatingLiveSync;
+
+/// 待创建的原生窗口请求及其可选发起方元数据 `(requester_id, tag)`。
+#[derive(Clone, Debug)]
+struct PendingWindowRequest {
+    config: WindowConfig,
+    floating_origin: Option<(WindowId, u64)>,
+}
+
+impl PendingWindowRequest {
+    fn plain(config: WindowConfig) -> Self {
+        Self {
+            config,
+            floating_origin: None,
+        }
+    }
+
+    fn floating(config: WindowConfig, requester_id: WindowId, tag: u64) -> Self {
+        Self {
+            config,
+            floating_origin: Some((requester_id, tag)),
+        }
+    }
 }
 
 /// Physical screen-space geometry snapshot for a registered application window.
@@ -1212,12 +1228,13 @@ pub struct MultiWindowCoordinator<A: Application> {
     registry: WindowRegistry<WindowContext<A>>,
     shared_gpu: Option<Arc<Gpu>>,
     shared_atlases: Option<Arc<AtlasSet>>,
-    pending_windows: VecDeque<WindowConfig>,
-    pending_created_configs: VecDeque<WindowConfig>,
+    pending_windows: VecDeque<PendingWindowRequest>,
+    pending_created_configs: VecDeque<PendingWindowRequest>,
     pending_window_close_requests: Vec<WindowId>,
     pending_popup_syncs: Vec<(u64, PopupWindowConfig)>,
     pending_popup_closes: Vec<u64>,
     native_popup_owners: FxHashMap<WindowId, (u64, WindowId)>,
+    floating_window_owners: FxHashMap<WindowId, WindowId>,
     floating_host: FloatingHost,
     focused_window_id: Option<WindowId>,
     headless_work_areas: Vec<MonitorWorkArea>,
@@ -1252,6 +1269,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
             pending_popup_syncs: Vec::new(),
             pending_popup_closes: Vec::new(),
             native_popup_owners: FxHashMap::default(),
+            floating_window_owners: FxHashMap::default(),
             floating_host: FloatingHost::with_current_platform(),
             focused_window_id: None,
             headless_work_areas: Vec::new(),
@@ -1357,7 +1375,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
     /// 将新窗口打开请求压入待建窗队列。
     pub fn queue_window(&mut self, mut config: WindowConfig) {
         config.decorations = false;
-        self.pending_windows.push_back(config);
+        self.pending_windows
+            .push_back(PendingWindowRequest::plain(config));
     }
 
     fn default_fallback_work_area() -> MonitorWorkArea {
@@ -1927,7 +1946,8 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 (clamped_rect.x, clamped_rect.y),
             )
             .build();
-            self.pending_windows.push_back(ghost_cfg);
+            self.pending_windows
+                .push_back(PendingWindowRequest::plain(ghost_cfg));
             return;
         }
 
@@ -1956,8 +1976,9 @@ impl<A: Application> MultiWindowCoordinator<A> {
         if let Some(proxy) = self.floating_host.drag_proxy() {
             if proxy.spawn_pending {
                 let proxy_title = proxy.title.clone();
-                self.pending_windows
-                    .retain(|cfg| !(cfg.role == WindowRole::Ghost && cfg.title == proxy_title));
+                self.pending_windows.retain(|req| {
+                    !(req.config.role == WindowRole::Ghost && req.config.title == proxy_title)
+                });
             }
         }
         if let Some(ghost_id) = self.floating_host.end_drag_proxy() {
@@ -2134,12 +2155,23 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
         let _ = self.floating_host.unregister(id);
         self.pending_floating_live_syncs.remove(&id);
+        let owner_to_notify = self.floating_window_owners.remove(&id);
         if self.focused_window_id == Some(id) {
             self.focused_window_id = None;
         }
         let Some(mut ctx) = self.registry.remove(id) else {
             return false;
         };
+        if let Some(owner_id) = owner_to_notify {
+            if owner_id != id {
+                if let Some(owner_ctx) = self.registry.get_mut(owner_id) {
+                    let _ = owner_ctx
+                        .runtime
+                        .dispatch(crate::AppEvent::FloatingWindowClosed { id });
+                    owner_ctx.pacer.note_activity(Instant::now());
+                }
+            }
+        }
         for action in ctx.popup_host.close_for_owner(id) {
             if let unbound_platform::PopupSyncAction::Close { id: popup_id, .. } = action {
                 self.pending_popup_closes.push(popup_id);
@@ -2295,18 +2327,14 @@ impl<A: Application> MultiWindowCoordinator<A> {
         let Some(sync) = self.pending_floating_live_syncs.remove(&id) else {
             return;
         };
-        if let Some(visible) = sync.visible {
-            window.set_visible_no_activate(visible);
-        }
-        if let Some(topmost) = sync.topmost {
-            window.set_always_on_top(topmost);
-        }
-        if let Some(click_through) = sync.click_through {
-            window.set_click_through(click_through);
-        }
-        if let Some(rect) = sync.outer_rect {
-            window.set_outer_rect(rect);
-        }
+        unbound_platform::apply_floating_live_sync(window, sync);
+    }
+
+    /// 排空待跨窗口同步到目标原生窗口的运行期热更新状态（如唤醒/定位休眠 `Ghost` 窗）。
+    pub fn take_pending_floating_syncs(&mut self) -> Vec<(WindowId, FloatingLiveSync)> {
+        core::mem::take(&mut self.pending_floating_live_syncs)
+            .into_iter()
+            .collect()
     }
 
     /// 排空指定窗口上下文产出的命令（无头安全路径：不依赖原生 `Window` 句柄）。
@@ -2325,11 +2353,22 @@ impl<A: Application> MultiWindowCoordinator<A> {
             match cmd {
                 WindowCommand::OpenWindow(mut config) => {
                     config.decorations = false;
-                    self.pending_windows.push_back(config);
+                    self.pending_windows
+                        .push_back(PendingWindowRequest::plain(config));
                 }
                 WindowCommand::OpenFloatingWindow { config, placement } => {
                     let resolved = self.resolve_open_floating_config(config, placement);
-                    self.pending_windows.push_back(resolved);
+                    self.pending_windows
+                        .push_back(PendingWindowRequest::floating(resolved, source_id, 0));
+                }
+                WindowCommand::OpenFloatingWindowWithTag {
+                    config,
+                    placement,
+                    tag,
+                } => {
+                    let resolved = self.resolve_open_floating_config(config, placement);
+                    self.pending_windows
+                        .push_back(PendingWindowRequest::floating(resolved, source_id, tag));
                 }
                 WindowCommand::CloseWindow(target) | WindowCommand::CloseFloatingWindow(target) => {
                     to_close.push(target);
@@ -2748,11 +2787,23 @@ impl<A: Application> MultiWindowCoordinator<A> {
                     }
                     WindowCommand::OpenWindow(mut config) => {
                         config.decorations = false;
-                        self.pending_windows.push_back(config);
+                        self.pending_windows
+                            .push_back(PendingWindowRequest::plain(config));
                     }
                     WindowCommand::OpenFloatingWindow { config, placement } => {
                         deferred_floating
                             .push(WindowCommand::OpenFloatingWindow { config, placement });
+                    }
+                    WindowCommand::OpenFloatingWindowWithTag {
+                        config,
+                        placement,
+                        tag,
+                    } => {
+                        deferred_floating.push(WindowCommand::OpenFloatingWindowWithTag {
+                            config,
+                            placement,
+                            tag,
+                        });
                     }
                     WindowCommand::CloseWindow(target)
                     | WindowCommand::CloseFloatingWindow(target) => {
@@ -2865,7 +2916,33 @@ impl<A: Application> MultiWindowCoordinator<A> {
                         } else {
                             self.resolve_open_floating_config(config, placement)
                         };
-                        self.pending_windows.push_back(resolved);
+                        self.pending_windows
+                            .push_back(PendingWindowRequest::floating(resolved, id, 0));
+                    }
+                    WindowCommand::OpenFloatingWindowWithTag {
+                        config,
+                        placement,
+                        tag,
+                    } => {
+                        let resolved = if let Some(area) = &live_work_area {
+                            let mut c = config;
+                            c.decorations = false;
+                            c.surface_alpha = SurfaceAlpha::PreMultiplied;
+                            if let Some(strategy) = placement {
+                                let rect = resolve_floating_placement(&strategy, area.work_area);
+                                c.position = WindowPosition::Physical {
+                                    x: rect.x,
+                                    y: rect.y,
+                                };
+                                c.width = rect.width.max(1);
+                                c.height = rect.height.max(1);
+                            }
+                            c
+                        } else {
+                            self.resolve_open_floating_config(config, placement)
+                        };
+                        self.pending_windows
+                            .push_back(PendingWindowRequest::floating(resolved, id, tag));
                     }
                     WindowCommand::SnapFloatingWindow {
                         id: target,
@@ -3025,11 +3102,23 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             }
             return;
         }
-        let config = self
+        let req = self
             .pending_created_configs
             .pop_front()
-            .unwrap_or_else(|| self.primary_config.clone());
-        self.attach_window_gpu(state, window, config);
+            .unwrap_or_else(|| PendingWindowRequest::plain(self.primary_config.clone()));
+        let new_id = platform_window_id(window);
+        self.attach_window_gpu(state, window, req.config);
+        if let Some((requester_id, tag)) = req.floating_origin {
+            if self.registry.get(new_id).is_some() {
+                self.floating_window_owners.insert(new_id, requester_id);
+                if let Some(requester_ctx) = self.registry.get_mut(requester_id) {
+                    let _ = requester_ctx
+                        .runtime
+                        .dispatch(crate::AppEvent::FloatingWindowCreated { tag, id: new_id });
+                    requester_ctx.pacer.note_activity(Instant::now());
+                }
+            }
+        }
     }
 
     fn window_closing(&mut self, window: &NativeWindow) {
@@ -3051,13 +3140,18 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
     }
 
     fn take_window_request(&mut self) -> Option<WindowConfig> {
-        let config = self.pending_windows.pop_front()?;
-        self.pending_created_configs.push_back(config.clone());
+        let req = self.pending_windows.pop_front()?;
+        let config = req.config.clone();
+        self.pending_created_configs.push_back(req);
         Some(config)
     }
 
     fn take_window_close_requests(&mut self) -> Vec<WindowId> {
         core::mem::take(&mut self.pending_window_close_requests)
+    }
+
+    fn take_pending_floating_syncs(&mut self) -> Vec<(WindowId, FloatingLiveSync)> {
+        MultiWindowCoordinator::take_pending_floating_syncs(self)
     }
 
     fn take_popup_sync_requests(&mut self) -> Vec<(u64, PopupWindowConfig)> {
@@ -5031,5 +5125,125 @@ mod tests {
         assert!(coord.dispatch_close_requested(main_id));
         assert!(coord.registry().get(main_id).is_none());
         assert_eq!(coord.take_window_close_requests(), vec![main_id]);
+    }
+
+    #[test]
+    fn sleeping_ghost_window_cross_window_sync_drains_via_take_pending_floating_syncs() {
+        struct SyncTestApp {
+            events: Vec<crate::AppEvent>,
+        }
+        impl Application for SyncTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: crate::AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                self.events.push(event);
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let main_cfg = WindowConfig::default();
+        let mut coord =
+            MultiWindowCoordinator::new(main_cfg.clone(), |_: WindowId, _: &WindowConfig| {
+                SyncTestApp { events: Vec::new() }
+            });
+        let main_id = WindowId(1);
+        let ghost_id = WindowId(2);
+        coord.register_headless_window(main_id, main_cfg);
+
+        let mut ghost_cfg = WindowConfig::default().with_role(WindowRole::Ghost);
+        ghost_cfg.visible = false;
+        coord.register_headless_window(ghost_id, ghost_cfg);
+
+        // 主窗发出定位 + 唤醒指令：目标为休眠中的 Ghost 窗。
+        let target_rect = unbound_platform::ScreenRect::new(120, 80, 320, 200);
+        {
+            let main_ctx = coord.registry_mut().get_mut(main_id).unwrap();
+            main_ctx
+                .runtime
+                .context_mut()
+                .set_window_outer_rect(ghost_id, target_rect);
+            main_ctx
+                .runtime
+                .context_mut()
+                .set_window_visible_no_activate(ghost_id, true);
+        }
+        assert!(coord.route_window_commands(main_id).is_empty());
+
+        let syncs = coord.take_pending_floating_syncs();
+        assert_eq!(syncs.len(), 1);
+        assert_eq!(syncs[0].0, ghost_id);
+        assert_eq!(syncs[0].1.visible, Some(true));
+        assert_eq!(syncs[0].1.outer_rect, Some(target_rect));
+        assert!(coord.take_pending_floating_syncs().is_empty());
+    }
+
+    #[test]
+    fn open_floating_window_with_tag_notifies_requester_on_create_and_close() {
+        struct TagTestApp {
+            events: Vec<crate::AppEvent>,
+        }
+        impl Application for TagTestApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: crate::AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                self.events.push(event);
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let main_cfg = WindowConfig::default();
+        let mut coord =
+            MultiWindowCoordinator::new(main_cfg.clone(), |_: WindowId, _: &WindowConfig| {
+                TagTestApp { events: Vec::new() }
+            });
+        let main_id = WindowId(1);
+        coord.register_headless_window(main_id, main_cfg);
+
+        let ghost_cfg = WindowConfig::default().with_role(WindowRole::Ghost);
+        coord
+            .registry_mut()
+            .get_mut(main_id)
+            .unwrap()
+            .runtime
+            .context_mut()
+            .open_floating_window_with_tag(ghost_cfg, None, 42);
+        assert!(coord.route_window_commands(main_id).is_empty());
+
+        let req_cfg = coord
+            .take_window_request()
+            .expect("pending floating request");
+        assert_eq!(req_cfg.role, WindowRole::Ghost);
+        let req = coord.pending_created_configs.pop_front().unwrap();
+        let ghost_id = WindowId(99);
+        coord.register_headless_window(ghost_id, req.config);
+        if let Some((requester_id, tag)) = req.floating_origin {
+            coord.floating_window_owners.insert(ghost_id, requester_id);
+            let _ = coord
+                .registry_mut()
+                .get_mut(requester_id)
+                .unwrap()
+                .runtime
+                .dispatch(crate::AppEvent::FloatingWindowCreated { tag, id: ghost_id });
+        }
+
+        assert!(coord.close_window(ghost_id));
+        let events = &coord.registry().get(main_id).unwrap().runtime.app().events;
+        assert!(events.contains(&crate::AppEvent::FloatingWindowCreated {
+            tag: 42,
+            id: ghost_id,
+        }));
+        assert!(events.contains(&crate::AppEvent::FloatingWindowClosed { id: ghost_id }));
     }
 }

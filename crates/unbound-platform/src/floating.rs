@@ -10,6 +10,15 @@
 use crate::window::ScreenRect;
 
 /// 窗口在平台层的语义角色。
+/// 待同步到跨窗口目标 `NativeWindow` 的运行期热更新状态。
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FloatingLiveSync {
+    pub visible: Option<bool>,
+    pub topmost: Option<bool>,
+    pub click_through: Option<bool>,
+    pub outer_rect: Option<ScreenRect>,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum WindowRole {
     /// 标准应用窗口。

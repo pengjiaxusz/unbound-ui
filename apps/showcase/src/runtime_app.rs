@@ -171,6 +171,8 @@ impl Application for GalleryApp {
             AppEvent::FileHover(_)
             | AppEvent::FileDrop(_)
             | AppEvent::FileHoverCancelled
+            | AppEvent::FloatingWindowCreated { .. }
+            | AppEvent::FloatingWindowClosed { .. }
             | AppEvent::ExternalFileDragFinished(_)
             | AppEvent::NativePopupDismissed { .. }
             | AppEvent::OverlayDismissed { .. }

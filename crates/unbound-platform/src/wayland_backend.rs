@@ -2592,6 +2592,14 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             }
         }
 
+        for (sync_id, sync) in app.take_pending_floating_syncs() {
+            if let Some(entry) = wl.windows.iter_mut().find(|w| w.id as u64 == sync_id.0) {
+                crate::backend::apply_floating_live_sync(&entry.native_window, sync);
+                if sync.visible == Some(true) {
+                    entry.state.pacer.request_immediate(Instant::now());
+                }
+            }
+        }
         // 6. 同步越界原生弹出窗（`xdg_popup` + `xdg_positioner`）。
         for (pid, pcfg) in app.take_popup_sync_requests() {
             let created = wl.sync_popup(&qh, pid, &pcfg);

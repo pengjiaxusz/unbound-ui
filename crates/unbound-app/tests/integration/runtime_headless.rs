@@ -394,7 +394,9 @@ impl Application for PlatformBridgeApp {
             AppEvent::FileDrop(paths) => {
                 state.dropped = paths;
             }
-            AppEvent::FileHoverCancelled => {
+            AppEvent::FileHoverCancelled
+            | AppEvent::FloatingWindowCreated { .. }
+            | AppEvent::FloatingWindowClosed { .. } => {
                 state.hover_cancelled = true;
             }
             _ => {}

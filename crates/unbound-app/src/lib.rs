@@ -654,6 +654,13 @@ pub enum AppEvent {
     FileDrop(Vec<std::path::PathBuf>),
     /// 系统文件拖拽离开窗口且未放下。
     FileHoverCancelled,
+    /// 请求创建的浮窗/幽灵窗已完成原生创建并分配真实 [`unbound_platform::WindowId`]。
+    FloatingWindowCreated {
+        tag: u64,
+        id: unbound_platform::WindowId,
+    },
+    /// 此前创建的浮窗/幽灵窗已关闭销毁。
+    FloatingWindowClosed { id: unbound_platform::WindowId },
     /// 全局 UI 逻辑缩放比变更（对齐 `CANONICAL_SCALE_STEPS` 七档缩放）。
     UiScaleChanged { scale: f32 },
     /// 界面语言区域变更（默认 `"en-US"`，支持 `"zh-CN"` 等）。
@@ -1693,6 +1700,21 @@ impl AppContext {
     ) {
         self.pending_window_commands
             .push(WindowCommand::OpenFloatingWindow { config, placement });
+    }
+
+    /// 请求多窗口协调器按给定配置、可选定位策略与关联 `tag` 打开幽灵窗或悬浮浮岛。
+    pub fn open_floating_window_with_tag(
+        &mut self,
+        config: unbound_platform::WindowConfig,
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+        tag: u64,
+    ) {
+        self.pending_window_commands
+            .push(WindowCommand::OpenFloatingWindowWithTag {
+                config,
+                placement,
+                tag,
+            });
     }
 
     /// 请求在运行期热更新指定浮窗策略（不销毁重建窗口）。
@@ -3097,7 +3119,9 @@ impl<'a> ViewBuilder<'a> {
             || desc.shadow_blur > 0.0;
         let is_interactive = desc.has(NodeFlags::INTERACTIVE);
         let next_z_base = if desc.z_index >= PORTAL_Z_BASE {
-            (desc.z_index as u16).max(self.z_base)
+            u16::try_from(desc.z_index)
+                .unwrap_or(u16::MAX)
+                .max(self.z_base)
         } else {
             self.z_base
         };
@@ -4039,9 +4063,11 @@ impl<'a> ViewBuilder<'a> {
             .iter()
             .position(|e| e.node == effective_key)
             .unwrap_or(0);
-        let overlay_z = (PORTAL_Z_BASE as u16)
-            .saturating_add(100)
-            .saturating_add((stack_idx as u16).saturating_mul(32));
+        let overlay_z = (PORTAL_Z_BASE as u16).saturating_add(100).saturating_add(
+            u16::try_from(stack_idx)
+                .unwrap_or(u16::MAX)
+                .saturating_mul(1000),
+        );
 
         let is_tooltip = entry.kind == unbound_widgets::overlay::OverlayKind::Tooltip;
         let parent_saved = core::mem::replace(&mut self.parent, self.world.root());
@@ -5538,6 +5564,15 @@ pub enum WindowCommand {
         /// 可选初始定位策略。
         placement: Option<unbound_platform::FloatingPlacementStrategy>,
     },
+    /// 请求多窗口协调器打开幽灵窗或悬浮浮岛，并携带请求 `tag` 以便回传真实 `WindowId`。
+    OpenFloatingWindowWithTag {
+        /// 浮窗配置（含角色与初始策略）。
+        config: unbound_platform::WindowConfig,
+        /// 可选初始定位策略。
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+        /// 调用方自定义关联标记（原样回传至 `AppEvent::FloatingWindowCreated`）。
+        tag: u64,
+    },
     /// 运行期热更新指定浮窗的策略（不重建窗口）。
     UpdateFloatingPolicy {
         /// 目标窗口标识。
@@ -6882,7 +6917,10 @@ impl<A: Application> AppRuntime<A> {
                     drop(store);
                     self.force_rebuild = true;
                     self.mark(scroll_dirty);
-                    break;
+                    return scroll_dirty;
+                }
+                if in_portal {
+                    return scroll_dirty;
                 }
             }
         }
@@ -7738,6 +7776,21 @@ impl<A: Application> AppRuntime<A> {
     ) {
         self.window_commands
             .push(WindowCommand::OpenFloatingWindow { config, placement });
+    }
+
+    /// 请求多窗口协调器按给定配置、可选定位策略与关联 `tag` 打开幽灵窗或悬浮浮岛。
+    pub fn open_floating_window_with_tag(
+        &mut self,
+        config: unbound_platform::WindowConfig,
+        placement: Option<unbound_platform::FloatingPlacementStrategy>,
+        tag: u64,
+    ) {
+        self.window_commands
+            .push(WindowCommand::OpenFloatingWindowWithTag {
+                config,
+                placement,
+                tag,
+            });
     }
 
     /// 请求在运行期热更新指定浮窗策略（不销毁重建窗口）。
@@ -13506,5 +13559,190 @@ mod tests {
         );
         assert!(ctx.unregister_custom_cursor(id));
         assert!(!ctx.unregister_custom_cursor(id));
+    }
+
+    #[test]
+    fn portal_overlay_layer_step_1000_isolates_external_texture_and_allows_low_z_under_box_surface()
+    {
+        struct TwoLayerPortalApp;
+        impl Application for TwoLayerPortalApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, ui: &mut ViewBuilder<'_>) {
+                let bounds = Rect::new(0.0, 0.0, 400.0, 300.0);
+                // 低层级背景外部纹理（with_z(10)）应位于同层 BoxSurface（>= 80）之下。
+                ui.container(
+                    10,
+                    RawNodeDesc::container()
+                        .size(200.0, 120.0)
+                        .fill(u32::from(unbound_theme::Token::SURFACE.raw())),
+                    |ui| {
+                        ui.image_external_with(
+                            11,
+                            ExternalTextureDesc::new(
+                                ExternalTextureHandle(1),
+                                Vec2::new(100.0, 60.0),
+                                unbound_widgets::ObjectFit::Contain,
+                            )
+                            .with_z(10),
+                        );
+                    },
+                );
+
+                // 第 1 层 Portal 含默认 ExternalTexture（z 偏移 690 -> 1100 + 690 = 1790）。
+                ui.overlay_layer(
+                    100,
+                    unbound_widgets::overlay::OverlayEntry::modal(100, bounds, Vec::new()),
+                    |ui| {
+                        ui.image_external_with(
+                            101,
+                            ExternalTextureDesc::new(
+                                ExternalTextureHandle(2),
+                                Vec2::new(120.0, 80.0),
+                                unbound_widgets::ObjectFit::Contain,
+                            ),
+                        );
+                    },
+                );
+
+                // 第 2 层 Portal 含 BoxSurface + Badge + Text（z_base = 2100，BoxSurface >= 2180 > 1790）。
+                ui.overlay_layer(
+                    200,
+                    unbound_widgets::overlay::OverlayEntry::modal(200, bounds, Vec::new()),
+                    |ui| {
+                        ui.container(
+                            201,
+                            RawNodeDesc::container()
+                                .size(180.0, 100.0)
+                                .fill(u32::from(unbound_theme::Token::SURFACE_RAISED.raw())),
+                            |ui| {
+                                ui.badge(
+                                    202,
+                                    unbound_widgets::BadgeDesc::new(
+                                        Rect::new(0.0, 0.0, 48.0, 20.0),
+                                        "NEW",
+                                    ),
+                                );
+                                ui.text(203, "Top Portal", TextStyle::default());
+                            },
+                        );
+                    },
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(TwoLayerPortalApp, Vec2::new(640.0, 480.0));
+        let _ = rt.frame(0.0);
+        let prims = &rt.collector.primitives;
+
+        // 1. 验证低层 with_z(10) ExternalTexture 严格低于同层 BoxSurface（80..=480）。
+        let low_box_z = prims
+            .iter()
+            .filter(|p| p.depth_u16() < PORTAL_Z_BASE as u16)
+            .map(|p| p.depth_u16())
+            .filter(|&z| (80..=480).contains(&z))
+            .min()
+            .expect("base BoxSurface primitive");
+        assert!(
+            low_box_z >= 80,
+            "base BoxSurface should be >= 80, got {low_box_z}"
+        );
+
+        // 2. 验证第 2 层 Portal（>= 2100）的 BoxSurface 严格高于第 1 层 Portal（1100..2100）的所有图元。
+        let layer1_max_z = prims
+            .iter()
+            .map(|p| p.depth_u16())
+            .filter(|&z| (1100..2100).contains(&z))
+            .max()
+            .expect("layer 1 primitives");
+        let layer2_min_z = prims
+            .iter()
+            .map(|p| p.depth_u16())
+            .filter(|&z| z >= 2100)
+            .min()
+            .expect("layer 2 primitives");
+        assert!(
+            layer2_min_z > layer1_max_z,
+            "layer 2 min z ({layer2_min_z}) must strictly exceed layer 1 max z ({layer1_max_z})"
+        );
+    }
+
+    #[test]
+    fn portal_scroll_view_consumes_and_blocks_wheel_on_overscroll() {
+        struct PortalScrollApp {
+            wheel_events: usize,
+        }
+        impl Application for PortalScrollApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                if matches!(event, AppEvent::Wheel { .. }) {
+                    self.wheel_events += 1;
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, ui: &mut ViewBuilder<'_>) {
+                ui.overlay_layer(
+                    500,
+                    unbound_widgets::overlay::OverlayEntry::modal(
+                        500,
+                        Rect::new(0.0, 0.0, 300.0, 200.0),
+                        Vec::new(),
+                    ),
+                    |ui| {
+                        ui.scroll_view_with(
+                            501,
+                            RawNodeDesc::container().size(280.0, 160.0),
+                            true,
+                            |ui| {
+                                ui.container(
+                                    502,
+                                    {
+                                        let mut d = RawNodeDesc::container().size(260.0, 600.0);
+                                        d.min_height = Dim::px(600.0);
+                                        d
+                                    },
+                                    |_| {},
+                                );
+                            },
+                        );
+                    },
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(PortalScrollApp { wheel_events: 0 }, Vec2::new(400.0, 300.0));
+        let _ = rt.frame(0.0);
+
+        let inside = Vec2::new(100.0, 80.0);
+        // 1. 在顶部边界继续向上滚（overscroll）：应阻断 AppEvent::Wheel 冒泡。
+        let _ = rt.wheel(Vec2::new(0.0, 1.0), inside);
+        assert_eq!(
+            rt.app().wheel_events,
+            0,
+            "overscroll at top of portal ScrollView must block AppEvent::Wheel"
+        );
+
+        // 2. 向下正常滚动：应消费滚轮并立即返回，不触发 AppEvent::Wheel。
+        let dirty = rt.wheel(inside, Vec2::new(0.0, -1.0));
+        assert_ne!(dirty.bits() & DirtyFlags::PAINT.bits(), 0);
+        assert_eq!(
+            rt.app().wheel_events,
+            0,
+            "consumed scroll in portal ScrollView must not bubble AppEvent::Wheel"
+        );
     }
 }
