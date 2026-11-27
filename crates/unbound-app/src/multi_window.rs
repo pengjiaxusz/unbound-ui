@@ -212,6 +212,8 @@ pub struct WindowContext<A: Application> {
     was_suspended: bool,
     /// 已注册的 3D 视口自定义渲染通道工厂集合。
     viewport_pass_factories: Vec<crate::window_runner::ViewportPassFactory>,
+    /// 缓存最近一次同步到原生窗口的 IME 允许状态，仅在变化时下发平台调用。
+    ime_allowed: Option<bool>,
 }
 
 impl<A: Application> WindowContext<A> {
@@ -273,6 +275,7 @@ impl<A: Application> WindowContext<A> {
             normal_bounds: Some(initial_outer_bounds),
             was_suspended: false,
             viewport_pass_factories: Vec::new(),
+            ime_allowed: None,
         }
     }
 
@@ -3500,6 +3503,7 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 ctx.pacer.note_activity(Instant::now());
             }
             PlatformEvent::RedrawRequested => {
+                ctx.pacer.request_immediate(Instant::now());
                 window.request_redraw();
             }
             _ => {}
@@ -3787,6 +3791,14 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
 
         if self.drain_window_commands_live(id, window) == Flow::Exit {
             return Flow::Exit;
+        }
+        // 每帧渲染后同步 IME 门控：仅在文本输入焦点态变化时调用平台层，避免非输入态吞吃单键热键。
+        if let Some(ctx) = self.registry.get_mut(id) {
+            let ime_needed = crate::window_runner::is_text_input_focused(&ctx.runtime);
+            if ctx.ime_allowed != Some(ime_needed) {
+                ctx.ime_allowed = Some(ime_needed);
+                window.set_ime_allowed(ime_needed);
+            }
         }
         Flow::Continue
     }

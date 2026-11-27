@@ -395,11 +395,11 @@ mod win32 {
         IMR_QUERYCHARPOSITION,
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::{
-        GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, ReleaseCapture, SetCapture,
-        ToUnicode, TrackMouseEvent, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, VK_APPS, VK_BACK,
-        VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F24, VK_HOME,
-        VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR, VK_PROCESSKEY, VK_RETURN,
-        VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
+        GetFocus, GetKeyState, GetKeyboardLayout, GetKeyboardState, MapVirtualKeyW, ReleaseCapture,
+        SetCapture, ToUnicode, TrackMouseEvent, MAPVK_VSC_TO_VK, TME_LEAVE, TME_NONCLIENT,
+        TRACKMOUSEEVENT, VK_APPS, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END,
+        VK_ESCAPE, VK_F1, VK_F24, VK_HOME, VK_INSERT, VK_LEFT, VK_LWIN, VK_MENU, VK_NEXT, VK_PRIOR,
+        VK_PROCESSKEY, VK_RETURN, VK_RIGHT, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
     };
     use ::windows::Win32::UI::Shell::{DragAcceptFiles, DragFinish, DragQueryFileW, HDROP};
     use ::windows::Win32::UI::WindowsAndMessaging::{
@@ -669,7 +669,19 @@ mod win32 {
         }
     }
 
-    fn translate_vk(vk: u16, scan_code: u32) -> PlatformKey {
+    pub(super) fn translate_vk(vk: u16, scan_code: u32, recover_process_key: bool) -> PlatformKey {
+        // 非 IME 输入态或抬起事件收到 VK_PROCESSKEY 时，按物理扫描码还原真实虚拟键，
+        // 避免中文输入法下字母热键（如 Z 键）退化为 Other(0xE5) -> '\0'。
+        let vk = if vk == VK_PROCESSKEY.0 && recover_process_key && scan_code != 0 {
+            let mapped = unsafe { MapVirtualKeyW(scan_code, MAPVK_VSC_TO_VK) };
+            if mapped != 0 && mapped != u32::from(VK_PROCESSKEY.0) {
+                mapped as u16
+            } else {
+                vk
+            }
+        } else {
+            vk
+        };
         match vk {
             x if x == VK_RETURN.0 => PlatformKey::Named("Enter".into()),
             x if x == VK_ESCAPE.0 => PlatformKey::Named("Escape".into()),
@@ -1307,21 +1319,28 @@ mod win32 {
                 let repeat = pressed && ((lparam.0 >> 30) & 1) != 0;
                 let scan_code = ((lparam.0 >> 16) & 0xFF) as u32;
                 let vk = (wparam.0 & 0xFFFF) as u16;
-                let key = translate_vk(vk, scan_code);
+                let ime_attached = if vk == VK_PROCESSKEY.0 || (pressed && ime_trace_enabled()) {
+                    let himc = unsafe { ImmGetContext(hwnd) };
+                    let valid = !himc.is_invalid();
+                    if valid {
+                        let _ = unsafe { ImmReleaseContext(hwnd, himc) };
+                    }
+                    valid
+                } else {
+                    false
+                };
+                // 抬起事件或窗口未关联 IME 上下文时，VK_PROCESSKEY 按物理扫描码兜底还原。
+                let recover_process_key = !pressed || !ime_attached;
+                let key = translate_vk(vk, scan_code, recover_process_key);
                 if pressed && ime_trace_enabled() {
                     // 输入法只在“焦点窗口 + 已关联输入上下文”时才投递 WM_IME_*，
                     // 这两个状态是排查组合事件缺失时最先要看的东西。
                     let focused = unsafe { GetFocus() } == hwnd;
-                    let himc = unsafe { ImmGetContext(hwnd) };
-                    let himc_valid = !himc.is_invalid();
-                    if himc_valid {
-                        let _ = unsafe { ImmReleaseContext(hwnd, himc) };
-                    }
                     ime_trace(format!(
-                        "key down vk=0x{vk:02X} key={key:?} focus={focused} himc={himc_valid}"
+                        "key down vk=0x{vk:02X} key={key:?} focus={focused} himc={ime_attached}"
                     ));
                 }
-                if pressed && vk == VK_PROCESSKEY.0 {
+                if pressed && vk == VK_PROCESSKEY.0 && !recover_process_key {
                     // VK_PROCESSKEY 说明这个按键已被输入法吞掉并用于组合；
                     // 若输入法只更新了自己的组合窗、没发 WM_IME_COMPOSITION，
                     // 这里主动拉一次，预编辑就不会丢。
@@ -2019,9 +2038,12 @@ mod win32 {
         let primary_entry = create_native_window(class_name, hinstance, &config)?;
         let mut primary_id = primary_entry.window.id();
         let primary_hwnd_atomic = Arc::new(AtomicIsize::new(primary_entry.window.raw_win32_hwnd()));
+        let wake_pending = Arc::new(AtomicBool::new(false));
 
         let wake_target = Arc::clone(&primary_hwnd_atomic);
+        let wake_flag = Arc::clone(&wake_pending);
         let waker: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            wake_flag.store(true, Ordering::Release);
             let hwnd = wake_target.load(Ordering::Acquire);
             if hwnd != 0 {
                 unsafe {
@@ -2199,6 +2221,21 @@ mod win32 {
                 }
             }
 
+            if wake_pending.swap(false, Ordering::AcqRel) {
+                // 后台线程通过 waker 唤醒事件循环后，同步解除所有可见未挂起窗口（含幽灵窗）的节流并调度重绘。
+                let wake_now = Instant::now();
+                for entry in &mut windows {
+                    if entry.state.visible && !entry.state.minimized && !entry.state.occluded {
+                        entry.state.pacer.request_immediate(wake_now);
+                        entry.window.request_redraw();
+                        entry
+                            .user_data
+                            .redraw_requested
+                            .store(true, Ordering::Release);
+                    }
+                }
+            }
+
             for entry in &mut windows {
                 if app.frame(&mut entry.state, &entry.window) == Flow::Exit {
                     break 'main_loop;
@@ -2331,8 +2368,11 @@ mod win32 {
                 {
                     apply_floating_live_sync(&entry.window, sync);
                     if let Some(vis) = sync.visible {
+                        entry.state.visible = vis;
                         entry.state.pacer.set_visible(vis);
                         if vis {
+                            entry.state.occluded = false;
+                            entry.state.minimized = false;
                             entry.state.pacer.set_occluded(false);
                             entry.state.pacer.set_minimized(false);
                             entry.state.pacer.request_immediate(Instant::now());
@@ -2541,6 +2581,38 @@ mod style_tests {
         assert_eq!(
             duration_to_win32_relative_due_time(Duration::MAX),
             -i64::MAX
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vk_processkey_recovers_physical_key_from_scan_code_when_allowed() {
+        use ::windows::Win32::UI::Input::KeyboardAndMouse::VK_PROCESSKEY;
+
+        // 0x2C 为美式键盘 Z 键的物理扫描码。
+        let recovered = win32::translate_vk(VK_PROCESSKEY.0, 0x2C, true);
+        match recovered {
+            crate::PlatformKey::Character(ch) => {
+                assert!(
+                    ch.eq_ignore_ascii_case("z"),
+                    "expected 'z' or 'Z', got {ch:?}"
+                );
+            }
+            other => panic!("expected PlatformKey::Character for Z scan code, got {other:?}"),
+        }
+
+        // 未启用兜底（如 IME 激活中的按下事件）应保留 VK_PROCESSKEY 原义。
+        let preserved = win32::translate_vk(VK_PROCESSKEY.0, 0x2C, false);
+        assert_eq!(
+            preserved,
+            crate::PlatformKey::Other(u32::from(VK_PROCESSKEY.0))
+        );
+
+        // 扫描码为 0 时无法还原，应安全回退为 Other(VK_PROCESSKEY)。
+        let zero_scan = win32::translate_vk(VK_PROCESSKEY.0, 0, true);
+        assert_eq!(
+            zero_scan,
+            crate::PlatformKey::Other(u32::from(VK_PROCESSKEY.0))
         );
     }
 }

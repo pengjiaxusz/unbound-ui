@@ -149,7 +149,8 @@ pub struct Window {
     decorated: bool,
     popup_id: Option<u64>,
     cursor: Arc<AtomicU32>,
-    ime_allowed: Cell<bool>,
+    /// 缓存最近一次同步到 Win32 的 IME 允许状态（`None` 表示尚未显式下发）。
+    ime_allowed: Cell<Option<bool>>,
     redraw_requested: Arc<AtomicBool>,
     destroyed: Arc<AtomicBool>,
 }
@@ -170,7 +171,7 @@ impl Window {
             decorated,
             popup_id: None,
             cursor,
-            ime_allowed: Cell::new(false),
+            ime_allowed: Cell::new(None),
             redraw_requested,
             destroyed,
         }
@@ -517,10 +518,10 @@ impl Window {
 
     /// 启用或禁用输入法（IME）组合输入。
     pub fn set_ime_allowed(&self, allowed: bool) {
-        if self.ime_allowed.get() == allowed {
+        if self.ime_allowed.get() == Some(allowed) {
             return;
         }
-        self.ime_allowed.set(allowed);
+        self.ime_allowed.set(Some(allowed));
         #[cfg(windows)]
         win32::set_ime_allowed(self.hwnd, allowed);
     }
