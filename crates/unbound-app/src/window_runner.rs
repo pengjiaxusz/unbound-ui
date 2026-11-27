@@ -1683,13 +1683,15 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             PlatformEvent::KeyInput {
                 state: input_state,
                 key,
+                repeat,
                 ..
             } => {
                 let app_k = translate_app_key(&key);
                 let pressed = input_state == ButtonState::Pressed;
                 let modifiers = translate_modifiers(self.modifiers);
                 state.pacer.note_activity(Instant::now());
-                self.runtime.key(app_k, pressed, modifiers);
+                self.runtime
+                    .key_with_repeat(app_k, pressed, modifiers, repeat);
             }
             PlatformEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers;
@@ -1765,7 +1767,7 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
                 if focused {
                     state.pacer.note_activity(Instant::now());
                 }
-                self.runtime.set_window_focused(focused);
+                let _ = self.runtime.set_window_focused(focused);
             }
             PlatformEvent::Minimized(minimized) => {
                 state.pacer.set_minimized(minimized);

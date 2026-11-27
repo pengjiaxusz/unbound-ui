@@ -1630,8 +1630,21 @@ mod win32 {
         }
 
         if !config.decorations {
-            // 无边框窗口经 WM_NCCALCSIZE 去除非客户区后，通过扩展 1px 顶边帧恢复 DWM 阴影与圆角。
-            crate::win32_frame::apply_borderless_dwm(hwnd.0 as isize);
+            if config.role == crate::floating::WindowRole::Ghost {
+                // 幽灵窗跳过 `apply_borderless_dwm`（不扩展 1px DWM 顶边），并显式保持 Win11 方角。
+                let corner_pref = ::windows::Win32::Graphics::Dwm::DWMWCP_DONOTROUND;
+                unsafe {
+                    let _ = ::windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+                        hwnd,
+                        ::windows::Win32::Graphics::Dwm::DWMWA_WINDOW_CORNER_PREFERENCE,
+                        (&raw const corner_pref).cast::<c_void>(),
+                        core::mem::size_of_val(&corner_pref) as u32,
+                    );
+                }
+            } else {
+                // 无边框窗口经 WM_NCCALCSIZE 去除非客户区后，通过扩展 1px 顶边帧恢复 DWM 阴影与圆角。
+                crate::win32_frame::apply_borderless_dwm(hwnd.0 as isize);
+            }
         }
 
         // 在窗口显示前，查询目标显示器的真实工作区（扣除任务栏）与真实 DPI 缩放因子，
@@ -2317,8 +2330,14 @@ mod win32 {
                     .find(|e| crate::windows::WindowId(e.window.raw_win32_hwnd() as u64) == sync_id)
                 {
                     apply_floating_live_sync(&entry.window, sync);
-                    if sync.visible == Some(true) {
-                        entry.state.pacer.request_immediate(Instant::now());
+                    if let Some(vis) = sync.visible {
+                        entry.state.pacer.set_visible(vis);
+                        if vis {
+                            entry.state.pacer.set_occluded(false);
+                            entry.state.pacer.set_minimized(false);
+                            entry.state.pacer.request_immediate(Instant::now());
+                            entry.window.request_redraw();
+                        }
                     }
                 }
             }

@@ -1300,4 +1300,17 @@ mod tests {
         assert_eq!(apply(&mut state, &down, t), vec![down]);
         assert_eq!(apply(&mut state, &up, t), vec![up]);
     }
+
+    #[test]
+    fn ghost_window_physical_position_scales_logical_size_once() {
+        let cfg = WindowConfig::default()
+            .ghost()
+            .with_size(300, 200)
+            .at_physical(400, 250);
+        let placement = resolve_window_placement(&cfg, (0, 0, 2560, 1400), 1.5);
+        assert_eq!(placement.x, 400);
+        assert_eq!(placement.y, 250);
+        assert_eq!(placement.width, 450);
+        assert_eq!(placement.height, 300);
+    }
 }

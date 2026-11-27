@@ -180,6 +180,7 @@ impl Application for GalleryApp {
             | AppEvent::Moved { .. }
             | AppEvent::CloseRequested
             | AppEvent::Occluded(_)
+            | AppEvent::WindowFocused(_)
             | AppEvent::Custom { .. } => {}
         }
 

@@ -42,6 +42,8 @@ impl OverlayManager {
 
     /// 打开覆盖层，记录当前焦点以便后续恢复，并在存在活跃模态作用域时安装焦点陷阱。
     ///
+    /// 若同 `entry.node` 已存在于浮层栈中，则原地更新该条目而非重复压栈，
+    /// 确保 `stack.entries().len()` 与返回焦点记录严格有界。
     pub fn open(&mut self, entry: OverlayEntry, focus: &mut FocusManager) -> u64 {
         let node = entry.node;
         self.dismissed.remove(&node);
@@ -192,5 +194,20 @@ mod tests {
         let pruned = manager.sync_declared_overlays(&declared, &seen_keys, &hit_owners, &mut focus);
         assert_eq!(pruned, 1);
         assert!(!manager.stack().contains(MENU_KEY));
+    }
+
+    #[test]
+    fn repeated_open_updates_existing_node_without_growing_stack() {
+        let mut manager = OverlayManager::new();
+        let mut focus = FocusManager::new(unbound_input::FocusConfig::default());
+        for frame in 0..60u32 {
+            let bounds = Rect::new(20.0 + frame as f32, 40.0, 380.0, 300.0);
+            let _ = manager.open(OverlayEntry::modal(77, bounds, Vec::new()), &mut focus);
+        }
+        assert_eq!(manager.stack().entries().len(), 1);
+        assert_eq!(
+            manager.stack().entries()[0].bounds,
+            Rect::new(79.0, 40.0, 380.0, 300.0)
+        );
     }
 }
