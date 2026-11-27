@@ -163,6 +163,49 @@ type FrameHook<A> = Box<dyn FnMut(&mut AppRuntime<A>) + Send>;
 pub type ViewportPassFactory =
     Box<dyn Fn() -> Box<dyn unbound_gpu::CustomViewportPass> + Send + Sync>;
 
+/// 判断当前运行时是否存在处于聚焦状态的文本输入控件或文本输入作用域。
+pub(crate) fn is_text_input_focused<A: Application>(runtime: &AppRuntime<A>) -> bool {
+    if runtime.key_context.as_deref() == Some("TextInput") {
+        return true;
+    }
+    let Some(focused_key) = runtime.focus.focused().or(runtime.ctx.focused) else {
+        return false;
+    };
+    let store = runtime.widget_state.borrow();
+    if store
+        .get::<unbound_widgets::TextEditState>(focused_key)
+        .is_some()
+        || store
+            .get::<unbound_widgets::TextAreaState>(focused_key)
+            .is_some()
+        || store
+            .get::<unbound_widgets::PasswordBoxState>(focused_key)
+            .is_some()
+    {
+        return true;
+    }
+    if let Some((_, widget)) = runtime.mounted_widgets.get(&focused_key) {
+        let any = widget.as_any();
+        if any.is::<unbound_widgets::TextInputDesc>()
+            || any.is::<unbound_widgets::TextAreaDesc>()
+            || any.is::<unbound_widgets::PasswordBoxDesc>()
+        {
+            return true;
+        }
+        if any.is::<unbound_widgets::AddressBarDesc>() {
+            return store
+                .get::<unbound_widgets::AddressBarState>(focused_key)
+                .is_some_and(|st| st.editing || st.search_focused);
+        }
+        if any.is::<unbound_widgets::NavigationViewDesc>() {
+            return store
+                .get::<unbound_widgets::NavigationViewState>(focused_key)
+                .is_some_and(|st| st.search_focused);
+        }
+    }
+    false
+}
+
 /// 驱动 [`AppRuntime`] 的通用窗口化宿主适配器。
 pub struct WindowedRunner<A: Application> {
     runtime: AppRuntime<A>,
@@ -227,6 +270,8 @@ pub struct WindowedRunner<A: Application> {
     was_suspended: bool,
     /// 已注册的 3D 视口自定义渲染通道工厂集合（建窗初始化与设备恢复后自动重注册）。
     viewport_pass_factories: Vec<ViewportPassFactory>,
+    /// 缓存最近一次同步到原生窗口的 IME 允许状态，仅在变化时下发平台调用。
+    ime_allowed: Option<bool>,
 }
 
 impl<A: Application> WindowedRunner<A> {
@@ -298,6 +343,7 @@ impl<A: Application> WindowedRunner<A> {
             pending_popup_closes: Vec::new(),
             was_suspended: false,
             viewport_pass_factories: Vec::new(),
+            ime_allowed: None,
         }
     }
 
@@ -2053,6 +2099,13 @@ impl<A: Application> PlatformApp for WindowedRunner<A> {
             window.request_redraw();
         }
 
+        // 每帧渲染后同步 IME 门控：仅在文本输入焦点态变化时调用平台层，避免非输入态吞吃单键热键。
+        let ime_needed = is_text_input_focused(&self.runtime);
+        if self.ime_allowed != Some(ime_needed) {
+            self.ime_allowed = Some(ime_needed);
+            window.set_ime_allowed(ime_needed);
+        }
+
         Flow::Continue
     }
 
@@ -2293,5 +2346,27 @@ mod tests {
         );
         assert_eq!(runner.all_window_geometries().len(), 1);
         assert_eq!(runner.runtime().all_window_geometries().len(), 1);
+    }
+
+    #[test]
+    fn is_text_input_focused_tracks_widget_and_key_context() {
+        let mut runner = WindowedRunner::new(DummyApp, &WindowConfig::default());
+        assert!(!is_text_input_focused(runner.runtime()));
+
+        // 切换到 TextInput 快捷键作用域时应启用 IME。
+        runner.runtime.set_key_context(Some("TextInput"));
+        assert!(is_text_input_focused(runner.runtime()));
+
+        // 切回列表作用域且无聚焦文本控件时应禁用 IME。
+        runner.runtime.set_key_context(Some("FileList"));
+        assert!(!is_text_input_focused(runner.runtime()));
+
+        // 聚焦带有 TextEditState 的控件键时应启用 IME，失焦后恢复禁用。
+        runner.runtime.context().set_text_input_value(101, "hello");
+        runner.runtime.focus_node(Some(101));
+        assert!(is_text_input_focused(runner.runtime()));
+
+        runner.runtime.focus_node(None);
+        assert!(!is_text_input_focused(runner.runtime()));
     }
 }
