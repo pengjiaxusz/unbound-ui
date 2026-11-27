@@ -636,6 +636,8 @@ pub enum AppEvent {
     CloseRequested,
     /// 窗口遮挡状态变更（`true` 表示窗口完全不可见/被遮挡，可跳过高耗渲染与后台动画）。
     Occluded(bool),
+    /// 原生窗口激活聚焦状态变更（`false` 表示窗口失去 OS 焦点，如 `Alt+Tab` 切窗）。
+    WindowFocused(bool),
     /// 主题变更。
     Theme { kind: ThemeKind },
     /// 辅助技术请求执行动作。
@@ -852,6 +854,8 @@ pub struct AppContext {
     scroll_consumed: Vec2,
     /// 冒泡派发过程中当前正在接收事件的逻辑节点键。
     event_target: Option<u64>,
+    /// 当前正在处理的键盘事件是否为操作系统长按自动连发重复键。
+    key_repeat: bool,
     /// 共享剪贴板提供者（窗口模式为 SystemClipboard，无头模式为 MemoryClipboard）。
     clipboard: Rc<RefCell<Box<dyn ClipboardProvider>>>,
     /// 运行期请求应用的文本渲染设置变更（若为 Some 则在每帧开始前生效）。
@@ -941,6 +945,7 @@ impl AppContext {
             waker: None,
             scroll_consumed: Vec2::ZERO,
             event_target: None,
+            key_repeat: false,
             clipboard: Rc::new(RefCell::new(Box::new(MemoryClipboard::new()))),
             text_settings: None,
             pending_window_commands: Vec::new(),
@@ -1374,6 +1379,12 @@ impl AppContext {
     #[must_use]
     pub const fn event_target(&self) -> Option<u64> {
         self.event_target
+    }
+
+    /// 当前正在处理的键盘事件是否为操作系统自动重复（长按连发）。
+    #[must_use]
+    pub const fn is_key_repeat(&self) -> bool {
+        self.key_repeat
     }
 
     /// 在工作线程上运行 `task` 并归约其返回的事件。
@@ -6989,8 +7000,26 @@ impl<A: Application> AppRuntime<A> {
         self.reduce_pointer(event)
     }
 
-    /// 处理按键按下或释放。
+    /// 处理按键按下或释放（非长按重复）。
     pub fn key(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
+        self.key_with_repeat(key, pressed, modifiers, false)
+    }
+
+    /// 处理按键按下或释放，并向 [`AppContext::is_key_repeat`] 透传操作系统自动重复标记。
+    pub fn key_with_repeat(
+        &mut self,
+        key: AppKey,
+        pressed: bool,
+        modifiers: Modifiers,
+        repeat: bool,
+    ) -> DirtyFlags {
+        let prev_repeat = core::mem::replace(&mut self.ctx.key_repeat, repeat);
+        let flags = self.key_inner(key, pressed, modifiers);
+        self.ctx.key_repeat = prev_repeat;
+        flags
+    }
+
+    fn key_inner(&mut self, key: AppKey, pressed: bool, modifiers: Modifiers) -> DirtyFlags {
         self.current_modifiers = modifiers;
         let mut flags = DirtyFlags::NONE;
         let prev_focus = self.ctx.focused.filter(|_| self.ctx.focus_visible);
@@ -8050,16 +8079,22 @@ impl<A: Application> AppRuntime<A> {
         self.dispatch(AppEvent::Occluded(occluded))
     }
 
-    /// 同步原生窗口激活聚焦状态，并在变化时触发重绘以更新标题栏失焦视觉。
-    pub fn set_window_focused(&mut self, focused: bool) {
+    /// 同步原生窗口激活聚焦状态，并在变化时向应用派发 [`AppEvent::WindowFocused`] 与触发重绘。
+    pub fn set_window_focused(&mut self, focused: bool) -> DirtyFlags {
         if self.ctx.window_focused != focused {
             self.ctx.window_focused = focused;
             if !focused {
                 self.managed_tooltip.last_pointer_hover = None;
                 let _ = self.dismiss_managed_tooltip(false);
             }
+            let flags = self
+                .dispatch(AppEvent::WindowFocused(focused))
+                .merge(DirtyFlags::PAINT);
             self.force_rebuild = true;
-            self.mark(DirtyFlags::PAINT);
+            self.mark(flags);
+            flags
+        } else {
+            DirtyFlags::NONE
         }
     }
 
@@ -10167,13 +10202,13 @@ impl<A: Application> AppRuntime<A> {
                         state,
                     );
                     if i32::from(entry.z_base) >= PORTAL_Z_BASE {
+                        // `scroll_desc.z` 已加上 `entry.z_base`，此处仅提升命中层至 PORTAL_LAYER，
+                        // 不再二次叠加 `entry.z_base`，确保视口 `hit.z == entry.z_base` 低于内部控件。
                         if let Some(hit) = sv_out.output.hit.as_mut() {
                             hit.layer = unbound_input::PORTAL_LAYER;
-                            hit.z = hit.z.saturating_add(u32::from(entry.z_base));
                         }
                         for hit in &mut sv_out.hits {
                             hit.layer = unbound_input::PORTAL_LAYER;
-                            hit.z = hit.z.saturating_add(u32::from(entry.z_base));
                         }
                     }
                     let clip = sv_out.clip;
@@ -13744,5 +13779,194 @@ mod tests {
             0,
             "consumed scroll in portal ScrollView must not bubble AppEvent::Wheel"
         );
+    }
+
+    #[test]
+    fn overlay_scroll_view_60_frames_dedups_stack_and_hits_inner_button_and_slider() {
+        const OVERLAY_KEY: u64 = 9001;
+        const SCROLL_KEY: u64 = 9002;
+        const BUTTON_KEY: u64 = 9003;
+        const SLIDER_KEY: u64 = 9004;
+
+        struct OverlayScrollApp {
+            button_clicks: usize,
+            slider_drags: usize,
+            slider_value: f32,
+        }
+
+        impl Application for OverlayScrollApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::Click { node, .. } if node == BUTTON_KEY => {
+                        self.button_clicks += 1;
+                        EventOutcome::new(DirtyFlags::PAINT)
+                    }
+                    AppEvent::DragStart { node, .. } | AppEvent::Drag { node, .. }
+                        if node == SLIDER_KEY =>
+                    {
+                        self.slider_drags += 1;
+                        self.slider_value = (self.slider_value + 0.1).min(1.0);
+                        EventOutcome::new(DirtyFlags::PAINT)
+                    }
+                    _ => EventOutcome::new(DirtyFlags::NONE),
+                }
+            }
+            fn view(&mut self, _: &Self::State, ui: &mut ViewBuilder<'_>) {
+                let bounds = Rect::new(40.0, 40.0, 380.0, 320.0);
+                ui.overlay_layer(
+                    OVERLAY_KEY,
+                    unbound_widgets::overlay::OverlayEntry::modal(OVERLAY_KEY, bounds, Vec::new()),
+                    |ui| {
+                        ui.scroll_view_with(
+                            SCROLL_KEY,
+                            RawNodeDesc::container().size(380.0, 320.0).gap(12.0),
+                            true,
+                            |ui| {
+                                ui.button(
+                                    BUTTON_KEY,
+                                    ButtonDesc::new(
+                                        Rect::new(0.0, 0.0, 180.0, 36.0),
+                                        "Apply Settings",
+                                    ),
+                                );
+                                ui.slider(
+                                    SLIDER_KEY,
+                                    SliderDesc::new(
+                                        Rect::new(0.0, 0.0, 220.0, 28.0),
+                                        "Opacity",
+                                        self.slider_value,
+                                        0.0,
+                                        1.0,
+                                    ),
+                                );
+                                // 撑高内容区确保存在可滚动溢出。
+                                ui.container(
+                                    9005,
+                                    RawNodeDesc::container().size(340.0, 500.0),
+                                    |_| {},
+                                );
+                            },
+                        );
+                    },
+                );
+            }
+        }
+
+        let mut rt = AppRuntime::new(
+            OverlayScrollApp {
+                button_clicks: 0,
+                slider_drags: 0,
+                slider_value: 0.25,
+            },
+            Vec2::new(640.0, 480.0),
+        );
+
+        // 连续渲染 60 帧，断言 OverlayStack 长度恒为 1、绝不随帧数膨胀。
+        for _ in 0..60u32 {
+            rt.force_rebuild = true;
+            rt.mark(DirtyFlags::LAYOUT | DirtyFlags::PAINT);
+            let _ = rt.frame(0.016);
+        }
+        assert_eq!(
+            rt.overlays.stack().entries().len(),
+            1,
+            "overlay stack must stay deduplicated after 60 frames"
+        );
+
+        // 查询按钮与滑块在世界坐标系中的命中中心点并验证点击与拖拽 100% 命中内部控件。
+        let btn_rect = rt
+            .widget_rect(BUTTON_KEY)
+            .expect("button layout rect inside overlay scroll view");
+        let btn_center = Vec2::new(
+            btn_rect.origin.x + btn_rect.size.x * 0.5,
+            btn_rect.origin.y + btn_rect.size.y * 0.5,
+        );
+        let _ = rt.pointer_move(btn_center);
+        let _ = rt.pointer_down(btn_center, PointerButton::Left);
+        let _ = rt.pointer_up(btn_center, PointerButton::Left);
+        assert_eq!(
+            rt.app().button_clicks,
+            1,
+            "button inside portal ScrollView must receive click instead of being hijacked by ScrollView"
+        );
+
+        let slider_rect = rt
+            .widget_rect(SLIDER_KEY)
+            .expect("slider layout rect inside overlay scroll view");
+        let slider_start = Vec2::new(
+            slider_rect.origin.x + slider_rect.size.x * 0.25,
+            slider_rect.origin.y + slider_rect.size.y * 0.5,
+        );
+        let slider_end = Vec2::new(
+            slider_rect.origin.x + slider_rect.size.x * 0.75,
+            slider_rect.origin.y + slider_rect.size.y * 0.5,
+        );
+        let _ = rt.pointer_move(slider_start);
+        let _ = rt.pointer_down(slider_start, PointerButton::Left);
+        let _ = rt.pointer_move(slider_end);
+        let _ = rt.pointer_up(slider_end, PointerButton::Left);
+        assert!(
+            rt.app().slider_drags >= 1,
+            "slider inside portal ScrollView must receive drag events"
+        );
+    }
+
+    #[test]
+    fn key_with_repeat_and_window_focused_dispatch_to_app() {
+        struct KeyFocusApp {
+            key_repeats: Vec<bool>,
+            focus_events: Vec<bool>,
+        }
+        impl Application for KeyFocusApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                event: AppEvent,
+                ctx: &mut AppContext,
+            ) -> EventOutcome {
+                match event {
+                    AppEvent::Key { pressed: true, .. } => {
+                        self.key_repeats.push(ctx.is_key_repeat());
+                    }
+                    AppEvent::WindowFocused(focused) => {
+                        self.focus_events.push(focused);
+                    }
+                    _ => {}
+                }
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let mut rt = AppRuntime::new(
+            KeyFocusApp {
+                key_repeats: Vec::new(),
+                focus_events: Vec::new(),
+            },
+            Vec2::new(640.0, 480.0),
+        );
+        let _ = rt.frame(0.0);
+
+        // 首次按下 repeat = false，长按连发 repeat = true，普通 key() 默认 false。
+        let _ = rt.key_with_repeat(AppKey::Character('z'), true, Modifiers::default(), false);
+        let _ = rt.key_with_repeat(AppKey::Character('z'), true, Modifiers::default(), true);
+        let _ = rt.key(AppKey::Character('z'), true, Modifiers::default());
+        assert_eq!(rt.app().key_repeats, vec![false, true, false]);
+        assert!(!rt.context().is_key_repeat());
+
+        // OS 失焦与重新聚焦应向应用派发 WindowFocused(false/true)，重复同值不重复派发。
+        let _ = rt.set_window_focused(false);
+        let _ = rt.set_window_focused(false);
+        let _ = rt.set_window_focused(true);
+        assert_eq!(rt.app().focus_events, vec![false, true]);
     }
 }

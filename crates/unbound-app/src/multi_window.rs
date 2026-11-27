@@ -1447,14 +1447,21 @@ impl<A: Application> MultiWindowCoordinator<A> {
                 FloatingPlacementStrategy::AnchorRectAvoid { anchor, .. } => anchor,
                 FloatingPlacementStrategy::EdgeSnap { desired, .. } => desired,
             };
-            let work_area = self.select_work_area_for_rect(target_rect).work_area;
-            let rect = resolve_floating_placement(&strategy, work_area);
+            let area = self.select_work_area_for_rect(target_rect);
+            let rect = resolve_floating_placement(&strategy, area.work_area);
+            let scale = if area.scale_factor.is_finite() && area.scale_factor > 0.0 {
+                area.scale_factor
+            } else {
+                1.0
+            };
             config.position = WindowPosition::Physical {
                 x: rect.x,
                 y: rect.y,
             };
-            config.width = rect.width.max(1);
-            config.height = rect.height.max(1);
+            // `WindowConfig.width/height` 为逻辑尺寸；由物理工作区解析得到的 `rect` 需除以 `scale_factor`，
+            // 避免在 `resolve_window_placement` 中被二次乘以 `monitor_scale`。
+            config.width = (f64::from(rect.width.max(1)) / scale).round().max(1.0) as u32;
+            config.height = (f64::from(rect.height.max(1)) / scale).round().max(1.0) as u32;
         }
         config
     }
@@ -1572,7 +1579,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
     pub fn simulate_window_focus_event(&mut self, id: WindowId, focused: bool) {
         if self.is_window_no_activate(id) {
             if let Some(ctx) = self.registry.get_mut(id) {
-                ctx.runtime.set_window_focused(false);
+                let _ = ctx.runtime.set_window_focused(false);
             }
             return;
         }
@@ -1583,7 +1590,7 @@ impl<A: Application> MultiWindowCoordinator<A> {
         }
         if let Some(ctx) = self.registry.get_mut(id) {
             ctx.pacer.set_focused(focused);
-            ctx.runtime.set_window_focused(focused);
+            let _ = ctx.runtime.set_window_focused(focused);
         }
     }
 
@@ -2245,6 +2252,16 @@ impl<A: Application> MultiWindowCoordinator<A> {
             WindowCommand::SetWindowVisibleNoActivate { id, visible } => {
                 if self.floating_host.set_visible(*id, *visible) {
                     self.registry.set_visible(*id, *visible);
+                    if let Some(target_ctx) = self.registry.get_mut(*id) {
+                        target_ctx.pacer.set_visible(*visible);
+                        if *visible {
+                            // 跨窗唤醒休眠幽灵窗时同步解除节流挂起并标全量脏，防止首帧被跳过。
+                            target_ctx.pacer.set_occluded(false);
+                            target_ctx.pacer.set_minimized(false);
+                            target_ctx.pacer.request_immediate(Instant::now());
+                            target_ctx.runtime.mark(crate::DirtyFlags::ALL);
+                        }
+                    }
                     let sync = self.pending_floating_live_syncs.entry(*id).or_default();
                     sync.visible = Some(*visible);
                 }
@@ -2905,12 +2922,20 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             c.surface_alpha = SurfaceAlpha::PreMultiplied;
                             if let Some(strategy) = placement {
                                 let rect = resolve_floating_placement(&strategy, area.work_area);
+                                let scale =
+                                    if area.scale_factor.is_finite() && area.scale_factor > 0.0 {
+                                        area.scale_factor
+                                    } else {
+                                        1.0
+                                    };
                                 c.position = WindowPosition::Physical {
                                     x: rect.x,
                                     y: rect.y,
                                 };
-                                c.width = rect.width.max(1);
-                                c.height = rect.height.max(1);
+                                c.width =
+                                    (f64::from(rect.width.max(1)) / scale).round().max(1.0) as u32;
+                                c.height =
+                                    (f64::from(rect.height.max(1)) / scale).round().max(1.0) as u32;
                             }
                             c
                         } else {
@@ -2930,12 +2955,20 @@ impl<A: Application> MultiWindowCoordinator<A> {
                             c.surface_alpha = SurfaceAlpha::PreMultiplied;
                             if let Some(strategy) = placement {
                                 let rect = resolve_floating_placement(&strategy, area.work_area);
+                                let scale =
+                                    if area.scale_factor.is_finite() && area.scale_factor > 0.0 {
+                                        area.scale_factor
+                                    } else {
+                                        1.0
+                                    };
                                 c.position = WindowPosition::Physical {
                                     x: rect.x,
                                     y: rect.y,
                                 };
-                                c.width = rect.width.max(1);
-                                c.height = rect.height.max(1);
+                                c.width =
+                                    (f64::from(rect.width.max(1)) / scale).round().max(1.0) as u32;
+                                c.height =
+                                    (f64::from(rect.height.max(1)) / scale).round().max(1.0) as u32;
                             }
                             c
                         } else {
@@ -3117,6 +3150,15 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                         .dispatch(crate::AppEvent::FloatingWindowCreated { tag, id: new_id });
                     requester_ctx.pacer.note_activity(Instant::now());
                 }
+                // 立即排空请求方在 FloatingWindowCreated 中发出的指令（如松手隐藏/关闭），
+                // 并即时同步至新窗，消除创建期 1 帧闪现。
+                let close_targets = self.route_window_commands(requester_id);
+                for target in close_targets {
+                    if self.close_window(target) {
+                        self.pending_window_close_requests.push(target);
+                    }
+                }
+                self.flush_floating_live_sync(new_id, window);
             }
         }
     }
@@ -3318,13 +3360,15 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
             PlatformEvent::KeyInput {
                 state: key_state,
                 key,
+                repeat,
                 ..
             } => {
                 let app_k = translate_app_key(&key);
                 let pressed = key_state == ButtonState::Pressed;
                 let modifiers = translate_modifiers(ctx.modifiers);
                 ctx.pacer.note_activity(Instant::now());
-                ctx.runtime.key(app_k, pressed, modifiers);
+                ctx.runtime
+                    .key_with_repeat(app_k, pressed, modifiers, repeat);
                 if pressed && app_k == AppKey::Escape {
                     drag_finish_cancelled = Some(true);
                 }
@@ -3402,13 +3446,13 @@ impl<A: Application> PlatformApp for MultiWindowCoordinator<A> {
                 let no_activate = ctx.config.role != WindowRole::Standard
                     && ctx.config.floating_policy.no_activate;
                 if no_activate {
-                    ctx.runtime.set_window_focused(false);
+                    let _ = ctx.runtime.set_window_focused(false);
                 } else {
                     ctx.pacer.set_focused(focused);
                     if focused {
                         ctx.pacer.note_activity(Instant::now());
                     }
-                    ctx.runtime.set_window_focused(focused);
+                    let _ = ctx.runtime.set_window_focused(focused);
                 }
             }
             PlatformEvent::Minimized(minimized) => {
@@ -5245,5 +5289,114 @@ mod tests {
             id: ghost_id,
         }));
         assert!(events.contains(&crate::AppEvent::FloatingWindowClosed { id: ghost_id }));
+    }
+
+    #[test]
+    fn waking_sleeping_ghost_unsuspends_pacer_and_marks_dirty_all() {
+        struct WakeApp;
+        impl Application for WakeApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: crate::AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let main_cfg = WindowConfig::default();
+        let mut coord =
+            MultiWindowCoordinator::new(main_cfg.clone(), |_: WindowId, _: &WindowConfig| WakeApp);
+        let main_id = WindowId(1);
+        let ghost_id = WindowId(2);
+        coord.register_headless_window(main_id, main_cfg);
+
+        let mut ghost_cfg = WindowConfig::default().with_role(WindowRole::Ghost);
+        ghost_cfg.visible = false;
+        coord.register_headless_window(ghost_id, ghost_cfg);
+
+        // 模拟幽灵窗休眠态（不可见且已清理脏标记）。
+        {
+            let ghost_ctx = coord.registry_mut().get_mut(ghost_id).unwrap();
+            ghost_ctx.pacer.set_visible(false);
+            ghost_ctx.pacer.set_occluded(true);
+            let _ = ghost_ctx.runtime.frame(0.0);
+            assert!(ghost_ctx.pacer.is_suspended());
+            assert_eq!(ghost_ctx.runtime.dirty(), DirtyFlags::NONE);
+        }
+
+        // 主窗跨窗唤醒幽灵窗。
+        coord
+            .registry_mut()
+            .get_mut(main_id)
+            .unwrap()
+            .runtime
+            .context_mut()
+            .set_window_visible_no_activate(ghost_id, true);
+        assert!(coord.route_window_commands(main_id).is_empty());
+
+        let ghost_ctx = coord.registry().get(ghost_id).unwrap();
+        assert!(!ghost_ctx.pacer.is_suspended());
+        assert_eq!(ghost_ctx.runtime.dirty(), DirtyFlags::ALL);
+    }
+
+    #[test]
+    fn open_floating_window_hidpi_placement_does_not_double_scale() {
+        struct HiDpiApp;
+        impl Application for HiDpiApp {
+            type State = ();
+            fn init(&mut self, _: &mut AppContext) {}
+            fn reduce(
+                &mut self,
+                _: &mut Self::State,
+                _: crate::AppEvent,
+                _: &mut AppContext,
+            ) -> EventOutcome {
+                EventOutcome::new(DirtyFlags::NONE)
+            }
+            fn view(&mut self, _: &Self::State, _: &mut ViewBuilder<'_>) {}
+        }
+
+        let main_cfg = WindowConfig::default();
+        let mut coord =
+            MultiWindowCoordinator::new(main_cfg.clone(), |_: WindowId, _: &WindowConfig| HiDpiApp);
+        let main_id = WindowId(1);
+        coord.register_headless_window(main_id, main_cfg);
+        coord.set_headless_work_areas(vec![unbound_platform::MonitorWorkArea {
+            monitor_bounds: unbound_platform::ScreenRect::new(0, 0, 2560, 1440),
+            work_area: unbound_platform::ScreenRect::new(0, 0, 2560, 1400),
+            scale_factor: 1.5,
+            is_primary: true,
+        }]);
+
+        let ghost_cfg = WindowConfig::default().ghost();
+        let placement = unbound_platform::FloatingPlacementStrategy::CursorMonitorAvoid {
+            cursor: (600, 500),
+            size: (450, 300),
+            offset: (16, 16),
+        };
+        coord
+            .registry_mut()
+            .get_mut(main_id)
+            .unwrap()
+            .runtime
+            .context_mut()
+            .open_floating_window_with_tag(ghost_cfg, Some(placement), 7);
+        assert!(coord.route_window_commands(main_id).is_empty());
+
+        let req_cfg = coord
+            .take_window_request()
+            .expect("pending ghost window request");
+        // 物理 450x300 在 1.5x DPI 下应换算为逻辑 300x200，经 resolve_window_placement 乘以 1.5 还原为 450x300。
+        assert_eq!(req_cfg.width, 300);
+        assert_eq!(req_cfg.height, 200);
+        let resolved =
+            unbound_platform::resolve_window_placement(&req_cfg, (0, 0, 2560, 1400), 1.5);
+        assert_eq!(resolved.width, 450);
+        assert_eq!(resolved.height, 300);
     }
 }

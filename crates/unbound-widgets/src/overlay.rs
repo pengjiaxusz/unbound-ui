@@ -645,7 +645,14 @@ impl OverlayStack {
     }
 
     /// 推入浮层并返回其排序键。
+    ///
+    /// 若栈中已存在同 `node` 条目，则原地更新该条目并保持原索引与栈长不变，
+    /// 避免声明式逐帧重建导致浮层栈与 Z 序持续膨胀。
     pub fn push(&mut self, entry: OverlayEntry) -> u64 {
+        if let Some(index) = self.entries.iter().position(|e| e.node == entry.node) {
+            self.entries[index] = entry;
+            return self.sort_key(index, self.order);
+        }
         self.order = self.order.wrapping_add(1);
         let order = self.order;
         self.entries.push(entry);
@@ -1086,5 +1093,19 @@ mod tests {
         ));
         stack.push(OverlayEntry::popover(2, 7, Rect::new(0.0, 0.0, 10.0, 10.0)));
         assert_eq!(stack.focus_scope(), Some([7, 8].as_slice()));
+    }
+
+    #[test]
+    fn push_deduplicates_existing_node_in_place() {
+        let mut stack = OverlayStack::new();
+        let b1 = Rect::new(10.0, 20.0, 200.0, 120.0);
+        let b2 = Rect::new(30.0, 40.0, 240.0, 160.0);
+        let _ = stack.push(OverlayEntry::modal(42, b1, Vec::new()));
+        for _ in 0..60 {
+            let _ = stack.push(OverlayEntry::modal(42, b2, Vec::new()));
+        }
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.entries()[0].node, 42);
+        assert_eq!(stack.entries()[0].bounds, b2);
     }
 }
