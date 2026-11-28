@@ -1204,6 +1204,7 @@ pub(crate) mod win32 {
 }
 
 /// 将 [`ScreenRect`] 换算为 Win32 `WINDOWPLACEMENT.rcNormalPosition` 的 `(left, top, right, bottom)`。
+#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) fn placement_rect_from_bounds(bounds: ScreenRect) -> (i32, i32, i32, i32) {
     let w = i32::try_from(bounds.width.max(1)).unwrap_or(i32::MAX / 2);
@@ -1217,6 +1218,7 @@ pub(crate) fn placement_rect_from_bounds(bounds: ScreenRect) -> (i32, i32, i32, 
 }
 
 /// 将输入法光标区域规范化为 Win32 `CreateCaret` / `SetCaretPos` 几何 `(x, y, width, height)`。
+#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) fn caret_rect_from_area(
     x: i32,
