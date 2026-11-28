@@ -876,6 +876,7 @@ pub struct AppContext {
     window_outer_bounds: unbound_platform::ScreenRect,
     /// 宿主窗口在非最大化普通状态下的外框矩形（供最大化退出后持久化恢复）。
     window_normal_bounds: Option<unbound_platform::ScreenRect>,
+    ime_preedit_active: bool,
     /// Snapshot of physical screen geometries for all registered windows in this process.
     all_window_geometries: Arc<Vec<WindowGeometry>>,
     /// Live cross-window drag hover state routed to this window when it is the active drop target.
@@ -961,6 +962,7 @@ impl AppContext {
                 viewport.y.round().max(1.0) as u32,
             ),
             window_normal_bounds: None,
+            ime_preedit_active: false,
             all_window_geometries: Arc::new(Vec::new()),
             cross_window_drag_target: None,
             dock_candidate_panes: Vec::new(),
@@ -1827,8 +1829,8 @@ impl AppContext {
 
     /// 当前是否正处于 IME 组合预编辑态。
     #[must_use]
-    pub fn ime_preedit_active(&self) -> bool {
-        self.ime.enabled && !self.ime.preedit.is_empty()
+    pub const fn ime_preedit_active(&self) -> bool {
+        self.ime_preedit_active
     }
 
     /// Returns physical screen geometry snapshots for all registered windows in this process.
@@ -7154,6 +7156,7 @@ impl<A: Application> AppRuntime<A> {
 
     /// 处理 IME 更新。
     pub fn ime(&mut self, update: ImeUpdate) -> DirtyFlags {
+        self.ctx.ime_preedit_active = update.enabled && !update.preedit.is_empty();
         self.dispatch(AppEvent::Ime { update })
     }
 
@@ -7938,7 +7941,7 @@ impl<A: Application> AppRuntime<A> {
 
     /// 当前是否正处于 IME 组合预编辑态。
     #[must_use]
-    pub fn ime_preedit_active(&self) -> bool {
+    pub const fn ime_preedit_active(&self) -> bool {
         self.ctx.ime_preedit_active()
     }
 
