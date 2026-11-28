@@ -219,19 +219,31 @@ void main() {
         }
         surface = vec4(texel, tex_a * fill.a * self_alpha);
     } else if (prim_type == PRIM_PROCEDURAL_GRID) {
-        // 单图元解析抗锯齿程序化网格：先分别计算次/主两级覆盖率，
-        // 再在线性预乘空间执行主网格覆盖次网格的 Over 合成，最后还原为非预乘 RGB 供后续统一混合。
+        // 单图元解析抗锯齿程序化网格：支持任意视口旋转与线格 / 点格切换，
+        // 先分别计算次/主两级覆盖率，再在线性预乘空间执行 Over 合成。
         Payload pl = PayloadBuf(pc.payloads_bda).p[v_misc.x];
-        vec2 gp = v_local - pl.p0;
+        vec2 delta = v_local - pl.p0;
+        float rot = pl.line_width;
+        float cs = cos(rot);
+        float sn = sin(rot);
+        vec2 gp = vec2(delta.x * cs + delta.y * sn, -delta.x * sn + delta.y * cs);
         vec2 fw = max(fwidth(gp), vec2(1e-4));
+        float fw_dot = max(fw.x, fw.y);
+        uint grid_mode = pl._reserved.x;
 
         float minor_cov = 0.0;
         if (pl.p1.x > 0.0 && pl.p2.x > 0.0) {
             float s = pl.p1.x;
             float lw = pl.p2.x;
             vec2 d = abs(mod(gp + 0.5 * s, s) - 0.5 * s);
-            vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
-            minor_cov = max(cov.x, cov.y);
+            if (grid_mode == 1u) {
+                float dist = length(d);
+                float rad = max(lw * 0.5, 0.5);
+                minor_cov = 1.0 - smoothstep(rad - 0.5 * fw_dot, rad + 0.5 * fw_dot, dist);
+            } else {
+                vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
+                minor_cov = max(cov.x, cov.y);
+            }
         }
 
         float major_cov = 0.0;
@@ -239,8 +251,14 @@ void main() {
             float s = pl.p1.y;
             float lw = pl.p2.y;
             vec2 d = abs(mod(gp + 0.5 * s, s) - 0.5 * s);
-            vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
-            major_cov = max(cov.x, cov.y);
+            if (grid_mode == 1u) {
+                float dist = length(d);
+                float rad = max(lw * 0.5, 0.5);
+                major_cov = 1.0 - smoothstep(rad - 0.5 * fw_dot, rad + 0.5 * fw_dot, dist);
+            } else {
+                vec2 cov = 1.0 - smoothstep(vec2(lw * 0.5) - 0.5 * fw, vec2(lw * 0.5) + 0.5 * fw, d);
+                major_cov = max(cov.x, cov.y);
+            }
         }
 
         vec4 minor_c = unpackUnorm4x8(pl.extra);

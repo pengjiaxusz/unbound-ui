@@ -643,14 +643,41 @@ impl GpuPayload {
         minor_rgba: [u8; 4],
         major_rgba: [u8; 4],
     ) -> Self {
+        Self::procedural_grid_ex(
+            origin_offset,
+            minor_spacing,
+            major_spacing,
+            minor_line_width,
+            major_line_width,
+            minor_rgba,
+            major_rgba,
+            0.0,
+            0,
+        )
+    }
+
+    /// 构造带视口旋转角（弧度）与模式（`0 = Lines`, `1 = Dots`）的程序化 SDF 网格载荷。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn procedural_grid_ex(
+        origin_offset: [f32; 2],
+        minor_spacing: f32,
+        major_spacing: f32,
+        minor_line_width: f32,
+        major_line_width: f32,
+        minor_rgba: [u8; 4],
+        major_rgba: [u8; 4],
+        rotation_rad: f32,
+        mode: u32,
+    ) -> Self {
         Self {
             p0: origin_offset,
             p1: [minor_spacing, major_spacing],
             p2: [minor_line_width, major_line_width],
-            line_width: 0.0,
+            line_width: rotation_rad,
             extra: pack_rgba8(minor_rgba),
             flags: pack_rgba8(major_rgba),
-            _reserved: [0; 3],
+            _reserved: [mode, 0, 0],
         }
     }
 }

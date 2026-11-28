@@ -470,9 +470,13 @@ pub use elided_text::{
     ElidedTextState, ELLIPSIS,
 };
 pub use generic_data_table::{
-    emit_generic_data_table, DataColumnSpec, GenericDataTableDesc, GenericDataTableState,
-    SortDirection,
+    emit_generic_data_table, DataColumnSpec, DataTableEvent, DataTableKey, GenericDataTableDesc,
+    GenericDataTableState, SortDirection,
 };
+/// [`GenericDataTableDesc`] 的通用虚拟化数据表别名。
+pub type DataTableDesc = GenericDataTableDesc;
+/// [`GenericDataTableState`] 的通用虚拟化数据表状态别名。
+pub type DataTableState = GenericDataTableState;
 pub use inline_editable_text::{
     emit_inline_editable_text, BlurBehavior, EditTrigger, InlineEditEvent, InlineEditableTextDesc,
     InlineEditableTextState,
@@ -690,7 +694,7 @@ pub use pagination::{emit_pagination, PaginationDesc, PaginationState, Paginatio
 pub use pin_input::{emit_pin_input, PinInputDesc, PinInputState};
 pub use popconfirm::{emit_popconfirm, PopconfirmDesc};
 pub use popover::{emit_popover, PopoverDesc, PopoverOutput, PopoverWidget};
-pub use procedural_grid::{emit_procedural_grid, ProceduralGridDesc};
+pub use procedural_grid::{emit_procedural_grid, GridPatternMode, ProceduralGridDesc};
 pub use progress::{
     emit_progress, ProgressDesc, ProgressKind, ProgressState, ProgressTokens, PROGRESS_RATE,
     RING_SEGMENTS,
@@ -749,10 +753,11 @@ pub use table::{
 };
 pub use tabs::{
     emit_tab, emit_tab_close, emit_tabs_add, emit_tabs_strip, emit_tabs_with_control_states,
-    reduce_tabs_key, tab_add_node, tab_close_node, tab_item_node, TabItem, TabViewEvent,
-    TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens, TAB_ADD_GAP,
-    TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH, TAB_MIN_WIDTH,
-    TAB_SHELL_CORNER_RADIUS, TAB_SHELL_ITEM_HEIGHT, TAB_SHELL_TOP_INSET, TAB_STRIP_HEIGHT,
+    reduce_tabs_key, tab_add_node, tab_close_node, tab_item_node, TabDragSession, TabItem,
+    TabViewEvent, TabViewStyle, TabWidthMode, TabsDesc, TabsKey, TabsState, TabsTokens,
+    TAB_ADD_GAP, TAB_ADD_HEIGHT, TAB_ADD_WIDTH, TAB_CLOSE, TAB_CLOSE_HIT_SIZE, TAB_MAX_WIDTH,
+    TAB_MIN_WIDTH, TAB_SHELL_CORNER_RADIUS, TAB_SHELL_ITEM_HEIGHT, TAB_SHELL_TOP_INSET,
+    TAB_STRIP_HEIGHT,
 };
 pub use tag_input::{
     emit_tag_input, layout_tags, TagInputDesc, TagInputOutcome, TagInputState, TagKey, TagLayout,
