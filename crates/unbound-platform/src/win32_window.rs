@@ -1125,10 +1125,10 @@ pub(crate) mod win32 {
             }
             let (_, _, _, caret_h) = super::caret_rect_from_area(x, y, 1, height);
             let key = (hwnd.0 as isize, caret_h);
-            if CARET_SIZE.with(|cell| cell.get()) != Some(key) {
-                if CreateCaret(hwnd, None, 1, caret_h).is_ok() {
-                    CARET_SIZE.with(|cell| cell.set(Some(key)));
-                }
+            if CARET_SIZE.with(|cell| cell.get()) != Some(key)
+                && CreateCaret(hwnd, None, 1, caret_h).is_ok()
+            {
+                CARET_SIZE.with(|cell| cell.set(Some(key)));
             }
             let _ = SetCaretPos(x, y);
         }
