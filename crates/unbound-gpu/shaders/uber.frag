@@ -229,7 +229,7 @@ void main() {
         vec2 gp = vec2(delta.x * cs + delta.y * sn, -delta.x * sn + delta.y * cs);
         vec2 fw = max(fwidth(gp), vec2(1e-4));
         float fw_dot = max(fw.x, fw.y);
-        uint grid_mode = pl._reserved.x;
+        uint grid_mode = pl.pad0;
 
         float minor_cov = 0.0;
         if (pl.p1.x > 0.0 && pl.p2.x > 0.0) {
