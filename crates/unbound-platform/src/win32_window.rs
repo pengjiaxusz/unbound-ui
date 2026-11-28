@@ -591,9 +591,9 @@ pub(crate) mod win32 {
         ImmSetCompositionWindow, CANDIDATEFORM, CFS_EXCLUDE, CFS_POINT, COMPOSITIONFORM, HIMC,
         IACE_CHILDREN, IACE_DEFAULT,
     };
-    use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+    use ::windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, ReleaseCapture};
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, CreateCaret, DestroyCaret, GetClientRect, GetCursorPos, GetFocus,
+        BringWindowToTop, CreateCaret, DestroyCaret, GetClientRect, GetCursorPos,
         GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic, IsWindowVisible, IsZoomed,
         LoadCursorW, PostMessageW, SetCaretPos, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
         SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, GWL_EXSTYLE, HCURSOR,

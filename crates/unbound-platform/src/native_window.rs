@@ -393,8 +393,10 @@ impl NativeWindow {
 
     /// 记录窗口正常状态几何，供最大化与还原时写入平台放置信息。
     pub fn set_normal_bounds(&self, bounds: ScreenRect) {
-        if let NativeWindowInner::Win32(w) = &self.inner {
-            w.set_normal_bounds(bounds);
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_normal_bounds(bounds),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(_) | NativeWindowInner::X11(_) => {}
         }
     }
 
