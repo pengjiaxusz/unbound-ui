@@ -151,6 +151,8 @@ pub struct Window {
     cursor: Arc<AtomicU32>,
     /// 缓存最近一次同步到 Win32 的 IME 允许状态（`None` 表示尚未显式下发）。
     ime_allowed: Cell<Option<bool>>,
+    /// 缓存正常（非最大化）窗口几何，用于最大化/还原时写入 `WINDOWPLACEMENT.rcNormalPosition`。
+    normal_bounds_cache: Cell<Option<ScreenRect>>,
     redraw_requested: Arc<AtomicBool>,
     destroyed: Arc<AtomicBool>,
 }
@@ -172,6 +174,7 @@ impl Window {
             popup_id: None,
             cursor,
             ime_allowed: Cell::new(None),
+            normal_bounds_cache: Cell::new(None),
             redraw_requested,
             destroyed,
         }
@@ -443,12 +446,26 @@ impl Window {
         let _ = minimized;
     }
 
-    /// 最大化或恢复窗口。
+    /// 显式记录或更新正常窗口几何（供后续最大化与还原保留 `rcNormalPosition`）。
+    pub fn set_normal_bounds(&self, bounds: ScreenRect) {
+        self.normal_bounds_cache.set(Some(bounds));
+    }
+
+    /// 最大化或恢复窗口（保留已记录的正常窗口几何）。
     pub fn set_maximized(&self, maximized: bool) {
+        self.set_maximized_with_bounds(maximized, None);
+    }
+
+    /// 最大化或恢复窗口，并可显式同步 `WINDOWPLACEMENT.rcNormalPosition`。
+    pub fn set_maximized_with_bounds(&self, maximized: bool, normal_bounds: Option<ScreenRect>) {
+        let effective_normal = normal_bounds.or_else(|| self.normal_bounds_cache.get());
+        if let Some(b) = normal_bounds {
+            self.normal_bounds_cache.set(Some(b));
+        }
         #[cfg(windows)]
-        win32::set_maximized(self.hwnd, maximized);
+        win32::set_maximized_with_bounds(self.hwnd, maximized, effective_normal);
         #[cfg(not(windows))]
-        let _ = maximized;
+        let _ = (maximized, effective_normal);
     }
 
     /// 更新窗口标题（同步显示在任务栏与 Alt+Tab 切换器中）。
@@ -576,16 +593,17 @@ pub(crate) mod win32 {
     };
     use ::windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowPlacement,
-        GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, PostMessageW, SetCursor,
-        SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
-        GWL_EXSTYLE, HCURSOR, HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS,
-        IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
-        IDC_SIZEWE, MONITORINFOF_PRIMARY, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
-        SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT,
-        WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN,
-        WM_SYSCOMMAND, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+        BringWindowToTop, CreateCaret, DestroyCaret, GetClientRect, GetCursorPos, GetFocus,
+        GetWindowLongPtrW, GetWindowPlacement, GetWindowRect, IsIconic, IsWindowVisible, IsZoomed,
+        LoadCursorW, PostMessageW, SetCaretPos, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
+        SetWindowPlacement, SetWindowPos, SetWindowTextW, ShowWindow, GWL_EXSTYLE, HCURSOR,
+        HTCAPTION, HWND_NOTOPMOST, HWND_TOPMOST, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_IBEAM, IDC_NO,
+        IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, MONITORINFOF_PRIMARY,
+        SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE,
+        SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+        WINDOWPLACEMENT, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT,
+        WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_CLOSE, WM_NCLBUTTONDOWN, WM_SYSCOMMAND,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     };
 
     #[inline]
@@ -892,11 +910,50 @@ pub(crate) mod win32 {
         }
     }
 
-    pub(crate) fn set_maximized(hwnd: isize, maximized: bool) {
+    pub(crate) fn set_maximized_with_bounds(
+        hwnd: isize,
+        maximized: bool,
+        normal_bounds: Option<ScreenRect>,
+    ) {
+        let hwnd = hwnd_from_isize(hwnd);
+        let mut placement = WINDOWPLACEMENT {
+            length: core::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GetWindowPlacement(hwnd, &mut placement) }.is_ok() {
+            if let Some(bounds) = normal_bounds {
+                let (left, top, right, bottom) = super::placement_rect_from_bounds(bounds);
+                placement.rcNormalPosition = RECT {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                };
+            } else if maximized && !unsafe { IsZoomed(hwnd).as_bool() } {
+                let mut cur = RECT::default();
+                if unsafe { GetWindowRect(hwnd, &mut cur) }.is_ok()
+                    && cur.right > cur.left
+                    && cur.bottom > cur.top
+                {
+                    placement.rcNormalPosition = cur;
+                }
+            }
+            placement.showCmd = if maximized {
+                SW_SHOWMAXIMIZED.0 as u32
+            } else {
+                SW_SHOWNORMAL.0 as u32
+            };
+            let _ = unsafe { SetWindowPlacement(hwnd, &placement) };
+            return;
+        }
         unsafe {
             let _ = ShowWindow(
-                hwnd_from_isize(hwnd),
-                if maximized { SW_MAXIMIZE } else { SW_RESTORE },
+                hwnd,
+                if maximized {
+                    SW_SHOWMAXIMIZED
+                } else {
+                    SW_RESTORE
+                },
             );
         }
     }
@@ -1016,6 +1073,8 @@ pub(crate) mod win32 {
             if allowed {
                 // 组合窗位置属于“上一次会话”的状态，重新启用后要重新上报。
                 IME_APPLIED.with(|cell| cell.set(None));
+            } else {
+                destroy_win32_caret();
             }
         }
     }
@@ -1045,6 +1104,34 @@ pub(crate) mod win32 {
         /// 已经写入 IMM 的插入符区域；与 `IME_CARET` 相同则跳过重复调用。
         static IME_APPLIED: core::cell::Cell<Option<(i32, i32, u32, u32)>> =
             const { core::cell::Cell::new(None) };
+        /// 当前线程已创建的 Win32 系统 Caret 尺寸签名 `(hwnd, height)`。
+        static CARET_SIZE: core::cell::Cell<Option<(isize, i32)>> =
+            const { core::cell::Cell::new(None) };
+    }
+
+    /// 销毁当前线程上的 Win32 系统 Caret（输入框失焦或窗口失去焦点时调用）。
+    pub(crate) fn destroy_win32_caret() {
+        if CARET_SIZE.with(|cell| cell.take()).is_some() {
+            unsafe {
+                let _ = DestroyCaret();
+            }
+        }
+    }
+
+    fn sync_win32_caret(hwnd: HWND, x: i32, y: i32, height: u32) {
+        unsafe {
+            if GetFocus() != hwnd {
+                return;
+            }
+            let (_, _, _, caret_h) = super::caret_rect_from_area(x, y, 1, height);
+            let key = (hwnd.0 as isize, caret_h);
+            if CARET_SIZE.with(|cell| cell.get()) != Some(key) {
+                if CreateCaret(hwnd, None, 1, caret_h).is_ok() {
+                    CARET_SIZE.with(|cell| cell.set(Some(key)));
+                }
+            }
+            let _ = SetCaretPos(x, y);
+        }
     }
 
     /// 宿主最近一次上报的插入符（客户区坐标，物理像素）与行高。
@@ -1102,13 +1189,59 @@ pub(crate) mod win32 {
     pub(crate) fn set_ime_cursor_area(hwnd: isize, position: PhysicalPosition, size: PhysicalSize) {
         let area = (position.x, position.y, size.width, size.height);
         IME_CARET.with(|cell| cell.set(Some(area)));
+        let raw_hwnd = hwnd_from_isize(hwnd);
+        // 同步 Win32 系统 Caret 位置供无障碍与第三方输入法查询（不调用 ShowCaret，避免遮挡 GPU 自绘光标）。
+        sync_win32_caret(raw_hwnd, position.x, position.y, size.height);
         // 只在区域真正变化时才写 IMM。宿主每个事件后都会重报插入符，
         // 若每帧无条件调 ImmSetCompositionWindow，输入法会持续重排、重绘，
         // 表现为 WM_IME_NOTIFY / IMR_QUERYCHARPOSITION 无休止循环。
         if IME_APPLIED.with(|cell| cell.get()) == Some(area) {
             return;
         }
-        apply_ime_area(hwnd_from_isize(hwnd), area);
+        apply_ime_area(raw_hwnd, area);
         IME_APPLIED.with(|cell| cell.set(Some(area)));
+    }
+}
+
+/// 将 [`ScreenRect`] 换算为 Win32 `WINDOWPLACEMENT.rcNormalPosition` 的 `(left, top, right, bottom)`。
+#[inline]
+pub(crate) fn placement_rect_from_bounds(bounds: ScreenRect) -> (i32, i32, i32, i32) {
+    let w = i32::try_from(bounds.width.max(1)).unwrap_or(i32::MAX / 2);
+    let h = i32::try_from(bounds.height.max(1)).unwrap_or(i32::MAX / 2);
+    (
+        bounds.x,
+        bounds.y,
+        bounds.x.saturating_add(w),
+        bounds.y.saturating_add(h),
+    )
+}
+
+/// 将输入法光标区域规范化为 Win32 `CreateCaret` / `SetCaretPos` 几何 `(x, y, width, height)`。
+#[inline]
+pub(crate) fn caret_rect_from_area(
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> (i32, i32, i32, i32) {
+    let w = i32::try_from(width.max(1)).unwrap_or(1);
+    let h = i32::try_from(height.max(1)).unwrap_or(16);
+    (x, y, w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_rect_preserves_normal_bounds() {
+        let bounds = ScreenRect::new(-120, 40, 1280, 720);
+        assert_eq!(placement_rect_from_bounds(bounds), (-120, 40, 1160, 760));
+    }
+
+    #[test]
+    fn caret_rect_clamps_zero_height() {
+        assert_eq!(caret_rect_from_area(10, 20, 0, 0), (10, 20, 1, 1));
+        assert_eq!(caret_rect_from_area(10, 20, 2, 24), (10, 20, 2, 24));
     }
 }

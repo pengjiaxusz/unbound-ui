@@ -1825,6 +1825,12 @@ impl AppContext {
         self.window_normal_bounds
     }
 
+    /// 当前是否正处于 IME 组合预编辑态。
+    #[must_use]
+    pub fn ime_preedit_active(&self) -> bool {
+        self.ime.enabled && !self.ime.preedit.is_empty()
+    }
+
     /// Returns physical screen geometry snapshots for all registered windows in this process.
     #[must_use]
     pub fn all_window_geometries(&self) -> &[WindowGeometry] {
@@ -7928,6 +7934,12 @@ impl<A: Application> AppRuntime<A> {
     #[must_use]
     pub const fn normal_bounds(&self) -> Option<unbound_platform::ScreenRect> {
         self.ctx.normal_bounds()
+    }
+
+    /// 当前是否正处于 IME 组合预编辑态。
+    #[must_use]
+    pub fn ime_preedit_active(&self) -> bool {
+        self.ctx.ime_preedit_active()
     }
 
     /// 向应用层派发 [`AppEvent::CloseRequested`]，由应用决定拦截或显式下发关闭命令。

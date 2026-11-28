@@ -1945,13 +1945,15 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandState {
                 }
                 if let Some(entry) = state.window_by_surface_mut(proto_id) {
                     entry.pending_events.push(PlatformEvent::KeyInput {
-                        key: platform_key,
+                        key: platform_key.clone(),
                         state: if pressed {
                             ButtonState::Pressed
                         } else {
                             ButtonState::Released
                         },
                         repeat: false,
+                        scan_code: key,
+                        physical_key: Some(platform_key),
                     });
                 }
             }
@@ -2481,9 +2483,11 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
             if let Some(proto_id) = wl.focused_surface_id {
                 if let Some(entry) = wl.window_by_surface_mut(proto_id) {
                     entry.pending_events.push(PlatformEvent::KeyInput {
-                        key: rep_key,
+                        key: rep_key.clone(),
                         state: ButtonState::Pressed,
                         repeat: true,
+                        scan_code: 0,
+                        physical_key: Some(rep_key),
                     });
                 }
             }

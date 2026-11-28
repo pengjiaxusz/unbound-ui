@@ -391,10 +391,28 @@ impl NativeWindow {
         }
     }
 
+    /// 记录窗口正常状态几何，供最大化与还原时写入平台放置信息。
+    pub fn set_normal_bounds(&self, bounds: ScreenRect) {
+        if let NativeWindowInner::Win32(w) = &self.inner {
+            w.set_normal_bounds(bounds);
+        }
+    }
+
     /// 最大化或还原窗口。
     pub fn set_maximized(&self, maximized: bool) {
         match &self.inner {
             NativeWindowInner::Win32(w) => w.set_maximized(maximized),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::Wayland(w) => w.set_maximized(maximized),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+            NativeWindowInner::X11(w) => w.set_maximized(maximized),
+        }
+    }
+
+    /// 最大化或还原窗口，并可选传入正常状态几何。
+    pub fn set_maximized_with_bounds(&self, maximized: bool, normal_bounds: Option<ScreenRect>) {
+        match &self.inner {
+            NativeWindowInner::Win32(w) => w.set_maximized_with_bounds(maximized, normal_bounds),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
             NativeWindowInner::Wayland(w) => w.set_maximized(maximized),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]

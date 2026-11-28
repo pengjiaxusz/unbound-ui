@@ -1140,6 +1140,7 @@ mod win32 {
                 LRESULT(0)
             }
             WM_KILLFOCUS => {
+                crate::win32_window::win32::destroy_win32_caret();
                 data.events.borrow_mut().push(PlatformEvent::Focused(false));
                 LRESULT(0)
             }
@@ -1332,6 +1333,11 @@ mod win32 {
                 // 抬起事件或窗口未关联 IME 上下文时，VK_PROCESSKEY 按物理扫描码兜底还原。
                 let recover_process_key = !pressed || !ime_attached;
                 let key = translate_vk(vk, scan_code, recover_process_key);
+                let physical_key = if vk == VK_PROCESSKEY.0 {
+                    Some(translate_vk(vk, scan_code, true))
+                } else {
+                    Some(key.clone())
+                };
                 if pressed && ime_trace_enabled() {
                     // 输入法只在“焦点窗口 + 已关联输入上下文”时才投递 WM_IME_*，
                     // 这两个状态是排查组合事件缺失时最先要看的东西。
@@ -1354,6 +1360,8 @@ mod win32 {
                     },
                     key,
                     repeat,
+                    scan_code,
+                    physical_key,
                 });
                 // 必须交由 DefWindowProcW 处理 WM_SYSKEYDOWN / WM_SYSKEYUP，
                 // 才能保障 Alt+F4 -> SC_CLOSE -> WM_CLOSE 与 Alt+Space 系统菜单正常触发。
@@ -1769,15 +1777,36 @@ mod win32 {
         ));
         let a11y = PlatformA11y::for_win32(hwnd.0 as isize);
         if config.visible {
-            let show_cmd = if config.floating_policy.no_activate {
-                SW_SHOWNOACTIVATE
-            } else if config.initial_maximized {
-                SW_SHOWMAXIMIZED
+            if !config.floating_policy.no_activate && config.initial_maximized {
+                let normal_bounds = config.initial_normal_bounds.or_else(|| {
+                    let mut rc = RECT::default();
+                    if unsafe { GetWindowRect(hwnd, &mut rc) }.is_ok()
+                        && rc.right > rc.left
+                        && rc.bottom > rc.top
+                    {
+                        Some(crate::ScreenRect::new(
+                            rc.left,
+                            rc.top,
+                            (rc.right - rc.left) as u32,
+                            (rc.bottom - rc.top) as u32,
+                        ))
+                    } else {
+                        None
+                    }
+                });
+                if let Some(nb) = normal_bounds {
+                    window.set_normal_bounds(nb);
+                }
+                window.set_maximized_with_bounds(true, normal_bounds);
             } else {
-                SW_SHOW
-            };
-            unsafe {
-                let _ = ShowWindow(hwnd, show_cmd);
+                let show_cmd = if config.floating_policy.no_activate {
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_SHOW
+                };
+                unsafe {
+                    let _ = ShowWindow(hwnd, show_cmd);
+                }
             }
         }
         let size = window.inner_size();

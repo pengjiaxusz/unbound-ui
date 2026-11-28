@@ -207,6 +207,232 @@ impl CustomCursorRegistry {
 static GLOBAL_REGISTRY: LazyLock<Mutex<CustomCursorRegistry>> =
     LazyLock::new(|| Mutex::new(CustomCursorRegistry::new()));
 
+/// 自定义矢量光标按 5° 步进量化后的分桶数量（`0..72` 覆盖 `0°..355°`）。
+pub const VECTOR_CURSOR_STEP_DEG: f32 = 5.0;
+const ROTATION_CURSOR_BUCKETS: usize = 72;
+const SCALE_CURSOR_BUCKETS: usize = 36;
+const VECTOR_CURSOR_SIZE: u32 = 32;
+
+static ROTATION_CURSOR_CACHE: LazyLock<Mutex<[Option<CustomCursorId>; ROTATION_CURSOR_BUCKETS]>> =
+    LazyLock::new(|| Mutex::new([None; ROTATION_CURSOR_BUCKETS]));
+static SCALE_CURSOR_CACHE: LazyLock<Mutex<[Option<CustomCursorId>; SCALE_CURSOR_BUCKETS]>> =
+    LazyLock::new(|| Mutex::new([None; SCALE_CURSOR_BUCKETS]));
+
+/// 将任意角度（度）量化到最近的 5° 步进角，返回 `(规范化度数, 0..72 桶索引)`。
+#[must_use]
+pub fn quantize_angle_5deg(angle_deg: f32) -> (f32, usize) {
+    let wrapped = angle_deg.rem_euclid(360.0);
+    let bucket = ((wrapped / VECTOR_CURSOR_STEP_DEG).round() as usize) % ROTATION_CURSOR_BUCKETS;
+    (bucket as f32 * VECTOR_CURSOR_STEP_DEG, bucket)
+}
+
+#[inline]
+fn dist_point_to_segment(px: f32, py: f32, ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    let vx = bx - ax;
+    let vy = by - ay;
+    let wx = px - ax;
+    let wy = py - ay;
+    let len_sq = vx * vx + vy * vy;
+    let t = if len_sq > 1e-6 {
+        ((wx * vx + wy * vy) / len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let dx = px - (ax + t * vx);
+    let dy = py - (ay + t * vy);
+    (dx * dx + dy * dy).sqrt()
+}
+
+#[inline]
+fn blend_vector_cursor_pixel(dst: &mut [u8], sd: f32, fill_half: f32, outline_half: f32) {
+    // 使用 1px 抗锯齿过渡带：外层白描边，内层深色填充，确保浅/深画布均清晰可见。
+    let aa = 1.0;
+    let outer_a = (outline_half + 0.5 - sd).clamp(0.0, aa);
+    if outer_a <= 0.0 {
+        return;
+    }
+    let fill_a = (fill_half + 0.5 - sd).clamp(0.0, aa);
+    let r = (255.0 * (1.0 - fill_a) + 24.0 * fill_a).round() as u8;
+    let g = (255.0 * (1.0 - fill_a) + 24.0 * fill_a).round() as u8;
+    let b = (255.0 * (1.0 - fill_a) + 27.0 * fill_a).round() as u8;
+    let a = (outer_a * 255.0).round() as u8;
+    if a > dst[3] {
+        dst[0] = r;
+        dst[1] = g;
+        dst[2] = b;
+        dst[3] = a;
+    }
+}
+
+/// 栅格化 5° 步进旋转手柄矢量光标位图（32x32 RGBA8，热点居中）。
+#[must_use]
+pub fn rasterize_rotation_cursor_rgba(angle_deg: f32) -> CustomCursorBitmap {
+    let (quantized_deg, _) = quantize_angle_5deg(angle_deg);
+    let rad = quantized_deg.to_radians();
+    let (sin_a, cos_a) = rad.sin_cos();
+    let size = VECTOR_CURSOR_SIZE;
+    let half = size as f32 * 0.5;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+
+    let arc_r = 8.2_f32;
+    let arc_half_span = 1.15_f32; // ~66 deg half-span -> 132 deg curved arc
+    let head_len = 3.6_f32;
+    let head_spread = 2.6_f32;
+
+    for y in 0..size {
+        for x in 0..size {
+            let rx = x as f32 + 0.5 - half;
+            let ry = y as f32 + 0.5 - half;
+            // 反向旋转像素坐标，在局部坐标系求值曲线双向箭头 SDF。
+            let lx = rx * cos_a + ry * sin_a;
+            let ly = -rx * sin_a + ry * cos_a;
+
+            let r = (lx * lx + ly * ly).sqrt();
+            let theta = ly.atan2(lx);
+            let mut sd = if theta.abs() <= arc_half_span {
+                (r - arc_r).abs()
+            } else {
+                let sign = if theta >= 0.0 { 1.0 } else { -1.0 };
+                let ex = arc_r * arc_half_span.cos();
+                let ey = sign * arc_r * arc_half_span.sin();
+                ((lx - ex).powi(2) + (ly - ey).powi(2)).sqrt()
+            };
+
+            // 两端切线箭头（+arc_half_span 与 -arc_half_span）。
+            for sign in [-1.0_f32, 1.0_f32] {
+                let a = sign * arc_half_span;
+                let tip_x = arc_r * a.cos();
+                let tip_y = arc_r * a.sin();
+                // 外指切向
+                let tx = -sign * a.sin();
+                let ty = sign * a.cos();
+                // 径向法线
+                let nx = a.cos();
+                let ny = a.sin();
+                let bx = tip_x - tx * head_len;
+                let by = tip_y - ty * head_len;
+                let d1 = dist_point_to_segment(
+                    lx,
+                    ly,
+                    tip_x,
+                    tip_y,
+                    bx + nx * head_spread,
+                    by + ny * head_spread,
+                );
+                let d2 = dist_point_to_segment(
+                    lx,
+                    ly,
+                    tip_x,
+                    tip_y,
+                    bx - nx * head_spread,
+                    by - ny * head_spread,
+                );
+                sd = sd.min(d1).min(d2);
+            }
+
+            let idx = ((y * size + x) * 4) as usize;
+            blend_vector_cursor_pixel(&mut rgba[idx..idx + 4], sd, 1.05, 2.2);
+        }
+    }
+
+    CustomCursorBitmap {
+        rgba,
+        width: size,
+        height: size,
+        hotspot_x: size / 2,
+        hotspot_y: size / 2,
+    }
+}
+
+/// 栅格化任意角度对称缩放矢量光标位图（32x32 RGBA8，5° 步进，热点居中）。
+#[must_use]
+pub fn rasterize_scale_cursor_rgba(angle_deg: f32) -> CustomCursorBitmap {
+    let (quantized_deg, _) = quantize_angle_5deg(angle_deg);
+    let rad = quantized_deg.to_radians();
+    let (sin_a, cos_a) = rad.sin_cos();
+    let size = VECTOR_CURSOR_SIZE;
+    let half = size as f32 * 0.5;
+    let mut rgba = vec![0u8; (size * size * 4) as usize];
+
+    let shaft_half = 8.5_f32;
+    let head_len = 4.0_f32;
+    let head_spread = 3.2_f32;
+
+    for y in 0..size {
+        for x in 0..size {
+            let rx = x as f32 + 0.5 - half;
+            let ry = y as f32 + 0.5 - half;
+            let lx = rx * cos_a + ry * sin_a;
+            let ly = -rx * sin_a + ry * cos_a;
+
+            let mut sd = dist_point_to_segment(lx, ly, -shaft_half, 0.0, shaft_half, 0.0);
+            for sign in [-1.0_f32, 1.0_f32] {
+                let tip_x = sign * (shaft_half + 1.5);
+                let base_x = tip_x - sign * head_len;
+                let d1 = dist_point_to_segment(lx, ly, tip_x, 0.0, base_x, head_spread);
+                let d2 = dist_point_to_segment(lx, ly, tip_x, 0.0, base_x, -head_spread);
+                sd = sd.min(d1).min(d2);
+            }
+
+            let idx = ((y * size + x) * 4) as usize;
+            blend_vector_cursor_pixel(&mut rgba[idx..idx + 4], sd, 1.05, 2.2);
+        }
+    }
+
+    CustomCursorBitmap {
+        rgba,
+        width: size,
+        height: size,
+        hotspot_x: size / 2,
+        hotspot_y: size / 2,
+    }
+}
+
+/// 获取或惰性生成缓存的 5° 步进旋转手柄自定义光标 ID。
+#[must_use]
+pub fn rotation_cursor_for_angle_deg(angle_deg: f32) -> Option<CustomCursorId> {
+    let (quantized, bucket) = quantize_angle_5deg(angle_deg);
+    let mut cache = ROTATION_CURSOR_CACHE.lock().ok()?;
+    if let Some(id) = cache[bucket] {
+        if lookup_custom_cursor_bitmap(id).is_some() {
+            return Some(id);
+        }
+    }
+    let bmp = rasterize_rotation_cursor_rgba(quantized);
+    let id = register_custom_cursor(
+        &bmp.rgba,
+        bmp.width,
+        bmp.height,
+        bmp.hotspot_x,
+        bmp.hotspot_y,
+    )?;
+    cache[bucket] = Some(id);
+    Some(id)
+}
+
+/// 获取或惰性生成缓存的 5° 步进对称缩放自定义光标 ID。
+#[must_use]
+pub fn scale_cursor_for_angle_deg(angle_deg: f32) -> Option<CustomCursorId> {
+    let (quantized, raw_bucket) = quantize_angle_5deg(angle_deg);
+    let bucket = raw_bucket % SCALE_CURSOR_BUCKETS;
+    let mut cache = SCALE_CURSOR_CACHE.lock().ok()?;
+    if let Some(id) = cache[bucket] {
+        if lookup_custom_cursor_bitmap(id).is_some() {
+            return Some(id);
+        }
+    }
+    let bmp = rasterize_scale_cursor_rgba(quantized);
+    let id = register_custom_cursor(
+        &bmp.rgba,
+        bmp.width,
+        bmp.height,
+        bmp.hotspot_x,
+        bmp.hotspot_y,
+    )?;
+    cache[bucket] = Some(id);
+    Some(id)
+}
+
 /// 向进程全局注册表注册自定义 RGBA8 位图光标。
 #[must_use]
 pub fn register_custom_cursor(
@@ -481,5 +707,28 @@ mod tests {
         );
         // 注销时自动调用 DestroyIcon。
         assert!(registry.unregister(id));
+    }
+
+    #[test]
+    fn rotation_and_scale_cursors_quantize_to_5_deg_and_cache() {
+        assert_eq!(quantize_angle_5deg(0.0), (0.0, 0));
+        assert_eq!(quantize_angle_5deg(2.4), (0.0, 0));
+        assert_eq!(quantize_angle_5deg(2.6), (5.0, 1));
+        assert_eq!(quantize_angle_5deg(-5.0), (355.0, 71));
+
+        let rot1 = rotation_cursor_for_angle_deg(12.2).expect("rotation cursor");
+        let rot2 = rotation_cursor_for_angle_deg(11.9).expect("same 5deg bucket");
+        assert_eq!(rot1, rot2);
+
+        let bmp = lookup_custom_cursor_bitmap(rot1).expect("cached bitmap");
+        assert_eq!(bmp.width, 32);
+        assert_eq!(bmp.height, 32);
+        assert_eq!(bmp.hotspot_x, 16);
+        assert_eq!(bmp.hotspot_y, 16);
+        assert!(bmp.rgba.chunks_exact(4).any(|px| px[3] > 0));
+
+        let sc1 = scale_cursor_for_angle_deg(45.0).expect("scale cursor");
+        let sc2 = scale_cursor_for_angle_deg(225.0).expect("180deg symmetric bucket");
+        assert_eq!(sc1, sc2);
     }
 }
