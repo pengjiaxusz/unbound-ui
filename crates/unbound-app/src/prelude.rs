@@ -23,6 +23,9 @@ pub use crate::settings::{
     SettingsCard,
 };
 pub use crate::state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use crate::testing::{HeadlessTestHarness, InteractionDriver};
+#[cfg(feature = "offscreen-test")]
+pub use crate::testing::{OffscreenInitError, OffscreenTestHarness, RgbaImage};
 pub use crate::window_runner::{
     run_windowed, run_windowed_with_hwnd, ViewportPassFactory, WindowedRunner,
 };

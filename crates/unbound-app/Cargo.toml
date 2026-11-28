@@ -8,6 +8,9 @@ repository.workspace = true
 authors.workspace = true
 description = "Application runtime: event reduction, scene rebuild and frame diffing"
 
+[features]
+offscreen-test = ["dep:png"]
+
 [dependencies]
 unbound-math.workspace = true
 unbound-canvas.workspace = true
@@ -30,6 +33,7 @@ raw-window-handle.workspace = true
 accesskit.workspace = true
 crossbeam-channel.workspace = true
 rustc-hash.workspace = true
+png = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 unbound-text = { workspace = true, features = ["backend-swash"] }
