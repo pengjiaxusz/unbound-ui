@@ -13,6 +13,7 @@ mod form_validation;
 mod guest_adapter;
 mod key_scope_action;
 mod layout_runtime;
+mod offscreen_harness;
 mod overlay_focus_trap;
 mod router_navigation;
 mod runtime_headless;

@@ -73,6 +73,7 @@ pub mod scene_upload;
 pub mod scheduler;
 pub mod settings;
 pub mod state_store;
+pub mod testing;
 pub mod theme_driver;
 pub mod video;
 pub mod window_runner;
@@ -113,6 +114,9 @@ pub use settings::{
     SettingsCard,
 };
 pub use state_store::{LifecycleChanges, LifecycleEvent, WidgetStateStore};
+pub use testing::{HeadlessTestHarness, InteractionDriver};
+#[cfg(feature = "offscreen-test")]
+pub use testing::{OffscreenInitError, OffscreenTestHarness, RgbaImage};
 pub use theme_driver::{
     make_theme_snapshot_key, ThemeSnapshotKey, ThemeSyncOutcome, ThemeTransitionDriver,
 };
