@@ -775,7 +775,9 @@ pub const fn component_description_localized(
         WidgetCatalogId::PropertyGrid => "支持分组与属性重置点的检视器属性网格。",
         WidgetCatalogId::RadioButton => "单选组内的单行互斥单选按钮。",
         WidgetCatalogId::RichTextBlock => "将 Markdown 解析为多样式文本段的富文本块。",
-        WidgetCatalogId::RichTextLine => "Single-line colored TextSpan widget with monospace support and zero monochrome fallback.",
+        WidgetCatalogId::RichTextLine => {
+            "支持等宽字体与彩色 TextSpan 的单行富文本控件，无单色回退。"
+        }
         WidgetCatalogId::Ruler => "带可拖拽辅助参考线的画布标尺。",
         WidgetCatalogId::ScrollView => "配备真实可拖拽滚动条的可滚动视口。",
         WidgetCatalogId::SelectorBar => "单选分段胶囊中的未选中槽位控件。",
