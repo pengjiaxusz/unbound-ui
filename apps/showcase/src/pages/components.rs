@@ -659,7 +659,7 @@ pub const fn component_nav_label_localized(
         WidgetCatalogId::RatingControl => "评分控件 (RatingControl)",
         WidgetCatalogId::RepeatButton => "长按重复按钮 (Repeat Button)",
         WidgetCatalogId::RichTextBlock => "富文本块 (RichTextBlock)",
-        WidgetCatalogId::RichTextLine => "RichTextLine (Colored TextSpan Line)",
+        WidgetCatalogId::RichTextLine => "单行富文本 (RichTextLine)",
         WidgetCatalogId::Ruler => "标尺参考线 (Ruler)",
         WidgetCatalogId::SchemaForm => "Schema 表单 (Schema Form)",
         WidgetCatalogId::ScrollView => "滚动视图 (ScrollView)",
