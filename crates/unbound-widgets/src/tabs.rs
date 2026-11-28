@@ -112,8 +112,11 @@ impl TabWidthMode {
     }
 }
 
+/// 标签页拖出主窗边界触发独立副窗撕裂的默认逻辑像素阈值。
+pub const TAB_TEAR_OFF_THRESHOLD: f32 = 36.0;
+
 /// `TabView` 交互事件。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TabViewEvent {
     /// 选中了某个标签页。
     Selected {
@@ -147,6 +150,41 @@ pub enum TabViewEvent {
         /// 触发菜单的屏幕逻辑坐标。
         screen_pos: [i32; 2],
     },
+    /// 在标签栏内拖拽重排标签页顺序。
+    Reordered {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 拖拽前索引。
+        from_index: usize,
+        /// 拖拽后索引。
+        to_index: usize,
+    },
+    /// 标签页拖出主窗边界或撕裂阈值并释放，请求创建独立原生副窗。
+    TearOffRequested {
+        /// 标签页稳定标识。
+        id: u64,
+        /// 标签页索引。
+        index: usize,
+        /// 释放时的屏幕物理坐标（已按 DPI 换算）。
+        screen_pos: [i32; 2],
+    },
+}
+
+/// 单个标签页拖拽与离窗撕裂会话状态。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TabDragSession {
+    /// 被拖拽标签页的稳定标识。
+    pub id: u64,
+    /// 按下时的原始索引。
+    pub origin_index: usize,
+    /// 当前重排目标索引。
+    pub current_index: usize,
+    /// 按下时的窗口局部逻辑坐标。
+    pub press_pos: Vec2,
+    /// 最近一次移动时的窗口局部逻辑坐标。
+    pub current_pos: Vec2,
+    /// 当前是否已超出标签栏离窗阈值（处于可撕裂状态）。
+    pub detached: bool,
 }
 
 /// 单个标签页。
@@ -507,9 +545,9 @@ impl TabsDesc {
                 let top_inset = self.shell_top_inset();
                 let card_h = (self.rect.size.y - top_inset).max(0.0);
                 let btn_h = TAB_ADD_HEIGHT.min(card_h);
-                let flow_x =
-                    self.rect.origin.x + self.count() as f32 * self.effective_tab_width() - scroll
-                        + TAB_ADD_GAP;
+                let flow_x = self.rect.origin.x + self.count() as f32 * self.effective_tab_width()
+                    - scroll
+                    + TAB_ADD_GAP;
                 let max_x = (self.rect.max().x - TAB_ADD_WIDTH).max(self.rect.origin.x);
                 let x = flow_x.min(max_x).max(self.rect.origin.x);
                 let y = self.rect.origin.y + top_inset + (card_h - btn_h) * 0.5;
@@ -586,6 +624,111 @@ impl TabsDesc {
             screen_pos: [pos.x.round() as i32, pos.y.round() as i32],
         })
     }
+
+    /// 判断给定局部逻辑坐标是否满足标签离窗撕裂条件。
+    ///
+    /// 当指针离开标签栏垂直/水平阈值 [`TabsState::tear_off_threshold`]，
+    /// 或超出宿主窗口逻辑边界 `window_bounds_logical` 时返回 `true`。
+    #[must_use]
+    pub fn should_tear_off(
+        &self,
+        pos_logical: Vec2,
+        window_bounds_logical: Option<Rect>,
+        threshold: f32,
+    ) -> bool {
+        let t = threshold.max(8.0);
+        let outside_strip = pos_logical.y < self.rect.origin.y - t
+            || pos_logical.y > self.rect.max().y + t
+            || pos_logical.x < self.rect.origin.x - t
+            || pos_logical.x > self.rect.max().x + t;
+        let outside_window =
+            window_bounds_logical.is_some_and(|wb| !wb.contains_point(pos_logical));
+        outside_strip || outside_window
+    }
+
+    /// 处理左键按下：若命中标签主体则启动拖拽/撕裂状态机并激活该标签。
+    pub fn handle_pointer_press(&self, state: &mut TabsState, pos: Vec2) -> Option<TabViewEvent> {
+        if let Some(index) = self.hit_test_close(state.scroll_x, pos) {
+            let id = self.items[index].id;
+            return Some(TabViewEvent::CloseRequested { id, index });
+        }
+        if self.hit_test_add(state.scroll_x, pos) {
+            return Some(TabViewEvent::AddClicked);
+        }
+        if let Some(index) = self.hit_test_tab(state.scroll_x, pos) {
+            let id = self.items[index].id;
+            state.activate(self, index);
+            state.dragging = Some(TabDragSession {
+                id,
+                origin_index: index,
+                current_index: index,
+                press_pos: pos,
+                current_pos: pos,
+                detached: false,
+            });
+            return Some(TabViewEvent::Selected { id, index });
+        }
+        None
+    }
+
+    /// 处理拖拽移动：更新离窗判定标志，并在标签栏内按水平中心线触发重排事件。
+    pub fn handle_pointer_move(
+        &self,
+        state: &mut TabsState,
+        pos: Vec2,
+        window_bounds_logical: Option<Rect>,
+    ) -> Option<TabViewEvent> {
+        let mut session = state.dragging?;
+        session.current_pos = pos;
+        session.detached =
+            self.should_tear_off(pos, window_bounds_logical, state.tear_off_threshold);
+        if !session.detached && (pos.x - session.press_pos.x).abs() > 4.0 && self.count() > 1 {
+            let tab_w = self.effective_tab_width().max(1.0);
+            let rel_x = (pos.x - self.rect.origin.x + state.scroll_x).max(0.0);
+            let target = (rel_x / tab_w).floor() as usize;
+            let clamped = target.min(self.count() - 1);
+            if clamped != session.current_index {
+                let from_index = session.current_index;
+                session.current_index = clamped;
+                state.active = clamped;
+                state.dragging = Some(session);
+                return Some(TabViewEvent::Reordered {
+                    id: session.id,
+                    from_index,
+                    to_index: clamped,
+                });
+            }
+        }
+        state.dragging = Some(session);
+        None
+    }
+
+    /// 处理左键释放：若超出离窗阈值或窗口边界，按多屏 DPI 换算屏幕物理坐标并发射 [`TabViewEvent::TearOffRequested`]。
+    pub fn handle_pointer_release(
+        &self,
+        state: &mut TabsState,
+        pos_logical: Vec2,
+        window_origin_physical: (i32, i32),
+        window_size_physical: Option<(u32, u32)>,
+        scale_factor: f32,
+    ) -> Option<TabViewEvent> {
+        let session = state.dragging.take()?;
+        let scale = scale_factor.max(0.5);
+        let window_bounds_logical = window_size_physical
+            .map(|(w, h)| Rect::new(0.0, 0.0, w as f32 / scale, h as f32 / scale));
+        let tear_off = session.detached
+            || self.should_tear_off(pos_logical, window_bounds_logical, state.tear_off_threshold);
+        if tear_off {
+            let screen_x = window_origin_physical.0 + (pos_logical.x * scale).round() as i32;
+            let screen_y = window_origin_physical.1 + (pos_logical.y * scale).round() as i32;
+            return Some(TabViewEvent::TearOffRequested {
+                id: session.id,
+                index: session.current_index,
+                screen_pos: [screen_x, screen_y],
+            });
+        }
+        None
+    }
 }
 
 /// 标签页栏的实时状态。
@@ -599,6 +742,10 @@ pub struct TabsState {
     pub indicator_w: Spring,
     /// 标签页栏的水平滚动偏移。
     pub scroll_x: f32,
+    /// 正在进行的标签页拖拽与离窗撕裂会话。
+    pub dragging: Option<TabDragSession>,
+    /// 触发离窗撕裂的逻辑像素阈值（默认 [`TAB_TEAR_OFF_THRESHOLD`]）。
+    pub tear_off_threshold: f32,
     /// 弹簧是否已定位到静止目标。
     initialised: bool,
 }
@@ -618,6 +765,8 @@ impl TabsState {
             indicator_x: Spring::new(unbound_anim::SpringPreset::Precise, 0.0),
             indicator_w: Spring::new(unbound_anim::SpringPreset::Precise, 0.0),
             scroll_x: 0.0,
+            dragging: None,
+            tear_off_threshold: TAB_TEAR_OFF_THRESHOLD,
             initialised: false,
         }
     }
@@ -961,7 +1110,11 @@ pub fn emit_tab(
                 desc.z,
             ));
             // 2~4. 选中态顶/左/右 1px CARD_BORDER 描边（无底边），非选中态透明度 0 保持图元数恒定。
-            let border_opacity = if active && desc.shell_active_border { 1.0 } else { 0.0 };
+            let border_opacity = if active && desc.shell_active_border {
+                1.0
+            } else {
+                0.0
+            };
             let top_inset = TAB_SHELL_CORNER_RADIUS.min(rect.size.x * 0.5);
             let mut top_border = instance(
                 Rect::new(
@@ -979,8 +1132,7 @@ pub fn emit_tab(
                 SubElement::Background,
                 desc.z,
             );
-            top_border.z_and_opacity =
-                GpuPrimitiveInstance::pack_z_opacity(desc.z, border_opacity);
+            top_border.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, border_opacity);
             primitives.push(top_border);
 
             let side_h = (rect.size.y - top_inset * 0.5).max(0.0);
@@ -1139,7 +1291,15 @@ pub fn emit_tab_close(
         } else {
             Token::NONE
         };
-        primitives.push(outlined(rect, TAB_RADIUS, bg, Token::NONE, 0.0, 0.0, close_z));
+        primitives.push(outlined(
+            rect,
+            TAB_RADIUS,
+            bg,
+            Token::NONE,
+            0.0,
+            0.0,
+            close_z,
+        ));
     }
 
     let glyph_rect = match desc.style {
@@ -1461,7 +1621,14 @@ mod tests {
 
         // 显式启用 shell_active_border(true) 时恢复 1px 外描边，且图元数恒定
         let bordered_desc = desc.clone().with_shell_active_border(true);
-        let bordered_out = emit_tab(&bordered_desc, &state, 0, ControlState::default(), &[], tokens);
+        let bordered_out = emit_tab(
+            &bordered_desc,
+            &state,
+            0,
+            ControlState::default(),
+            &[],
+            tokens,
+        );
         assert_eq!(active_out.primitives.len(), bordered_out.primitives.len());
         for border_prim in &bordered_out.primitives[1..=3] {
             assert!(
@@ -1796,7 +1963,10 @@ mod tests {
         assert_eq!(plain.effective_icon(), WidgetIcon::None);
 
         let vec_tab = TabItem::new(2, "Docs").with_icon(ShellIcon::Folder);
-        assert_eq!(vec_tab.effective_icon(), WidgetIcon::Vector(ShellIcon::Folder));
+        assert_eq!(
+            vec_tab.effective_icon(),
+            WidgetIcon::Vector(ShellIcon::Folder)
+        );
 
         let tex_tab = TabItem::new(3, "Preview")
             .with_icon(ShellIcon::Folder)
@@ -1857,7 +2027,11 @@ mod tests {
             .iter()
             .filter(|p| p.prim_type() == PrimType::Curve)
             .collect();
-        assert_eq!(curves.len(), 2, "close icon must emit two diagonal curve strokes");
+        assert_eq!(
+            curves.len(),
+            2,
+            "close icon must emit two diagonal curve strokes"
+        );
         for curve in curves {
             let payload = out
                 .payloads
@@ -1895,10 +2069,14 @@ mod tests {
             .with_width_mode(TabWidthMode::adaptive_default());
         let state = TabsState::new(1);
         let tabs_key = 4242u64;
-        let out = desc.emit_laid_out(tabs_key, desc.rect, ControlState::default(), &state, &mut text_ctx);
-        let close_rects: Vec<Rect> = (0..3)
-            .filter_map(|i| desc.close_rect(i, 0.0))
-            .collect();
+        let out = desc.emit_laid_out(
+            tabs_key,
+            desc.rect,
+            ControlState::default(),
+            &state,
+            &mut text_ctx,
+        );
+        let close_rects: Vec<Rect> = (0..3).filter_map(|i| desc.close_rect(i, 0.0)).collect();
         assert_eq!(close_rects.len(), 3);
 
         // 校验所有含载荷图元的索引均不越界且无重复覆盖（每个含载荷图元独占自己的载荷槽）。
@@ -1943,8 +2121,14 @@ mod tests {
             }
         }
         // 3 个标签页各含 2 条关闭叉号斜线（共 6 条）、多标签字形与 1 个外部纹理图标。
-        assert_eq!(close_curve_count, 6, "expected 6 close curves across 3 tabs");
-        assert!(glyph_count >= 3, "expected title glyphs across 3 tabs, got {glyph_count}");
+        assert_eq!(
+            close_curve_count, 6,
+            "expected 6 close curves across 3 tabs"
+        );
+        assert!(
+            glyph_count >= 3,
+            "expected title glyphs across 3 tabs, got {glyph_count}"
+        );
         assert_eq!(image_count, 1, "expected 1 external texture icon primitive");
 
         // 校验子热区注册：3 个标签主体 + 3 个关闭按钮（更高 z 序）+ 1 个新建按钮。
@@ -1965,7 +2149,9 @@ mod tests {
             item_hit_0.z
         );
         assert!(
-            out.sub_hits.iter().any(|h| h.node == tab_add_node(tabs_key)),
+            out.sub_hits
+                .iter()
+                .any(|h| h.node == tab_add_node(tabs_key)),
             "add button sub_hit must be registered"
         );
     }
@@ -1980,5 +2166,64 @@ mod tests {
         let tab0 = desc.tab_rect(0, 0.0);
         assert!((tab0.origin.y - TAB_SHELL_TOP_INSET).abs() < f32::EPSILON);
         assert!((tab0.size.y - TAB_SHELL_ITEM_HEIGHT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn tab_drag_out_emits_tear_off_with_dpi_conversion_and_reorders_inside() {
+        let desc = TabsDesc::new(
+            Rect::new(0.0, 0.0, 480.0, 40.0),
+            &["Tab A", "Tab B", "Tab C"],
+        );
+        let mut state = TabsState::new(0);
+
+        // 1) 在标签栏内部水平拖拽重排：Tab A -> index 1
+        let tab0_center = desc.tab_rect(0, 0.0).center();
+        let press_ev = desc.handle_pointer_press(&mut state, tab0_center);
+        assert!(matches!(
+            press_ev,
+            Some(TabViewEvent::Selected { index: 0, .. })
+        ));
+        let tab1_center = desc.tab_rect(1, 0.0).center();
+        let reorder_ev = desc.handle_pointer_move(
+            &mut state,
+            tab1_center,
+            Some(Rect::new(0.0, 0.0, 800.0, 600.0)),
+        );
+        assert!(matches!(
+            reorder_ev,
+            Some(TabViewEvent::Reordered {
+                from_index: 0,
+                to_index: 1,
+                ..
+            })
+        ));
+        // 回到标签栏内释放不应触发撕裂。
+        let drop_inside =
+            desc.handle_pointer_release(&mut state, tab1_center, (100, 50), Some((1200, 900)), 1.5);
+        assert!(drop_inside.is_none());
+
+        // 2) 拖出窗口边界并在 1.5x DPI 下释放，稳定触发 TearOffRequested 并换算屏幕物理坐标。
+        let press_ev2 = desc.handle_pointer_press(&mut state, tab0_center);
+        assert!(press_ev2.is_some());
+        let outside_pos = Vec2::new(220.0, 120.0);
+        let move_out = desc.handle_pointer_move(
+            &mut state,
+            outside_pos,
+            Some(Rect::new(0.0, 0.0, 800.0, 600.0)),
+        );
+        assert!(move_out.is_none());
+        assert!(state.dragging.is_some_and(|d| d.detached));
+
+        let tear_ev =
+            desc.handle_pointer_release(&mut state, outside_pos, (100, 50), Some((1200, 900)), 1.5);
+        assert_eq!(
+            tear_ev,
+            Some(TabViewEvent::TearOffRequested {
+                id: desc.items[0].id,
+                index: 0,
+                screen_pos: [100 + 330, 50 + 180],
+            })
+        );
+        assert!(state.dragging.is_none());
     }
 }

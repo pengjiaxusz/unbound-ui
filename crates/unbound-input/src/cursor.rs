@@ -81,6 +81,21 @@ impl CursorKind {
         }
     }
 
+    /// 结合自定义旋转/缩放矢量光标句柄与角度（度），解析悬停变换手柄时的光标类型。
+    ///
+    /// 若调用方未提供自定义光标 ID，则安全回退至 [`Self::for_handle`]。
+    #[must_use]
+    pub fn for_handle_with_custom(
+        handle: Handle,
+        custom_rotate: Option<CustomCursorId>,
+        custom_scale: Option<CustomCursorId>,
+    ) -> Self {
+        match handle {
+            Handle::Rotate => custom_rotate.map_or(Self::Crosshair, Self::from),
+            _ => custom_scale.map_or_else(|| Self::for_handle(handle), Self::from),
+        }
+    }
+
     /// 该光标所竞争的栈槽位。
     #[must_use]
     pub fn source(self) -> CursorSource {

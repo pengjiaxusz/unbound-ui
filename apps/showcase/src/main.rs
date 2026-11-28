@@ -979,6 +979,7 @@ impl PlatformApp for Showcase {
                 state: ButtonState::Pressed,
                 key,
                 repeat,
+                ..
             } => {
                 // Ctrl+N 打开第二个窗口：在同一设备上创建真实的第二个 surface 和 swapchain。
                 //

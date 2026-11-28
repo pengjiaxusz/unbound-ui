@@ -157,6 +157,8 @@ pub struct WindowConfig {
     pub initial_position: Option<(i32, i32)>,
     /// 窗口首次显示时是否直接以最大化状态呈现（避免先闪后跳）。
     pub initial_maximized: bool,
+    /// 最大化冷启动时写入 `WINDOWPLACEMENT.rcNormalPosition` 的普通窗口几何（物理像素）。
+    pub initial_normal_bounds: Option<ScreenRect>,
     /// 表面合成方式（默认为不透明）。
     ///
     /// 需要系统原生后景（云母 / 亚克力）从客户区透出的窗口必须选
@@ -195,6 +197,7 @@ impl Default for WindowConfig {
             position: WindowPosition::CenterPrimary,
             initial_position: None,
             initial_maximized: false,
+            initial_normal_bounds: None,
             surface_alpha: SurfaceAlpha::Opaque,
             backdrop: None,
             role: WindowRole::Standard,
@@ -273,6 +276,13 @@ impl WindowConfig {
     #[must_use]
     pub const fn with_initial_maximized(mut self, maximized: bool) -> Self {
         self.initial_maximized = maximized;
+        self
+    }
+
+    /// 设置最大化冷启动时用于还原的普通窗口几何（物理像素）。
+    #[must_use]
+    pub const fn with_initial_normal_bounds(mut self, bounds: ScreenRect) -> Self {
+        self.initial_normal_bounds = Some(bounds);
         self
     }
 
@@ -502,6 +512,10 @@ pub enum PlatformEvent {
         state: ButtonState,
         key: PlatformKey,
         repeat: bool,
+        /// 物理硬件扫描码（`0` 表示未知或合成事件）。
+        scan_code: u32,
+        /// 经物理扫描码还原的原始键位（用于 IME `VK_PROCESSKEY` 吞键时区分物理键）。
+        physical_key: Option<PlatformKey>,
     },
     /// 修饰键状态发生变化。
     ModifiersChanged(Modifiers),
@@ -597,6 +611,12 @@ impl ImeState {
         &self.preedit
     }
 
+    /// 当前是否正处于 IME 组合预编辑态（存在非空预编辑串）。
+    #[must_use]
+    pub fn is_preedit_active(&self) -> bool {
+        self.enabled && !self.preedit.is_empty()
+    }
+
     /// 丢弃当前组合输入（例如焦点移走时）。
     pub fn clear(&mut self) {
         self.preedit.clear();
@@ -682,6 +702,12 @@ impl PlatformState {
             occlusion,
             ime: ImeState::default(),
         }
+    }
+
+    /// 当前是否正处于 IME 组合预编辑态。
+    #[must_use]
+    pub fn ime_preedit_active(&self) -> bool {
+        self.ime.is_preedit_active()
     }
 
     /// 告知平台层渲染器实际获取到的设备扩展。
@@ -1052,6 +1078,8 @@ mod tests {
                 state: ButtonState::Pressed,
                 key: PlatformKey::Character("t".to_string()),
                 repeat: false,
+                scan_code: 0x14,
+                physical_key: Some(PlatformKey::Character("t".to_string())),
             },
         ];
         for event in &events {
@@ -1096,6 +1124,8 @@ mod tests {
                 state: ButtonState::Pressed,
                 key: PlatformKey::Character("t".to_string()),
                 repeat: false,
+                scan_code: 0x14,
+                physical_key: Some(PlatformKey::Character("t".to_string())),
             },
             PlatformEvent::ModifiersChanged(Modifiers {
                 shift: true,
@@ -1186,10 +1216,13 @@ mod tests {
         );
         assert!(state.ime.enabled);
 
+        assert!(state.ime_preedit_active());
         let repeated = PlatformEvent::KeyInput {
             state: ButtonState::Pressed,
             key: PlatformKey::Character("n".to_string()),
             repeat: true,
+            scan_code: 0x31,
+            physical_key: Some(PlatformKey::Character("n".to_string())),
         };
         let out = apply(&mut state, &repeated, now);
         assert!(

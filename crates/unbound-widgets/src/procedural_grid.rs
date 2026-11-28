@@ -10,6 +10,17 @@ use unbound_theme::Token;
 use crate::primitive::instance;
 use crate::WidgetOutput;
 
+/// 程序化 SDF 网格绘制模式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum GridPatternMode {
+    /// 正交线格模式（默认）。
+    #[default]
+    Lines = 0,
+    /// 交点圆点矩阵模式。
+    Dots = 1,
+}
+
 /// 程序化 SDF 网格描述符。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProceduralGridDesc {
@@ -31,6 +42,10 @@ pub struct ProceduralGridDesc {
     pub major_rgba: [u8; 4],
     /// 四角独立圆角半径：左上、右上、右下、左下。
     pub radius: [f32; 4],
+    /// 网格相对于包围盒的旋转角度（弧度）。
+    pub rotation_rad: f32,
+    /// 网格渲染模式（线格或点格）。
+    pub mode: GridPatternMode,
     /// 整体不透明度（范围 `0.0..=1.0`）。
     pub opacity: f32,
     /// 绘制顺序键。
@@ -57,6 +72,8 @@ impl ProceduralGridDesc {
             minor_rgba: [128, 128, 128, 48],
             major_rgba: [128, 128, 128, 112],
             radius: [0.0; 4],
+            rotation_rad: 0.0,
+            mode: GridPatternMode::Lines,
             opacity: 1.0,
             z: 100,
         }
@@ -167,6 +184,51 @@ impl ProceduralGridDesc {
         self
     }
 
+    /// 设置网格旋转角度（弧度）。
+    #[must_use]
+    pub const fn with_rotation_rad(mut self, rotation_rad: f32) -> Self {
+        self.rotation_rad = rotation_rad;
+        self
+    }
+
+    /// 设置网格旋转角度（度）。
+    #[must_use]
+    pub fn with_rotation_deg(mut self, rotation_deg: f32) -> Self {
+        self.rotation_rad = rotation_deg.to_radians();
+        self
+    }
+
+    /// 设置网格模式（线格或点格）。
+    #[must_use]
+    pub const fn with_mode(mut self, mode: GridPatternMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// 切换为点格模式。
+    #[must_use]
+    pub const fn with_dots(mut self, dots: bool) -> Self {
+        self.mode = if dots {
+            GridPatternMode::Dots
+        } else {
+            GridPatternMode::Lines
+        };
+        self
+    }
+
+    /// 按给定视口缩放倍率同步放大或缩小主次网格步距。
+    #[must_use]
+    pub fn with_zoom(mut self, zoom: f32) -> Self {
+        let z = zoom.max(1e-4);
+        if self.minor_spacing > 0.0 {
+            self.minor_spacing *= z;
+        }
+        if self.major_spacing > 0.0 {
+            self.major_spacing *= z;
+        }
+        self
+    }
+
     /// 设置整体不透明度。
     #[must_use]
     pub const fn with_opacity(mut self, opacity: f32) -> Self {
@@ -211,7 +273,7 @@ pub fn emit_procedural_grid(desc: &ProceduralGridDesc) -> WidgetOutput {
     prim.z_and_opacity = GpuPrimitiveInstance::pack_z_opacity(desc.z, desc.opacity.clamp(0.0, 1.0));
     prim.extra_payload_idx = 0;
 
-    let payload = GpuPayload::procedural_grid(
+    let payload = GpuPayload::procedural_grid_ex(
         [desc.origin_offset.x, desc.origin_offset.y],
         desc.minor_spacing,
         desc.major_spacing,
@@ -219,6 +281,8 @@ pub fn emit_procedural_grid(desc: &ProceduralGridDesc) -> WidgetOutput {
         desc.major_line_width,
         desc.minor_rgba,
         desc.major_rgba,
+        desc.rotation_rad,
+        desc.mode as u32,
     );
 
     WidgetOutput {
@@ -265,5 +329,20 @@ mod tests {
         assert_eq!(pl.p2, [1.0, 2.0]);
         assert_eq!(pl.extra, pack_rgba8([10, 20, 30, 40]));
         assert_eq!(pl.flags, pack_rgba8([50, 60, 70, 200]));
+        assert_eq!(pl.line_width, 0.0);
+        assert_eq!(pl._reserved[0], 0);
+    }
+
+    #[test]
+    fn emit_procedural_grid_supports_rotation_dots_and_zoom() {
+        let desc = ProceduralGridDesc::new(Rect::new(0.0, 0.0, 800.0, 600.0))
+            .with_rotation_deg(30.0)
+            .with_dots(true)
+            .with_zoom(2.0);
+        let out = emit_procedural_grid(&desc);
+        let pl = &out.payloads[0];
+        assert!((pl.line_width - 30.0_f32.to_radians()).abs() < 1e-5);
+        assert_eq!(pl._reserved[0], GridPatternMode::Dots as u32);
+        assert_eq!(pl.p1, [32.0, 128.0]);
     }
 }

@@ -1328,8 +1328,10 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             translate_evdev_key(u32::from(ev.detail.saturating_sub(8)), mods);
                         entry.pending_events.push(PlatformEvent::KeyInput {
                             state: ButtonState::Pressed,
-                            key,
+                            key: key.clone(),
                             repeat: false,
+                            scan_code: u32::from(ev.detail.saturating_sub(8)),
+                            physical_key: Some(key),
                         });
                     }
                 }
@@ -1340,8 +1342,10 @@ pub(crate) fn run_event_loop<A: PlatformApp>(
                             translate_evdev_key(u32::from(ev.detail.saturating_sub(8)), mods);
                         entry.pending_events.push(PlatformEvent::KeyInput {
                             state: ButtonState::Released,
-                            key,
+                            key: key.clone(),
                             repeat: false,
+                            scan_code: u32::from(ev.detail.saturating_sub(8)),
+                            physical_key: Some(key),
                         });
                     }
                 }
